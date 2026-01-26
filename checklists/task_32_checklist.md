@@ -1,0 +1,3 @@
+- Review SQL and ORM usage
+- Check command execution paths
+- Validate deserialization safety

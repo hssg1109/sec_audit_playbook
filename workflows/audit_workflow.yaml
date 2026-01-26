@@ -1,0 +1,40 @@
+version: 1
+phases:
+  - id: discovery
+    required: true
+    parallel: true
+    tasks: [task_11, task_12]
+
+  - id: external_requests
+    required: true
+    depends_on: [discovery]
+    parallel: true
+    tasks: [task_21, task_22]
+
+  - id: static_analysis
+    required: true
+    depends_on: [discovery]
+    tasks:
+      - task_31
+      - parallel_group:
+          - task_32
+          - task_33
+          - task_34
+
+  - id: dynamic_testing
+    required: true
+    depends_on: [discovery]
+    parallel: true
+    tasks: [task_41, task_42]
+
+  - id: dependency_scan
+    required: true
+    depends_on: [discovery]
+    parallel: true
+    tasks: [task_50]
+
+  - id: reporting
+    required: true
+    depends_on: [static_analysis, dynamic_testing, dependency_scan]
+    parallel: false
+    tasks: [task_60]

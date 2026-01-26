@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "task_output_schema.json",
+  "type": "object",
+  "required": ["task_id", "status", "findings", "evidence_refs", "executed_at", "claude_session", "metadata"],
+  "properties": {
+    "task_id": {"type": "string"},
+    "status": {"type": "string", "enum": ["not_started", "in_progress", "blocked", "completed"]},
+    "findings": {
+      "type": "array",
+      "items": {"$ref": "finding_schema.json"}
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {"$ref": "evidence_schema.json"}
+    },
+    "executed_at": {"type": "string", "format": "date-time"},
+    "claude_session": {"type": "string"},
+    "metadata": {
+      "type": "object",
+      "required": ["reviewer", "inputs"],
+      "properties": {
+        "reviewer": {"type": "string"},
+        "inputs": {"type": "array", "items": {"type": "string"}},
+        "notes": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

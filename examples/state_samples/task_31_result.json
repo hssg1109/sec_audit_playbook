@@ -1,0 +1,15 @@
+{
+  "task_id": "3-1",
+  "status": "completed",
+  "findings": [],
+  "evidence_refs": [
+    {"id": "E-31-1", "type": "api_inventory", "path": "docs/31_api_inventory.md", "summary": "API list from docs"}
+  ],
+  "executed_at": "2025-01-26T10:30:00Z",
+  "claude_session": "example-session",
+  "metadata": {
+    "reviewer": "example",
+    "inputs": ["state/task_11_result.json"],
+    "notes": "Sample only"
+  }
+}

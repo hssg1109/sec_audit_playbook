@@ -1,0 +1,12 @@
+{
+  "task_id": "",
+  "status": "not_started",
+  "findings": [],
+  "evidence_refs": [],
+  "executed_at": "",
+  "claude_session": "",
+  "metadata": {
+    "reviewer": "",
+    "inputs": []
+  }
+}

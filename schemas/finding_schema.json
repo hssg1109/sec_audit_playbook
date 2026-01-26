@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "finding_schema.json",
+  "type": "object",
+  "required": ["id", "title", "severity", "description", "evidence_refs", "recommendation"],
+  "properties": {
+    "id": {"type": "string"},
+    "title": {"type": "string"},
+    "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+    "description": {"type": "string"},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "recommendation": {"type": "string"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,15 @@
+{
+  "docs/00_overview.md": "진단 개요",
+  "docs/10_asset_identification.md": "1. 자산 식별 및 진단 환경 구성",
+  "docs/20_external_requests.md": "2. 연계 진단 신청",
+  "docs/30_static_analysis.md": "3. 정적진단",
+  "docs/31_api_inventory.md": "3-1 API 식별(리스팅)",
+  "docs/32_injection_review.md": "3-2 인젝션",
+  "docs/33_xss_review.md": "3-3 XSS(크로스 사이트 스크립팅)",
+  "docs/34_file_handling_review.md": "3-4 파일 처리",
+  "docs/40_dynamic_testing.md": "4 동적진단",
+  "docs/41_data_protection.md": "4-1 데이터 보호",
+  "docs/42_authn_authz.md": "4-2 인증/인가",
+  "docs/50_dependency_scan.md": "5 라이브러리 취약점 진단",
+  "docs/60_reporting.md": "6 보고"
+}

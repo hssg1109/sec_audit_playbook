@@ -1,0 +1,6 @@
+version: 1
+owner: security-enablement
+policies:
+  usage: ai/AI_USAGE_POLICY.md
+  redaction: ai/REDACTION_RULES.md
+  prompt_style: ai/PROMPT_STYLE_GUIDE.md

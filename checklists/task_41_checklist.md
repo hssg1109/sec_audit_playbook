@@ -1,0 +1,3 @@
+- TLS enforcement
+- Sensitive data exposure
+- Storage encryption

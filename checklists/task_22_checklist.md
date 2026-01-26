@@ -1,0 +1,3 @@
+- Confirm infra scope
+- Record requester and approver
+- Capture request ID

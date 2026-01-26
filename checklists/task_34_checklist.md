@@ -1,0 +1,3 @@
+- Review upload validation
+- Check file path construction
+- Confirm download access controls

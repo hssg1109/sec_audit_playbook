@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "evidence_schema.json",
+  "type": "object",
+  "required": ["id", "type", "path", "summary"],
+  "properties": {
+    "id": {"type": "string"},
+    "type": {"type": "string"},
+    "path": {"type": "string"},
+    "summary": {"type": "string"}
+  },
+  "additionalProperties": false
+}
