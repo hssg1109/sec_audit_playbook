@@ -1,3 +1,0 @@
-- Confirm scope for static tools
-- Record tool versions
-- Capture request ID

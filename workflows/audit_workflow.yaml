@@ -1,40 +1,104 @@
-version: 1
+# 보안 진단 워크플로우 정의 v2.0
+# 정적 분석 특화 - 3 Phase / 5 Task 구조
+# 입력: 자산 정보 Excel + 로컬 소스코드
+
+workflow:
+  name: "AI Security Audit Workflow"
+  version: "2.1"
+  description: "정적 분석 특화 웹 애플리케이션 보안 진단 자동화 워크플로우"
+  inputs:
+    - type: "excel"
+      description: "자산 정보 Excel 파일 (고객 제공)"
+    - type: "source_code"
+      description: "진단 대상 로컬 소스코드 경로"
+
 phases:
-  - id: discovery
-    required: true
-    parallel: true
-    tasks: [task_11, task_12]
-
-  - id: external_requests
-    required: true
-    depends_on: [discovery]
-    parallel: true
-    tasks: [task_21, task_22]
-
-  - id: static_analysis
-    required: true
-    depends_on: [discovery]
-    tasks:
-      - task_31
-      - parallel_group:
-          - task_32
-          - task_33
-          - task_34
-
-  - id: dynamic_testing
-    required: true
-    depends_on: [discovery]
-    parallel: true
-    tasks: [task_41, task_42]
-
-  - id: dependency_scan
-    required: true
-    depends_on: [discovery]
-    parallel: true
-    tasks: [task_50]
-
-  - id: reporting
-    required: true
-    depends_on: [static_analysis, dynamic_testing, dependency_scan]
+  - id: phase1_asset
+    name: "자산 식별 (Asset Identification)"
+    tasks: [task_11]
     parallel: false
-    tasks: [task_60]
+    description: "자산 정보 Excel 파싱 → JSON 변환"
+
+  - id: phase2_static_analysis
+    name: "정적 분석 (Static Analysis)"
+    depends_on: [phase1_asset]
+    tasks:
+      - task_21  # 선행: API 인벤토리 추출
+      - parallel_group:
+          depends_on: [task_21]
+          tasks:
+            - task_22  # 인젝션 검토
+            - task_23  # XSS 검토
+            - task_24  # 파일 처리 검토
+            - task_25  # 데이터 보호 검토
+    description: "소스코드 정적 분석 (API 인벤토리 → 취약점 검토 병렬)"
+
+  - id: phase3_reporting
+    name: "보고서 생성 (Reporting)"
+    depends_on: [phase2_static_analysis]
+    tasks: []
+    script: "tools/scripts/merge_results.py"
+    parallel: false
+    description: "merge_results.py로 결과 자동 병합"
+
+# 개별 태스크 정의
+tasks:
+  task_11:
+    name: "자산 목록 작성 (Excel 파싱)"
+    prompt: "prompts/static/task_11_asset_identification.md"
+    script: "tools/scripts/parse_asset_excel.py"
+    output: "state/task_11_result.json"
+    schema: "schemas/task_output_schema.json"
+    doc: "docs/10_asset_identification.md"
+
+  task_21:
+    name: "API 인벤토리 추출"
+    prompt: "prompts/static/task_21_api_inventory.md"
+    output: "state/task_21_result.json"
+    schema: "schemas/task_output_schema.json"
+    doc: "docs/21_api_inventory.md"
+    depends_on: [task_11]
+
+  task_22:
+    name: "인젝션 취약점 검토"
+    prompt: "prompts/static/task_22_injection_review.md"
+    output: "state/task_22_result.json"
+    schema: "schemas/finding_schema.json"
+    doc: "docs/22_injection_review.md"
+    depends_on: [task_21]
+
+  task_23:
+    name: "XSS 취약점 검토"
+    prompt: "prompts/static/task_23_xss_review.md"
+    output: "state/task_23_result.json"
+    schema: "schemas/finding_schema.json"
+    doc: "docs/23_xss_review.md"
+    depends_on: [task_21]
+
+  task_24:
+    name: "파일 처리 검토"
+    prompt: "prompts/static/task_24_file_handling.md"
+    output: "state/task_24_result.json"
+    schema: "schemas/finding_schema.json"
+    doc: "docs/24_file_handling_review.md"
+    depends_on: [task_21]
+
+  task_25:
+    name: "데이터 보호 검토"
+    prompt: "prompts/static/task_25_data_protection.md"
+    output: "state/task_25_result.json"
+    schema: "schemas/finding_schema.json"
+    doc: "docs/25_data_protection_review.md"
+    depends_on: [task_21]
+
+# 검증 설정
+validation:
+  auto_validate: true
+  validator: "tools/scripts/validate_task_output.py"
+  on_failure: "halt"  # 검증 실패 시 워크플로우 중단
+
+# 보안 설정
+security:
+  redaction: true
+  redaction_script: "tools/scripts/redact.py"
+  manifest: "ai/ai-manifest.yaml"

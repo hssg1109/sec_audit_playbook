@@ -1,29 +1,39 @@
-# Audit Overview
+# 00. 보안 진단 프로세스 개요
 
-This playbook defines a parallelizable security audit workflow with strict task boundaries, explicit dependencies, and schema-validated outputs.
+## 목적
+AI 기반 정적 분석 특화 보안 진단 자동화 시스템의 전체 프로세스를 정의합니다.
 
-```mermaid
-flowchart TB
-  A[보안진단실 > 취약점진단<br/>Application 진단 업무]
+## 입력
+- **자산 정보 Excel 파일**: 고객 제공 자산 목록 (서버, 도메인, 기술 스택 등)
+- **로컬 소스코드**: 진단 대상 애플리케이션 소스코드
 
-  A --> B[정기/신규 진단]
-  A --> C[이행 점검 진단]
-  A --> D[기타]
+## 진단 단계 (3 Phase / 5 Task)
 
-  subgraph PROC[정기/신규 진단 절차]
-    direction TB
-    P0[보안 담당 매니저와 서비스 프리뷰 회의]
-    P1[1) 자산정보 요청/수령]
-    P2[진단 환경 구성(모바일 앱 설치/구동, 테스트 계정 로그인 등)]
-    P3[2) 서버 진단(시스템 진단) 요청]
-    P4[3) Fortify 및 라이브러리 진단 요청]
-    P5[4) 소스코드 정적 진단(SQLi, XSS, 파일처리 등)]
-    P6[5) 동적 모의해킹 진단(데이터보호, 인증 등)]
-    P7[6) 라이브러리 취약점 확인(exploit 여부 등)]
-    P8[7) 진단결과 매니저 리뷰 후 리포팅]
-    P9[8) 진단결과 조치계획 요청/수신]
-    P0 --> P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8 --> P9
-  end
-
-  B --> PROC
 ```
+Phase 1: 자산 식별 (Asset Identification)
+  └── Task 1-1: 자산 목록 작성 (Excel 파싱 + 소스코드 분석)
+          ↓
+Phase 2: 정적 분석 (Static Analysis)
+  ├── Task 2-1: API 인벤토리 추출 ──┐
+  │                                  ↓ (2-1 완료 후 병렬)
+  ├── Task 2-2: 인젝션 취약점 검토 ──┤
+  ├── Task 2-3: XSS 취약점 검토 ─────┤
+  └── Task 2-4: 파일 처리 검토 ──────┘
+          ↓
+Phase 3: 보고서 생성 (Reporting)
+  └── merge_results.py 자동 실행
+```
+
+## 핵심 원칙
+1. **정적 분석 특화**: 소스코드 수준의 취약점 식별에 집중
+2. **병렬 처리**: Task 2-2, 2-3, 2-4는 2-1 완료 후 동시에 수행
+3. **의존성 관리**: `workflows/audit_workflow.yaml`에 정의된 순서 준수
+4. **상태 추적**: 모든 작업 결과는 `state/` 폴더에 JSON으로 저장
+5. **품질 보증**: `schemas/`의 JSON 스키마로 결과물 자동 검증
+6. **보안 준수**: `ai/REDACTION_RULES.md`에 따른 민감정보 마스킹
+
+## 참조 문서
+- 작업 절차서: `docs/` 폴더 내 각 단계별 문서
+- 워크플로우: `workflows/audit_workflow.yaml`
+- 프롬프트: `prompts/static/` 폴더
+- 스키마: `schemas/` 폴더

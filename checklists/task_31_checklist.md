@@ -1,3 +1,0 @@
-- Enumerate all routes and methods
-- Identify auth requirements
-- Mark sensitive data exposure

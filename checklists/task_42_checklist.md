@@ -1,3 +1,0 @@
-- Auth flow coverage
-- Role-based access tests
-- Session handling verification

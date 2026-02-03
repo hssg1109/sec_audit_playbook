@@ -1,15 +1,102 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "finding_schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Security Finding Schema",
+  "description": "취약점 보고서 JSON 스키마",
   "type": "object",
-  "required": ["id", "title", "severity", "description", "evidence_refs", "recommendation"],
+  "required": ["task_id", "status", "findings"],
   "properties": {
-    "id": {"type": "string"},
-    "title": {"type": "string"},
-    "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
-    "description": {"type": "string"},
-    "evidence_refs": {"type": "array", "items": {"type": "string"}},
-    "recommendation": {"type": "string"}
+    "task_id": {
+      "type": "string",
+      "description": "작업 ID",
+      "pattern": "^[0-9]+-[0-9]+$"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "failed", "partial"]
+    },
+    "findings": {
+      "type": "array",
+      "description": "발견된 취약점 목록",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "severity", "category", "description"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "취약점 고유 ID (예: VULN-001)"
+          },
+          "title": {
+            "type": "string",
+            "description": "취약점 제목"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["Critical", "High", "Medium", "Low", "Info"],
+            "description": "심각도"
+          },
+          "category": {
+            "type": "string",
+            "description": "취약점 분류 (예: SQL Injection, XSS, File Upload)"
+          },
+          "description": {
+            "type": "string",
+            "description": "취약점 상세 설명"
+          },
+          "affected_endpoint": {
+            "type": "string",
+            "description": "영향받는 API 엔드포인트"
+          },
+          "affected_file": {
+            "type": "string",
+            "description": "취약점이 존재하는 소스 파일 경로:라인"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "취약점 근거 (코드 스니펫 등)"
+          },
+          "recommendation": {
+            "type": "string",
+            "description": "조치 권고"
+          },
+          "cwe_id": {
+            "type": "string",
+            "description": "CWE ID (예: CWE-89)",
+            "pattern": "^CWE-[0-9]+$"
+          },
+          "owasp_category": {
+            "type": "string",
+            "description": "OWASP Top 10 분류"
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "description": "요약 통계",
+      "properties": {
+        "total": { "type": "integer" },
+        "critical": { "type": "integer" },
+        "high": { "type": "integer" },
+        "medium": { "type": "integer" },
+        "low": { "type": "integer" },
+        "info": { "type": "integer" }
+      }
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "claude_session": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string",
+      "description": "추가 메모"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "작업 메타데이터"
+    }
   },
   "additionalProperties": false
 }

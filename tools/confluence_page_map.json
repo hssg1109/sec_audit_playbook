@@ -1,15 +1,64 @@
 {
-  "docs/00_overview.md": "진단 개요",
-  "docs/10_asset_identification.md": "1. 자산 식별 및 진단 환경 구성",
-  "docs/20_external_requests.md": "2. 연계 진단 신청",
-  "docs/30_static_analysis.md": "3. 정적진단",
-  "docs/31_api_inventory.md": "3-1 API 식별(리스팅)",
-  "docs/32_injection_review.md": "3-2 인젝션",
-  "docs/33_xss_review.md": "3-3 XSS(크로스 사이트 스크립팅)",
-  "docs/34_file_handling_review.md": "3-4 파일 처리",
-  "docs/40_dynamic_testing.md": "4 동적진단",
-  "docs/41_data_protection.md": "4-1 데이터 보호",
-  "docs/42_authn_authz.md": "4-2 인증/인가",
-  "docs/50_dependency_scan.md": "5 라이브러리 취약점 진단",
-  "docs/60_reporting.md": "6 보고"
+  "version": "3.0",
+  "prefix": "",
+  "next_test_number": 4,
+  "root_page": {
+    "source": "README.md",
+    "type": "doc"
+  },
+  "entries": [
+    {"source": "docs/00_overview.md",            "title": "보안 진단 프로세스 개요",  "type": "doc"},
+    {"source": "docs/10_asset_identification.md", "title": "자산 식별 절차서",         "type": "doc"},
+    {"source": "docs/PLAYBOOK_GUIDE.md",          "title": "플레이북 사용 가이드",     "type": "doc"}
+  ],
+  "groups": [
+    {
+      "title": "정적 분석 절차서",
+      "source": "docs/20_static_analysis.md",
+      "type": "doc",
+      "entries": [
+        {"source": "docs/21_api_inventory.md",         "title": "API 인벤토리 절차서",           "type": "doc"},
+        {"source": "docs/22_injection_review.md",      "title": "인젝션 취약점 검토 절차서",     "type": "doc"},
+        {"source": "docs/23_xss_review.md",            "title": "XSS 취약점 검토 절차서",        "type": "doc"},
+        {"source": "docs/24_file_handling_review.md",  "title": "파일 처리 검토 절차서",         "type": "doc"},
+        {"source": "docs/25_data_protection_review.md","title": "데이터 보호 검토 절차서",       "type": "doc"}
+      ]
+    },
+    {
+      "title": "테스트 목록",
+      "groups": [
+        {
+          "title": "테스트1 - OCB-IAM 간편인증 진단",
+          "entries": [
+            {"source": "state/task_11_result.json",  "title": "자산 식별 결과",            "type": "finding"},
+            {"source": "state/task_21_result.json",  "title": "API 인벤토리 결과",         "type": "finding"},
+            {"source": "state/task_22_result.json",  "title": "인젝션 취약점 진단 결과",   "type": "finding"},
+            {"source": "state/task_23_result.json",  "title": "XSS 취약점 진단 결과",      "type": "finding"},
+            {"source": "state/task_24_result.json",  "title": "파일 처리 진단 결과",       "type": "finding"},
+            {"source": "state/task_25_result.json",  "title": "데이터 보호 진단 결과",     "type": "finding"},
+            {"source": "state/final_report.json",    "title": "최종 보안 진단 보고서",     "type": "final_report"}
+          ]
+        },
+        {
+          "title": "테스트2 - SKP PlayBook 취약 게시판 진단",
+          "entries": [
+            {"source": "state/skp_playbook_task_21_result.json",  "title": "테스트2 - API 인벤토리 결과",           "type": "finding"},
+            {"source": "state/skp_playbook_task_22_result.json",  "title": "테스트2 - 인젝션 취약점 진단 결과",     "type": "finding"}
+          ]
+        },
+        {
+          "title": "테스트3 - PCoNA 진단",
+          "entries": [
+            {"source": "state/pcona_task_11_result.json",  "title": "자산 식별 결과",            "type": "finding"},
+            {"source": "state/pcona_task_21_result.json",  "title": "API 인벤토리 결과",         "type": "finding"},
+            {"source": "state/pcona_task_22_result.json",  "title": "인젝션 취약점 진단 결과",   "type": "finding"},
+            {"source": "state/pcona_task_23_result.json",  "title": "XSS 취약점 진단 결과",      "type": "finding"},
+            {"source": "state/pcona_task_24_result.json",  "title": "파일 처리 진단 결과",       "type": "finding"},
+            {"source": "state/pcona_task_25_result.json",  "title": "데이터 보호 진단 결과",     "type": "finding"},
+            {"source": "state/pcona_final_report.json",    "title": "최종 보안 진단 보고서",     "type": "final_report"}
+          ]
+        }
+      ]
+    }
+  ]
 }

@@ -1,3 +1,0 @@
-- Enumerate dependencies
-- Map to CVEs
-- Validate remediation options

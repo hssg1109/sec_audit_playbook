@@ -1,3 +1,0 @@
-- Validate all findings have evidence
-- Confirm remediation plan
-- Ensure severity rationale is present

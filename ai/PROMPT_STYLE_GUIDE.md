@@ -1,6 +1,58 @@
-# Prompt Style Guide
+# AI 프롬프트 작성 가이드 (Prompt Style Guide)
 
-- Always list dependencies and input artifacts.
-- Reference output schema and quality gates.
-- Keep prompts deterministic and task-scoped.
-- Require evidence references for each finding.
+## 목적
+팀 전체가 일관된 방식으로 AI에게 명령을 내려 결과물 품질을 균일하게 유지합니다.
+
+## 프롬프트 구조 템플릿
+
+```markdown
+## Task: [작업번호] [작업명]
+
+**역할**: 당신은 보안 진단 전문가입니다.
+**입력 파일**: [입력 파일 경로]
+**출력 파일**: [출력 파일 경로]
+**출력 스키마**: [스키마 파일 경로]
+
+### 컨텍스트
+[작업 배경 설명]
+
+### 명령
+1. [구체적 단계 1]
+2. [구체적 단계 2]
+3. [구체적 단계 3]
+
+### 출력 형식
+- JSON 스키마 준수 (schemas/task_output_schema.json)
+- findings 배열에 발견 사항 기록
+
+### 금지사항
+- 추측 금지 (코드 근거 없으면 "취약점 없음" 판정 금지)
+- 민감정보 프롬프트 포함 금지
+```
+
+## 작성 원칙
+
+### DO (권장)
+- 구체적인 파일 경로 명시
+- 단계별 명령 (numbered list)
+- 출력 형식 명확히 지정
+- 금지사항 명시
+
+### DON'T (금지)
+- "알아서 해줘" 같은 모호한 지시
+- 한 프롬프트에 여러 작업 혼합
+- 민감정보 예시 사용
+- 결과 형식 미지정
+
+## 프롬프트 변수 규칙
+- `{{INPUT_FILE}}`: 입력 파일 경로
+- `{{OUTPUT_FILE}}`: 출력 파일 경로
+- `{{TASK_ID}}`: 작업 ID
+- `{{SESSION_ID}}`: 세션 ID
+
+## 검증 체크리스트
+- [ ] 역할(Role) 정의 포함
+- [ ] 입출력 파일 경로 명시
+- [ ] 출력 스키마 참조
+- [ ] 금지사항 포함
+- [ ] 민감정보 미포함 확인

@@ -1,5 +1,29 @@
-# AI Usage Policy
+# AI 사용 정책 (AI Usage Policy)
 
-- AI outputs are assistance, not authority. Human review is required.
-- Do not provide secrets or production data to AI tools.
-- Store AI outputs in `state/` only after validation and review.
+## 목적
+보안 진단 과정에서 AI(Claude 등)를 활용할 때 준수해야 할 정책을 정의합니다.
+
+## 허용 범위
+- 소스코드 정적 분석 보조
+- 취약점 패턴 탐색
+- 보안 설정 검토
+- 보고서 초안 작성
+
+## 금지 사항
+- 고객의 실제 운영 DB 자격 증명을 AI 프롬프트에 포함 금지
+- 고객 개인정보(PII)를 마스킹 없이 AI에 전달 금지
+- AI 결과를 검증 없이 최종 보고서에 직접 사용 금지
+- AI를 이용한 실제 공격(Exploit) 코드 생성 금지
+
+## 데이터 분류
+| 분류 | AI 전달 가능 여부 | 예시 |
+|------|-------------------|------|
+| 공개 | O | 오픈소스 코드, 공개 API 문서 |
+| 내부 | 마스킹 후 O | 내부 소스코드, 설정 파일 |
+| 기밀 | X | DB 비밀번호, API 시크릿 키 |
+| 극비 | X | 고객 개인정보, 금융 데이터 |
+
+## 감사 추적
+- 모든 AI 세션은 `ai-manifest.yaml`에 기록
+- AI가 생성한 파일에는 `ai-generated: true` 메타데이터 포함
+- 분기별 AI 사용 현황 리뷰 실시
