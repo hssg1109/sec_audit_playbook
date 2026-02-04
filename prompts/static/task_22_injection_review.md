@@ -1,30 +1,65 @@
 ## Task: 2-2 인젝션 취약점 검토
 
 **역할**: 당신은 보안 진단 전문가입니다.
-**입력 파일**: state/task_21_result.json (API 인벤토리)
-**출력 파일**: state/task_22_result.json
+**입력 파일**: scan_injection_enhanced.py 실행 결과 JSON
+**출력 파일**: state/{prefix}_task_22_result.json
 **출력 스키마**: schemas/finding_schema.json
 
 ---
 
-### 컨텍스트
-Task 2-1에서 추출한 API 인벤토리를 기반으로 **SQL Injection**, **OS Command Injection** 등 인젝션 계열 취약점을 정적 분석합니다.
+### 진단 프로세스 (2단계)
+
+> 토큰 절약을 위해 **스크립트 자동 진단 → LLM 검증** 2단계로 진행합니다.
+
+#### 1단계: 스크립트 자동 진단 (사전 실행)
+
+아래 두 스크립트를 순서대로 실행하세요:
+
+```bash
+# 1. API 인벤토리 추출 (task_21이 이미 완료된 경우 생략 가능)
+python3 tools/scripts/scan_api.py <source_dir> -o state/{prefix}_api_scan.json
+
+# 2. endpoint별 인젝션 진단 (핵심)
+python3 tools/scripts/scan_injection_enhanced.py <source_dir> \
+    --api-inventory state/{prefix}_api_scan.json \
+    --modules <대상모듈> \
+    -o state/{prefix}_task_22_enhanced.json
+```
+
+스크립트가 자동으로 수행하는 작업:
+- Controller → Service → Repository 호출 흐름 추적
+- endpoint별 SQLi 양호/취약/정보 판정 (진단 유형 분류)
+- OS Command Injection 키워드 전역 스캔
+- SSI Injection 키워드 전역 스캔
+
+#### 2단계: LLM 검증 (이 프롬프트의 역할)
+
+스크립트 결과 JSON을 로드하여 아래 항목만 검토합니다:
+
+1. **`needs_review: true` 항목 심층 분석**
+   - 스크립트가 자동 판정하지 못한 endpoint
+   - 해당 endpoint의 Controller → Service → Repository 코드를 직접 읽고 판정
+
+2. **취약 판정 검증**
+   - 스크립트가 "취약"으로 판정한 항목의 정확성 확인
+   - 실제 사용자 입력이 취약 코드에 도달하는지 데이터 흐름 추적
+
+3. **전역 OS Command / SSI 결과 분석**
+   - 스크립트가 발견한 전역 패턴의 실제 위험도 판정
+   - 사용자 입력 연관성 확인
 
 ---
 
 ### 파일 탐색 전략 (토큰 최적화)
 
-> **전체 소스코드를 탐색하지 마세요.** 아래 순서로 필요한 파일만 추적합니다.
+> **`needs_review` 항목과 취약 항목의 관련 파일만 읽습니다.**
 
-1. `state/task_21_result.json`에서 API 엔드포인트 목록을 로드
-2. 각 API의 **Controller 파일** 위치를 확인
-3. Controller에서 호출하는 **Service 클래스**를 추적
-4. Service에서 호출하는 **Repository / Mapper / DAO** 파일을 추적
-5. 전역 설정 파일 확인: `application.yml`, `application.properties`, `web.xml`
+1. 스크립트 결과 JSON에서 `needs_review: true` 또는 `result: 취약` 항목 필터
+2. 해당 endpoint의 `process_file`, `service_calls`, `repository_calls` 확인
+3. 필요한 파일만 직접 읽어 코드 검증
 
 ```
-API 목록 → Controller → Service → Repository/Mapper/DAO
-                                    └→ MyBatis XML, JPA @Query, R2DBC 등
+스크립트 결과 → 검토 대상 필터 → 관련 파일만 읽기 → 판정 확정
 ```
 
 ---
@@ -43,62 +78,55 @@ API 목록 → Controller → Service → Repository/Mapper/DAO
 | R2DBC | `DatabaseClient`, `R2dbcEntityTemplate`, `Criteria`, `.execute(`, `.sql(` |
 | Node.js | `Sequelize(`, `db.query`, `client.query`, `connect.query`, `queryQueue` |
 
-#### 1.2 DB API별 진단 방법
+#### 1.2 DB API별 진단 방법 (진단 유형)
 
-**MyBatis XML Mapper:**
-- `${...}` (문자열 직접 삽입) → **취약**
-- `#{...}` (PreparedStatement 바인딩) → **양호**
+| 유형 | 설명 | 판정 |
+|------|------|------|
+| 유형1: 파라미터 바인딩 | `.bind("param", value)`, `#{param}`, `:param` | **양호** |
+| 유형2: ORM 방식 | `client.insert().using(entity)`, EntityTemplate | **양호** |
+| 유형3: Criteria 기반 | `Criteria.where().is()` + `.matching()` | **양호** |
+| 유형3-취약 | `Utils.toSql(definition)` → SQL 직접 삽입 | **취약/정보** |
+| 유형4: Raw SQL 결합 | `"SQL" + variable`, `buildString`, `String.format()` | **취약** |
+| DB 접근 없음 | Repository 호출 없거나 파라미터 없음 | **N/A** |
 
-**JPA @Query:**
-- `@Query("SELECT ... WHERE x = " + param)` → **취약** (문자열 연결)
-- `@Query("SELECT ... WHERE x = :param")` → **양호** (파라미터 바인딩)
-- `createNativeQuery(sql)` + 문자열 연결 → **취약**
+#### 1.3 취약/정보 세분화 기준
 
-**R2DBC / Criteria:**
-- `Criteria.where(...).toString()` 후 SQL에 직접 삽입 → **취약**
-- `.bind("param", value)` 사용 → **양호**
-- `R2dbcEntityTemplate` + Query DSL → **양호**
-
-**JDBC:**
-- `Statement.executeQuery(sql)` + 문자열 연결 → **취약**
-- `PreparedStatement` + `setString()` → **양호**
-
-**Node.js:**
-- `db.query("SELECT ... " + input)` → **취약**
-- `db.query("SELECT ... $1", [input])` → **양호** (Parameterized)
+- **취약**: 사용자 검색/필터 파라미터(search, keyword, field, value)가 취약 코드에 도달
+- **정보**: 취약 패턴 존재하나 사용자 입력이 직접 도달하지 않거나, Pageable sort만 관련
 
 ---
 
 ### 2. OS 명령 실행 인젝션 진단
 
-#### 2.1 검색 대상 키워드
+#### 2.1 검색 대상 키워드 (스크립트가 자동 스캔)
 
 | 언어 | 검색 키워드 |
 |---|---|
-| Java | `Runtime.exec`, `ProcessBuilder`, `Runtime.getRuntime`, `getRuntime().exec`, `DefaultExecutor`, `Execute.Command` |
-| Node.js | `eval(`, `setTimeout(` (문자열 인자), `setInterval(` (문자열 인자), `child_process`, `exec(`, `execSync(`, `spawn(` |
+| Java | `Runtime.exec`, `ProcessBuilder`, `ChannelExec` (JSch), `GroovyShell`, `ScriptEngineManager`, `CommandLine.parse` (Commons Exec), `ProcessExecutor` (zt-exec) |
+| Node.js | `eval(`, `child_process`, `exec/spawn`, `execa`, `shelljs` |
+| Python | `os.system`, `subprocess.*`, `eval`/`exec`/`compile`, `__import__` |
+| .NET | `Process.Start`, `ProcessStartInfo`, `PowerShell`, `ManagementObjectSearcher` (WMI) |
 | PHP | `exec(`, `system(`, `passthru(`, `shell_exec(`, `proc_open(`, `popen(` |
 
 #### 2.2 진단 기준
 
 1. **명령 실행 함수의 파라미터가 클라이언트 입력값에서 오는지 확인**
    - 서버 config에서 로드 → 양호
-   - 사용자 입력값(`@RequestParam`, `request.getParameter()` 등)에서 수신 → 취약 가능성
+   - 사용자 입력값에서 수신 → 취약 가능성
 
-2. **필터 적용 여부 및 충분성 확인**
-   - **양호 기준**: 아래 6개 문자 모두 필터링 중
-     ```
-     &  |  ;  >  `(backQuote)  $
-     ```
-   - **취약 기준**: 6개 문자 중 하나라도 필터에 포함되지 않을 시
+2. **필터 적용 여부 확인** - 6개 필터 문자: `& | ; > ` $`
+   - 양호: 6개 모두 필터링
+   - 취약: 1개라도 누락
 
-3. **ProcessBuilder 특수 케이스**
-   - `ProcessBuilder(listOf("명령어"))` 처럼 하드코딩된 단일 명령만 실행 → RCE 양호 (단, 불필요 코드 삭제 권고)
-   - 사용자 입력값을 전체로 받아 실행 → **취약**
+---
 
-4. **Node.js CSP 확인**
-   - `setTimeout`, `setInterval`에 function 객체 전달 → **양호**
-   - 문자열 인자 전달 → **취약** (단, CSP 헤더로 실행 방지 설정 시 양호)
+### 3. SSI 인젝션 진단
+
+스크립트가 자동 스캔하는 항목:
+- SSI 디렉티브: `<!--#exec`, `<!--#include`, `<!--#echo`, `<!--#config` 등
+- 템플릿 인젝션: Thymeleaf SSTI, FreeMarker, Velocity, SpEL, EL Injection
+- Node.js 템플릿: EJS, Nunjucks, Handlebars, Pug
+- Python 템플릿: Template(), render_to_string(), Jinja2
 
 ---
 
@@ -116,6 +144,8 @@ API 목록 → Controller → Service → Repository/Mapper/DAO
 
 ### 출력 형식
 
+스크립트 자동 결과(`endpoint_diagnoses`)를 기반으로, LLM 검증 결과를 반영한 최종 결과를 생성합니다:
+
 ```json
 {
   "task_id": "2-2",
@@ -129,7 +159,7 @@ API 목록 → Controller → Service → Repository/Mapper/DAO
       "description": "상세 설명",
       "affected_endpoint": "/api/xxx",
       "evidence": {
-        "file": "src/repository/XxxMapper.xml",
+        "file": "src/repository/XxxRepository.kt",
         "lines": "45-52",
         "code_snippet": "취약 코드"
       },
@@ -138,6 +168,7 @@ API 목록 → Controller → Service → Repository/Mapper/DAO
       "recommendation": "조치 방안"
     }
   ],
+  "endpoint_diagnoses": "... (스크립트 결과 그대로 포함)",
   "executed_at": "",
   "claude_session": ""
 }
@@ -149,4 +180,4 @@ API 목록 → Controller → Service → Repository/Mapper/DAO
 - 추측 금지 (코드 근거 없으면 finding 생성 금지)
 - 실제 Exploit 페이로드 작성 금지
 - 고객 DB 비밀번호, API 시크릿 등 민감정보 포함 금지
-- API 인벤토리에 없는 파일을 임의로 탐색 금지
+- 스크립트가 이미 판정한 "양호" 항목은 재검토 불필요

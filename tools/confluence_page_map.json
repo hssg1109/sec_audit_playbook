@@ -1,7 +1,7 @@
 {
   "version": "3.0",
   "prefix": "",
-  "next_test_number": 4,
+  "next_test_number": 5,
   "root_page": {
     "source": "README.md",
     "type": "doc"
@@ -56,6 +56,12 @@
             {"source": "state/pcona_task_24_result.json",  "title": "파일 처리 진단 결과",       "type": "finding"},
             {"source": "state/pcona_task_25_result.json",  "title": "데이터 보호 진단 결과",     "type": "finding"},
             {"source": "state/pcona_final_report.json",    "title": "최종 보안 진단 보고서",     "type": "final_report"}
+          ]
+        },
+        {
+          "title": "테스트4 - pcona-console 보고서 고도화",
+          "entries": [
+            {"source": "state/pcona_진단보고서.md",  "title": "PCoNA 관리콘솔 보안진단 보고서",  "type": "doc"}
           ]
         }
       ]
