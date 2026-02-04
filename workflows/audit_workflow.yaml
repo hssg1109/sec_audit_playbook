@@ -37,11 +37,9 @@ phases:
     name: "보고서 생성 (Reporting)"
     depends_on: [phase2_static_analysis]
     tasks: []
-    scripts:
-      - "tools/scripts/merge_results.py"           # JSON 결과 병합
-      - "tools/scripts/generate_report_excel.py"   # Excel 보고서 생성
+    script: "tools/scripts/merge_results.py"
     parallel: false
-    description: "merge_results.py로 결과 병합 후, generate_report_excel.py로 Excel 보고서 생성"
+    description: "merge_results.py로 결과 자동 병합"
 
 # 개별 태스크 정의
 tasks:
