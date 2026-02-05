@@ -24,9 +24,21 @@ testbed/
 # --------------------------------------------------
 # 진단 결과 (민감 정보 포함 가능)
 # --------------------------------------------------
+state/
+workspace/
+state/**/*
 state/*.json
 state/*.html
 state/*.pdf
+pcona_task_*.json
+*pcona-ad_report*
+*final_report*.json
+*reporting_summary*.json
+*seed_*.json
+*.cpg.bin
+results.sarif
+findings.csv
+!schemas/reporting_summary_schema.json
 
 # --------------------------------------------------
 # 일반 제외 항목

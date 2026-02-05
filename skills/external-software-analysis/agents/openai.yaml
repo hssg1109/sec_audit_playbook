@@ -1,0 +1,4 @@
+interface:
+  display_name: "External Software Analysis"
+  short_description: "Reverse engineering and external software analysis workflows"
+  default_prompt: "Guide external software analysis for provided binaries or packages."

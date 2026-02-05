@@ -1,0 +1,4 @@
+interface:
+  display_name: "DAST/ASM Audit"
+  short_description: "DAST, ASM discovery, and scanning workflows"
+  default_prompt: "Run the DAST/ASM workflow for the provided targets."

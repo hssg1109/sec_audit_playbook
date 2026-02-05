@@ -41,6 +41,7 @@ CATEGORY_INFO = {
             "sql": "SQL 인젝션",
             "os_command": "OS Command 인젝션",
             "ssi": "SSI/SSTI 인젝션",
+            "ssti": "SSI/SSTI 인젝션",
             "nosql": "NoSQL 인젝션",
         }
     },
@@ -111,6 +112,7 @@ class Finding:
     context_after: list
     recommendation: str
     evidence_type: str  # code, config, api, etc.
+    flow: list
 
 
 @dataclass
@@ -220,24 +222,29 @@ def load_findings(filepath: Path, source_dir: Path) -> tuple[str, list[Finding]]
                 if not endpoint:
                     endpoint = af.get("api", af.get("endpoint", ""))
 
-        # 코드 증적 추출
-        code_snippet, ctx_before, ctx_after = extract_code_evidence(
-            source_dir, file_path, line_num
-        )
+        # 기존 evidence 우선 사용 (민감정보는 redacted evidence를 우선 반영)
+        code_snippet = ""
+        ctx_before = []
+        ctx_after = []
+        evidence = f.get("evidence", {})
+        if isinstance(evidence, dict):
+            code_snippet = evidence.get("code_snippet", evidence.get("code", ""))
+            ctx_before = evidence.get("context_before", [])
+            ctx_after = evidence.get("context_after", [])
 
-        # 기존 evidence 사용
+        # 코드 증적 추출 (evidence가 없을 때만)
         if not code_snippet:
-            evidence = f.get("evidence", {})
-            if isinstance(evidence, dict):
-                code_snippet = evidence.get("code_snippet", evidence.get("code", ""))
-                ctx_before = evidence.get("context_before", [])
-                ctx_after = evidence.get("context_after", [])
+            code_snippet, ctx_before, ctx_after = extract_code_evidence(
+                source_dir, file_path, line_num
+            )
 
         # 서브카테고리 추출
         title_lower = f.get("title", "").lower()
         cat_lower = f.get("category", "").lower()
         subcategory = ""
-        for key, name in cat_info["items"].items():
+        # Prefer longer keys first to avoid substring collisions (e.g., nosql vs sql)
+        for key in sorted(cat_info["items"].keys(), key=len, reverse=True):
+            name = cat_info["items"][key]
             if key in title_lower or key in cat_lower:
                 subcategory = name
                 break
@@ -259,6 +266,7 @@ def load_findings(filepath: Path, source_dir: Path) -> tuple[str, list[Finding]]
             context_after=ctx_after if isinstance(ctx_after, list) else [],
             recommendation=f.get("recommendation", ""),
             evidence_type="code" if code_snippet else "description",
+            flow=f.get("flow", []),
         ))
 
     return category, findings
@@ -275,7 +283,6 @@ def generate_summary_table(all_findings: dict[str, list[Finding]]) -> str:
     lines.append("| No | 점검 구분 | 점검 항목 | 결과 | 위험도 | Request Mapping | File |")
     lines.append("|:--:|:-------:|:-------:|:---:|:-----:|:----------------|:-----|")
 
-    global_idx = 1
     for category_id, findings in all_findings.items():
         for f in findings:
             result, risk = RISK_MAP.get(f.severity, ("정보", 4))
@@ -286,10 +293,9 @@ def generate_summary_table(all_findings: dict[str, list[Finding]]) -> str:
             endpoint = f.endpoint if f.endpoint else "-"
 
             lines.append(
-                f"| {global_idx} | {f.category} | {f.subcategory} | {result} | {risk} | "
+                f"| {f.id} | {f.category} | {f.subcategory} | {result} | {risk} | "
                 f"`{endpoint}` | {file_short} |"
             )
-            global_idx += 1
 
     lines.append("")
     return "\n".join(lines)
@@ -339,10 +345,38 @@ def generate_category_detail(category_id: str, findings: list[Finding],
         lines.append(f"**설명:**\n")
         lines.append(f"{f.description}\n")
 
+        # 코드 흐름
+        if f.flow:
+            lines.append("**코드 흐름:**\n")
+            if isinstance(f.flow, list):
+                for step in f.flow:
+                    lines.append(f"- {step}")
+                lines.append("")
+            else:
+                lines.append(f"{f.flow}\n")
+
         # 코드 증적
         if f.code_snippet or f.context_before or f.context_after:
             lines.append(f"\n**코드 증적:**\n")
-            lines.append("```kotlin")
+            # language hint based on file extension
+            lang = "text"
+            if f.file:
+                ext = Path(f.file).suffix.lower()
+                if ext == ".kt":
+                    lang = "kotlin"
+                elif ext == ".java":
+                    lang = "java"
+                elif ext in [".yml", ".yaml"]:
+                    lang = "yaml"
+                elif ext == ".json":
+                    lang = "json"
+                elif ext == ".xml":
+                    lang = "xml"
+                elif ext == ".properties":
+                    lang = "properties"
+                elif ext in [".sql"]:
+                    lang = "sql"
+            lines.append(f"```{lang}")
 
             # 라인 번호 계산
             start_line = max(1, f.line - len(f.context_before)) if f.line else 1
@@ -376,6 +410,11 @@ def generate_report(
     output_file: Path,
     service_name: str,
     target_modules: list[str] = None,
+    repo: str | None = None,
+    branch: str | None = None,
+    commit: str | None = None,
+    domain: str | None = None,
+    source_label: str | None = None,
 ):
     """최종 보고서 생성"""
 
@@ -410,7 +449,15 @@ def generate_report(
     report_lines.append("## 1. 서비스 개요\n")
     report_lines.append(f"**진단 대상:** {service_name}\n")
     report_lines.append(f"**진단 일자:** {today}\n")
-    report_lines.append(f"**소스 경로:** `{source_dir}`\n")
+    report_lines.append(f"**소스 경로:** `{source_label or source_dir}`\n")
+    if repo:
+        report_lines.append(f"**레포:** `{repo}`\n")
+    if branch:
+        report_lines.append(f"**브랜치:** `{branch}`\n")
+    if commit:
+        report_lines.append(f"**커밋:** `{commit}`\n")
+    if domain:
+        report_lines.append(f"**도메인:** `{domain}`\n")
     if target_modules:
         report_lines.append(f"**대상 모듈:** {', '.join(target_modules)}\n")
     report_lines.append("")
@@ -487,6 +534,31 @@ def main():
         help="대상 모듈 필터 (예: pcona-console)",
         default=None,
     )
+    parser.add_argument(
+        "--repo",
+        help="레포 정보 (예: http://git.example.com/org/repo.git)",
+        default=None,
+    )
+    parser.add_argument(
+        "--branch",
+        help="브랜치명",
+        default=None,
+    )
+    parser.add_argument(
+        "--commit",
+        help="커밋 해시",
+        default=None,
+    )
+    parser.add_argument(
+        "--domain",
+        help="도메인 정보",
+        default=None,
+    )
+    parser.add_argument(
+        "--source-label",
+        help="보고서에 표시할 소스 경로/URL (증적 추출 경로와 분리)",
+        default=None,
+    )
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir)
@@ -513,6 +585,11 @@ def main():
         Path(args.output),
         args.service,
         args.modules,
+        args.repo,
+        args.branch,
+        args.commit,
+        args.domain,
+        args.source_label,
     )
 
 

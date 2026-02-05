@@ -1,0 +1,16 @@
+rules:
+  - id: thymeleaf-string-template-ssti
+    languages: [kotlin, java]
+    message: "User-controlled template string rendered via Thymeleaf. Ensure templates are not user-controlled or sanitize/escape expressions."
+    severity: ERROR
+    patterns:
+      - pattern: $ENGINE.process($TEMPLATE, $CTX)
+      - metavariable-regex:
+          metavariable: $TEMPLATE
+          regex: ".*"
+    metadata:
+      cwe: "CWE-94"
+      owasp: "A03:2021 Injection"
+      category: "SSTI"
+      likelihood: "high"
+      confidence: "medium"

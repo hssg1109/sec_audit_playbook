@@ -1,0 +1,16 @@
+rules:
+  - id: elasticsearch-query-annotation-placeholder
+    languages: [kotlin, java]
+    message: "Spring Data Elasticsearch @Query uses positional placeholder (?0/?1). Ensure input is safely escaped or use query builders."
+    severity: WARNING
+    patterns:
+      - pattern: '@Query("$Q")'
+      - metavariable-regex:
+          metavariable: $Q
+          regex: '.*\?0.*'
+    metadata:
+      cwe: "CWE-943"
+      owasp: "A03:2021 Injection"
+      category: "Elasticsearch Query Injection"
+      likelihood: "medium"
+      confidence: "medium"

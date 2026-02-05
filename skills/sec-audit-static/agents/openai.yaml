@@ -1,0 +1,4 @@
+interface:
+  display_name: "Static Security Audit"
+  short_description: "SAST/SCA/secret scanning playbook and reporting"
+  default_prompt: "Run the static audit playbook for this codebase."

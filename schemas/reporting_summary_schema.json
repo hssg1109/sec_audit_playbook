@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Reporting Summary",
+  "type": "object",
+  "required": ["report_id", "generated_at", "summary", "analyses"],
+  "additionalProperties": false,
+  "properties": {
+    "report_id": {"type": "string"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "owner": {"type": "string"},
+    "severity_scheme": {
+      "type": "string",
+      "description": "Reference to severity mapping (e.g., grade 5-1 -> Critical-Info)."
+    },
+    "summary": {
+      "type": "object",
+      "required": ["total_findings", "critical", "high", "medium", "low", "info"],
+      "additionalProperties": false,
+      "properties": {
+        "total_findings": {"type": "integer", "minimum": 0},
+        "critical": {"type": "integer", "minimum": 0},
+        "high": {"type": "integer", "minimum": 0},
+        "medium": {"type": "integer", "minimum": 0},
+        "low": {"type": "integer", "minimum": 0},
+        "info": {"type": "integer", "minimum": 0}
+      }
+    },
+    "analyses": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["type", "format", "report_path"],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["sec-audit-static", "sec-audit-dast", "external-software-analysis"]
+          },
+          "format": {
+            "type": "string",
+            "enum": ["json", "sarif", "markdown"]
+          },
+          "report_path": {"type": "string"},
+          "scope": {"type": "string"},
+          "notes": {"type": "string"},
+          "findings_count": {"type": "integer", "minimum": 0},
+          "severity_counts": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "critical": {"type": "integer", "minimum": 0},
+              "high": {"type": "integer", "minimum": 0},
+              "medium": {"type": "integer", "minimum": 0},
+              "low": {"type": "integer", "minimum": 0},
+              "info": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    }
+  }
+}
