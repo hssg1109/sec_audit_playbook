@@ -9,6 +9,8 @@ Preferred order:
 4. ZAP (DAST verification)
 
 Rules:
+- If a PoC is feasible with best-effort local setup, implement it without pausing to ask.
+- Only ask the user when execution is blocked by missing prerequisites.
 - Do not attempt PoC if no runnable test environment exists.
 - Record PoC feasibility in JSON metadata:
 ```json
