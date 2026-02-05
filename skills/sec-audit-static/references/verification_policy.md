@@ -8,3 +8,7 @@ When the user requests a remediation/verification check ("이행점검"), always
 4) Report results referencing the commit hash.
 
 Do not run verification against other branches or HEAD unless explicitly requested.
+
+For verification PoC setup, use the shared artifacts repository branch:
+- `audit_result` repo `artifacts` branch
+- Apply tests via `artifacts/pcona-ad/apply.sh --repo /path/to/pcona-ad`
