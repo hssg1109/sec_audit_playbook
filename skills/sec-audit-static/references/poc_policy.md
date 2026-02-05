@@ -10,6 +10,7 @@ Preferred order:
 
 Rules:
 - If a PoC is feasible with best-effort local setup, implement it without pausing to ask.
+- Create PoC tests for every confirmed finding **and each distinct instance** (file:line) unless explicitly waived by the user.
 - Only ask the user when execution is blocked by missing prerequisites.
 - Do not attempt PoC if no runnable test environment exists.
 - Record PoC feasibility in JSON metadata:
