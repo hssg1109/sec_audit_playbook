@@ -69,4 +69,8 @@
 python tools/scripts/extract_endpoints_rg.py --repo /path/to/repo --out state/task_21_result.json
 ```
 
-정밀 파싱이 필요할 경우 tree-sitter 기반 파서를 추가로 연결합니다.
+정밀 파싱이 필요할 경우 tree-sitter 기반 파서를 사용합니다.
+```bash
+pip install tree_sitter tree_sitter_languages
+python tools/scripts/extract_endpoints_treesitter.py --repo /path/to/repo --out state/task_21_result.json
+```

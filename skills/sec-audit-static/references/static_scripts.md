@@ -12,6 +12,7 @@ Canonical automation scripts (repo `tools/scripts/`):
 - `scan_injection_enhanced.py`: enhanced injection scan helper (if used)
 - `scan_injection_patterns.py`: injection pattern scan helper (if used)
 - `extract_endpoints_rg.py`: Spring/Kotlin endpoint inventory (rg/regex, low-cost)
+- `extract_endpoints_treesitter.py`: Spring/Kotlin endpoint inventory (tree-sitter, higher precision)
 - `migrate_test_groups.py`: internal migration utility (use only if needed)
 - `rename_remove_prefix.py`: internal rename utility (use only if needed)
 
