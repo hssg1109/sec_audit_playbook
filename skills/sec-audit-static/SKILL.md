@@ -23,9 +23,10 @@ Run the static audit workflow for a codebase: asset identification, API inventor
 - `references/rule_validation.md` for mandatory post-rule validation.
 - `references/tooling.md` for code-browser tooling (rg/ctags).
 - `references/vuln_automation_principles.md` for discovery/analysis split and hypothesis loop.
+- `references/global_filters.md` for global filter/interceptor verification.
 2. Execute tasks in order:
 - Phase 1: asset identification.
-- Phase 2: API inventory (script-first), then parallel reviews (injection/XSS/file handling/data protection).
+- Phase 2: API inventory (script-first), then confirm global filters/interceptors, then parallel reviews (injection/XSS/file handling/data protection).
 - Add SCA and secret detection as part of Phase 2 when configured. Use Gitleaks as the primary secret scanner.
 - For any confirmed finding, you must create or update Semgrep/Joern rules (unless explicitly waived by the user).
 - After rule updates, re-run seed generation and re-check affected phases before finalizing outputs.
