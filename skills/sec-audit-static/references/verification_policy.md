@@ -12,3 +12,7 @@ Do not run verification against other branches or HEAD unless explicitly request
 For verification PoC setup, use the shared artifacts repository branch:
 - `audit_result` repo `artifacts` branch
 - Apply tests via `artifacts/pcona-ad/apply.sh --repo /path/to/pcona-ad`
+- Apply tests via `artifacts/pcona-console/apply.sh --repo /path/to/pcona-console`
+
+Kotlin/Maven PoC runs:
+- Use `./mvnw -q test -DfailIfNoTests=false` to avoid JUnit5 provider mismatch from `-Dtest` patterns.
