@@ -1,6 +1,7 @@
 # Seed Usage (Semgrep / Joern)
 
 When running tasks 2-3, 2-4, 2-5, incorporate semgrep and joern outputs as seed signals.
+If any confirmed finding lacks a corresponding Semgrep/Joern rule, you must create the rule and re-run seed generation before finalizing.
 
 Guidance:
 - Use seed outputs to prioritize review, but confirm findings in code.
