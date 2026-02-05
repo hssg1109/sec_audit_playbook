@@ -13,6 +13,7 @@ Rules:
 - Create PoC tests for every confirmed finding **and each distinct instance** (file:line) unless explicitly waived by the user.
 - Only ask the user when execution is blocked by missing prerequisites.
 - Do not attempt PoC if no runnable test environment exists.
+- After PoC execution, revert local repo changes (tests, build artifacts, patched config) unless the user requests to keep them.
 - Record PoC feasibility in JSON metadata:
 ```json
 "metadata": {
