@@ -6,7 +6,7 @@ description: Static code security audit playbook (SAST, SCA, secret detection) w
 # Sec Audit Static
 
 ## Overview
-Run the static audit workflow for a codebase: asset identification, API inventory, SAST-style reviews, SCA/secret checks, and report generation using the existing schemas and scripts.
+Run the static audit workflow for a codebase: asset identification, API inventory, SAST-style reviews, SCA/secret checks (Gitleaks-first), and report generation using the existing schemas and scripts.
 
 ## Workflow
 1. Load playbook references:
@@ -25,7 +25,7 @@ Run the static audit workflow for a codebase: asset identification, API inventor
 2. Execute tasks in order:
 - Phase 1: asset identification.
 - Phase 2: API inventory, then parallel reviews (injection/XSS/file handling/data protection).
-- Add SCA and secret detection as part of Phase 2 when configured.
+- Add SCA and secret detection as part of Phase 2 when configured. Use Gitleaks as the primary secret scanner.
 - For any confirmed finding, you must create or update Semgrep/Joern rules (unless explicitly waived by the user).
 - After rule updates, re-run seed generation and re-check affected phases before finalizing outputs.
 - For 2-2 (injection), if the codebase uses SQL/JDBC/R2DBC, always check for dynamic SQL assembly patterns (`toSql`, `String.format`, string concatenation, template SQL) even if seeds are empty.

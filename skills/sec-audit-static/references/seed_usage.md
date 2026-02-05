@@ -1,6 +1,7 @@
 # Seed Usage (Semgrep / Joern)
 
 When running tasks 2-3, 2-4, 2-5, incorporate semgrep and joern outputs as seed signals.
+For secrets/data-protection (2-5), use Gitleaks as the primary seed source and keep Semgrep as fallback for config patterns.
 If any confirmed finding lacks a corresponding Semgrep/Joern rule, you must create the rule and re-run seed generation before finalizing.
 
 Guidance:
@@ -13,6 +14,6 @@ Metadata field:
 ```json
 "metadata": {
   "seed_used": true,
-  "seed_sources": ["state/seed_semgrep.json", "state/seed_joern.json"]
+  "seed_sources": ["state/seed_gitleaks.json", "state/seed_semgrep.json", "state/seed_joern.json"]
 }
 ```
