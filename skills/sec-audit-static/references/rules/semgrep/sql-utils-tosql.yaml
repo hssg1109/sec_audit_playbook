@@ -1,0 +1,16 @@
+rules:
+  - id: kotlin-utils-tosql-in-query
+    languages: [kotlin, java]
+    message: "SQL query is composed with Utils.toSql(criteria/page). Ensure criteria is safely parameterized/validated before concatenation."
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: $SQL + Utils.toSql($X)
+          - pattern: $SQL + Utils.toSql($X) + $TAIL
+          - pattern: $BUILDER.append(Utils.toSql($X))
+    metadata:
+      cwe: "CWE-89"
+      owasp: "A03:2021 Injection"
+      category: "SQL Injection"
+      likelihood: "high"
+      confidence: "medium"

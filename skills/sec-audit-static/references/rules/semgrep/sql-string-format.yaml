@@ -1,0 +1,16 @@
+rules:
+  - id: kotlin-sql-string-format
+    languages: [kotlin, java]
+    message: "SQL string uses String.format with external parameters. Ensure placeholders are bound parameters and not raw SQL fragments."
+    severity: ERROR
+    patterns:
+      - pattern: $SQL.format($A, $B)
+      - metavariable-regex:
+          metavariable: $SQL
+          regex: ".*SQL.*"
+    metadata:
+      cwe: "CWE-89"
+      owasp: "A03:2021 Injection"
+      category: "SQL Injection"
+      likelihood: "high"
+      confidence: "medium"
