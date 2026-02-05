@@ -22,13 +22,15 @@ Run the static audit workflow for a codebase: asset identification, API inventor
 - `references/taint_tracking.md` for Source->Sink confirmation and rule generation.
 - `references/rule_validation.md` for mandatory post-rule validation.
 - `references/tooling.md` for code-browser tooling (rg/ctags).
+- `references/vuln_automation_principles.md` for discovery/analysis split and hypothesis loop.
 2. Execute tasks in order:
 - Phase 1: asset identification.
-- Phase 2: API inventory, then parallel reviews (injection/XSS/file handling/data protection).
+- Phase 2: API inventory (script-first), then parallel reviews (injection/XSS/file handling/data protection).
 - Add SCA and secret detection as part of Phase 2 when configured. Use Gitleaks as the primary secret scanner.
 - For any confirmed finding, you must create or update Semgrep/Joern rules (unless explicitly waived by the user).
 - After rule updates, re-run seed generation and re-check affected phases before finalizing outputs.
 - For 2-2 (injection), if the codebase uses SQL/JDBC/R2DBC, always check for dynamic SQL assembly patterns (`toSql`, `String.format`, string concatenation, template SQL) even if seeds are empty.
+ - Do not use CodeQL. Use Joern for flow-based checks.
 3. Produce outputs in JSON matching the schemas.
 4. Generate final report and validate:
 - `tools/scripts/merge_results.py`

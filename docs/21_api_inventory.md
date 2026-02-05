@@ -61,3 +61,12 @@
 - 동적 라우팅 패턴도 포함할 것 (예: `/api/users/:id`)
 - 주석 처리된 API는 제외하되 별도 기록
 - 숨겨진 디버그/관리자 API 특별 주의
+
+### 자동화 (저비용 스크립트)
+다음 스크립트로 Spring/Kotlin 엔드포인트를 빠르게 목록화합니다.
+
+```bash
+python tools/scripts/extract_endpoints_rg.py --repo /path/to/repo --out state/task_21_result.json
+```
+
+정밀 파싱이 필요할 경우 tree-sitter 기반 파서를 추가로 연결합니다.
