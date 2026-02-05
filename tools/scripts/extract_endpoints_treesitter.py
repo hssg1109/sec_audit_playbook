@@ -58,19 +58,26 @@ def _extract_string_literals(src: bytes, node) -> list[str]:
     return out
 
 
-def _find_annotations(src: bytes, root):
-    for node in root.children:
+def _find_annotations(root):
+    stack = [root]
+    while stack:
+        node = stack.pop()
         if node.type == "annotation":
             yield node
+        # add children for full traversal
         for child in node.children:
-            if child.type == "annotation":
-                yield child
+            stack.append(child)
 
 
 def scan_file(path: Path) -> list[dict]:
     src = path.read_bytes()
     parser = Parser()
-    parser.set_language(get_language("kotlin"))
+    lang = get_language("java") if path.suffix == ".java" else get_language("kotlin")
+    # tree_sitter API differs by version
+    if hasattr(parser, "set_language"):
+        parser.set_language(lang)
+    else:
+        parser.language = lang
     tree = parser.parse(src)
 
     findings: list[dict] = []
@@ -78,7 +85,7 @@ def scan_file(path: Path) -> list[dict]:
     pending_base = ""
 
     # very lightweight: scan annotations in order and detect class/method mappings
-    for node in _find_annotations(src, tree.root_node):
+    for node in _find_annotations(tree.root_node):
         text = _node_text(src, node)
         if text.startswith("@RequestMapping"):
             paths = [p for p in _extract_string_literals(src, node) if p.startswith("/")]
