@@ -12,6 +12,8 @@ If a finding is confirmed with taint flow, generate or update detection rules:
 - Semgrep rules (pattern-based)
 - Joern queries (flow-based)
 
+Note: In Kotlin/Reactive codebases, Joern dataflow may be sparse. In that case, record a heuristic flow within the same method (e.g., identifier or field access to sink) and still capture the source/sink evidence.
+
 Store rules under:
 - `skills/sec-audit-static/references/rules/semgrep/`
 - `skills/sec-audit-static/references/rules/joern/`
