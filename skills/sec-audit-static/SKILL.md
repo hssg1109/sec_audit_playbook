@@ -27,7 +27,7 @@ Run the static audit workflow for a codebase: asset identification, API inventor
 - Phase 2: API inventory, then parallel reviews (injection/XSS/file handling/data protection).
 - Add SCA and secret detection as part of Phase 2 when configured.
  - If semgrep/joern rules are updated, re-run seed generation and re-check affected phases before finalizing outputs.
-- For 2-2 (injection), always check for dynamic SQL assembly patterns (`toSql`, `String.format`, string concatenation, template SQL) even if seeds are empty.
+- For 2-2 (injection), if the codebase uses SQL/JDBC/R2DBC, always check for dynamic SQL assembly patterns (`toSql`, `String.format`, string concatenation, template SQL) even if seeds are empty.
 3. Produce outputs in JSON matching the schemas.
 4. Generate final report and validate:
 - `tools/scripts/merge_results.py`
