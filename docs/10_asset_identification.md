@@ -26,6 +26,9 @@
 2. 소스코드 프로젝트 구조 분석 (빌드 설정, 기술 스택 확인)
 3. 설정 파일에서 외부 연동 서비스 파악
 4. Excel 데이터와 소스코드 분석 결과 병합
+5. 결과 JSON `metadata`에 다음 필드를 반드시 포함
+   - `source_repo_url`, `source_repo_path`, `source_modules`
+6. 위키 배포 시 `report_wiki_url`과 `report_wiki_status` 기록
 
 **Excel 파서 기능:**
 - 한/영 헤더 자동 인식 (자산명/asset_name, 도메인/domain 등)

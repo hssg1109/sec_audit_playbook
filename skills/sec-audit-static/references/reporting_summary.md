@@ -10,3 +10,9 @@ Generator:
 
 Severity mapping:
 - `references/severity_criteria.md`
+
+Required source fields (analysis entry):
+- `source_repo_url`, `source_repo_path`, `source_modules`
+
+Optional wiki fields (analysis entry):
+- `report_wiki_url`, `report_wiki_page_id`, `report_wiki_status`

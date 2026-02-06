@@ -97,10 +97,30 @@ def generate_report(results: list[dict]) -> dict:
     """최종 보고서를 생성합니다."""
     summary = calculate_summary(results)
     merged_findings = merge_findings(results)
+    repo_meta = {}
+    for result in results:
+        meta = result.get("metadata") or {}
+        if not meta:
+            continue
+        if not repo_meta.get("source_repo_url") and meta.get("source_repo_url"):
+            repo_meta["source_repo_url"] = meta.get("source_repo_url")
+        if not repo_meta.get("source_repo_path") and meta.get("source_repo_path"):
+            repo_meta["source_repo_path"] = meta.get("source_repo_path")
+        if not repo_meta.get("source_modules") and meta.get("source_modules"):
+            repo_meta["source_modules"] = meta.get("source_modules")
+        if not repo_meta.get("source_label") and meta.get("source_label"):
+            repo_meta["source_label"] = meta.get("source_label")
+        if not repo_meta.get("report_wiki_url") and meta.get("report_wiki_url"):
+            repo_meta["report_wiki_url"] = meta.get("report_wiki_url")
+        if not repo_meta.get("report_wiki_page_id") and meta.get("report_wiki_page_id"):
+            repo_meta["report_wiki_page_id"] = meta.get("report_wiki_page_id")
+        if not repo_meta.get("report_wiki_status") and meta.get("report_wiki_status"):
+            repo_meta["report_wiki_status"] = meta.get("report_wiki_status")
 
     report = {
         "report_type": "AI Security Audit Report",
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "report_metadata": repo_meta,
         "executive_summary": {
             "total_vulnerabilities": summary["total_findings"],
             "risk_score": summary["risk_score"],

@@ -45,3 +45,6 @@ API 목록 → Controller → Service → Repository/Mapper/DAO
 - [ ] JSON 스키마 검증 통과
 - [ ] 발견된 취약점 severity 분류 완료
 - [ ] Phase 3 (보고서 생성) 진입 준비 완료
+- [ ] 모든 Task 결과의 `metadata`에 `source_repo_url`, `source_repo_path`, `source_modules` 포함
+- [ ] 위키 배포 시 `report_wiki_url`과 `report_wiki_status` 기록
+- [ ] Confluence(md2cf) 업로드 시 `--anchor-style md2cf` 사용 (헤더 기반 앵커)

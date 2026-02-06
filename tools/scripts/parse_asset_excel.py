@@ -263,13 +263,22 @@ def parse_excel(file_path: Path, sheet_name: str | None = None) -> list[dict]:
     return assets
 
 
-def build_task_output(assets: list[dict], source_file: str) -> dict:
+def build_task_output(
+    assets: list[dict],
+    source_file: str,
+    source_repo_url: str,
+    source_repo_path: str,
+    source_modules: list[str],
+) -> dict:
     """파싱 결과를 task_output_schema.json 형식으로 구성합니다."""
     return {
         "task_id": "1-1",
         "status": "completed",
         "findings": assets,
         "metadata": {
+            "source_repo_url": source_repo_url,
+            "source_repo_path": source_repo_path,
+            "source_modules": source_modules,
             "source_file": source_file,
             "total_assets": len(assets),
             "parse_method": "openpyxl",
@@ -282,6 +291,21 @@ def build_task_output(assets: list[dict], source_file: str) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="자산정보 Excel → JSON 변환 도구")
     parser.add_argument("excel_file", help="입력 Excel 파일 경로")
+    parser.add_argument(
+        "--source-repo-url",
+        required=True,
+        help="진단 대상 레포 URL (예: http://code.example.com/projects/PROJ/repos/repo/)",
+    )
+    parser.add_argument(
+        "--source-repo-path",
+        required=True,
+        help="로컬 레포 경로 (예: /Users/.../Downloads/repo)",
+    )
+    parser.add_argument(
+        "--source-modules",
+        required=True,
+        help="진단 대상 모듈/서브프로젝트 (comma-separated)",
+    )
     parser.add_argument(
         "--output", "-o",
         help="출력 JSON 파일 경로 (기본: state/task_11_result.json)",
@@ -306,7 +330,18 @@ def main():
         print("Warning: 파싱된 자산이 없습니다.")
         sys.exit(1)
 
-    result = build_task_output(assets, str(excel_path.name))
+    modules = [m.strip() for m in args.source_modules.split(",") if m.strip()]
+    if not modules:
+        print("Error: --source-modules 값이 비어 있습니다.")
+        sys.exit(1)
+
+    result = build_task_output(
+        assets,
+        str(excel_path.name),
+        args.source_repo_url,
+        args.source_repo_path,
+        modules,
+    )
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

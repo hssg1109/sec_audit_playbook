@@ -32,6 +32,9 @@
    - 이미지 처리 라이브러리 취약점 (ImageMagick 등)
    - 압축 파일 해제 시 Zip Bomb / Zip Slip
    - 문서 파싱 시 XXE 취약점
+4. **메타데이터 기록**
+   - 결과 JSON `metadata`에 `source_repo_url`, `source_repo_path`, `source_modules` 포함
+   - 위키 배포 시 `report_wiki_url`과 `report_wiki_status` 기록
 
 ### 판정 기준
 | 심각도 | 조건 |

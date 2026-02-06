@@ -135,6 +135,21 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True, help="Source repo root")
     ap.add_argument("--out", required=True, help="Output JSON path")
+    ap.add_argument(
+        "--source-repo-url",
+        required=True,
+        help="진단 대상 레포 URL",
+    )
+    ap.add_argument(
+        "--source-repo-path",
+        required=True,
+        help="로컬 레포 경로",
+    )
+    ap.add_argument(
+        "--source-modules",
+        required=True,
+        help="진단 대상 모듈/서브프로젝트 (comma-separated)",
+    )
     args = ap.parse_args()
 
     root = Path(args.repo)
@@ -149,12 +164,19 @@ def main() -> int:
         except Exception:
             continue
 
+    modules = [m.strip() for m in args.source_modules.split(",") if m.strip()]
+    if not modules:
+        raise SystemExit("Error: --source-modules 값이 비어 있습니다.")
+
     out = {
         "task_id": "2-1",
         "status": "completed",
         "findings": findings,
         "executed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "metadata": {
+            "source_repo_url": args.source_repo_url,
+            "source_repo_path": args.source_repo_path,
+            "source_modules": modules,
             "tool": "extract_endpoints_treesitter",
             "files_scanned": len(files),
             "notes": "tree-sitter extraction; auth_required defaults to unknown",

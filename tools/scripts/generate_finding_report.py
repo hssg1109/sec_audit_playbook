@@ -90,6 +90,35 @@ RISK_MAP = {
     "info": ("정보", 4),
 }
 
+ANCHOR_STYLE = "confluence"
+
+
+def _anchor(name: str) -> str:
+    if ANCHOR_STYLE == "html":
+        return ""
+    if ANCHOR_STYLE == "md2cf":
+        return ""
+    return f"[[ANCHOR:{name}]]"
+
+
+def _html_table(headers: list[str], rows: list[list[str]]) -> str:
+    def td(val: str) -> str:
+        return f"<td>{val}</td>"
+    def th(val: str) -> str:
+        return f"<th>{val}</th>"
+    lines = ["<table><tbody>"]
+    lines.append("<tr>" + "".join(th(h) for h in headers) + "</tr>")
+    for row in rows:
+        lines.append("<tr>" + "".join(td(c) for c in row) + "</tr>")
+    lines.append("</tbody></table>")
+    return "\n".join(lines)
+
+
+def _anchor_link(name: str, text: str) -> str:
+    if ANCHOR_STYLE == "md2cf":
+        return f"[{text}](#{name})"
+    return f"[{text}](#{name})"
+
 
 # =============================================================================
 #  데이터 클래스
@@ -113,6 +142,7 @@ class Finding:
     recommendation: str
     evidence_type: str  # code, config, api, etc.
     flow: list
+    instances: list = field(default_factory=list)
 
 
 @dataclass
@@ -238,6 +268,38 @@ def load_findings(filepath: Path, source_dir: Path) -> tuple[str, list[Finding]]
                 source_dir, file_path, line_num
             )
 
+        # 인스턴스 정보 (패턴 기반 다중 위치)
+        instances = []
+        metadata = f.get("metadata", {})
+        meta_instances = metadata.get("instances") if isinstance(metadata, dict) else None
+        if isinstance(meta_instances, list):
+            for inst in meta_instances:
+                if isinstance(inst, dict):
+                    inst_file = inst.get("file", "")
+                    inst_line = inst.get("line", 0)
+                    inst_endpoint = inst.get("endpoint", inst.get("api", ""))
+                    instances.append({
+                        "file": inst_file,
+                        "line": inst_line,
+                        "endpoint": inst_endpoint,
+                    })
+                elif isinstance(inst, str):
+                    file_match = re.search(r'([^\s:]+\.(kt|java|js|ts|xml))(?::(\d+))?', inst)
+                    inst_file = file_match.group(1) if file_match else ""
+                    inst_line = int(file_match.group(3)) if file_match and file_match.group(3) else 0
+                    instances.append({
+                        "file": inst_file,
+                        "line": inst_line,
+                        "endpoint": "",
+                    })
+
+        if not instances and (file_path or line_num or endpoint):
+            instances = [{
+                "file": file_path,
+                "line": line_num,
+                "endpoint": endpoint,
+            }]
+
         # 서브카테고리 추출
         title_lower = f.get("title", "").lower()
         cat_lower = f.get("category", "").lower()
@@ -267,6 +329,7 @@ def load_findings(filepath: Path, source_dir: Path) -> tuple[str, list[Finding]]
             recommendation=f.get("recommendation", ""),
             evidence_type="code" if code_snippet else "description",
             flow=f.get("flow", []),
+            instances=instances,
         ))
 
     return category, findings
@@ -279,25 +342,53 @@ def load_findings(filepath: Path, source_dir: Path) -> tuple[str, list[Finding]]
 def generate_summary_table(all_findings: dict[str, list[Finding]]) -> str:
     """진단 결과 요약 표 생성"""
     lines = []
-    lines.append("## 2. 진단 결과 요약\n")
-    lines.append("| No | 점검 구분 | 점검 항목 | 결과 | 위험도 | Request Mapping | File |")
-    lines.append("|:--:|:-------:|:-------:|:---:|:-----:|:----------------|:-----|")
+    if ANCHOR_STYLE == "md2cf":
+        lines.append("## summary-table\n")
+        lines.append("**2. 진단 결과 요약**\n")
+    else:
+        lines.append("## 2. 진단 결과 요약\n")
+        anchor_line = _anchor("summary-table")
+        if anchor_line:
+            lines.append(anchor_line)
+            lines.append("")
+    headers = ["No", "점검 구분", "점검 항목", "결과", "위험도", "Request Mapping", "File"]
+    rows: list[list[str]] = []
 
+    link_pairs = []
     for category_id, findings in all_findings.items():
         for f in findings:
             result, risk = RISK_MAP.get(f.severity, ("정보", 4))
             if result == "양호":
                 continue  # 양호 항목은 요약에서 제외
 
-            file_short = f.file.split("/")[-1] if f.file else "-"
+            if len(f.instances) > 1:
+                file_short = f"multiple ({len(f.instances)})"
+            else:
+                file_short = f.file.split("/")[-1] if f.file else "-"
             endpoint = f.endpoint if f.endpoint else "-"
 
-            lines.append(
-                f"| {f.id} | {f.category} | {f.subcategory} | {result} | {risk} | "
-                f"`{endpoint}` | {file_short} |"
-            )
+            rows.append([f.id, f.category, f.subcategory, result, str(risk), f"`{endpoint}`", file_short])
+            link_pairs.append((f.id, f.subcategory))
 
-    lines.append("")
+    if ANCHOR_STYLE == "md2cf":
+        lines.append(_html_table(headers, rows))
+        lines.append("")
+    else:
+        lines.append("| No | 점검 구분 | 점검 항목 | 결과 | 위험도 | Request Mapping | File |")
+        lines.append("|:--:|:-------:|:-------:|:---:|:-----:|:----------------|:-----|")
+        for row in rows:
+            lines.append(
+                f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]} | "
+                f"{row[5]} | {row[6]} |"
+            )
+        lines.append("")
+
+    if link_pairs and ANCHOR_STYLE != "html":
+        lines.append("**상세 링크**")
+        for fid, subcat in link_pairs:
+            lines.append(f"- {fid} {subcat}: {_anchor_link(f'finding-{fid}', '상세 보기')}")
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -330,7 +421,12 @@ def generate_category_detail(category_id: str, findings: list[Finding],
         result, risk = RISK_MAP.get(f.severity, ("정보", 4))
 
         lines.append(f"---\n")
-        lines.append(f"#### ＊ 취약점 {f.id} {f.subcategory} ({result})\n")
+        if ANCHOR_STYLE == "md2cf":
+            lines.append(f"#### finding-{f.id}\n")
+            lines.append(f"**＊ 취약점 {f.id} {f.subcategory} ({result})**\n")
+        else:
+            lines.append(_anchor(f"finding-{f.id}"))
+            lines.append(f"#### ＊ 취약점 {f.id} {f.subcategory} ({result})\n")
 
         # 영향 받는 엔드포인트/파일
         if f.endpoint:
@@ -340,6 +436,22 @@ def generate_category_detail(category_id: str, findings: list[Finding],
             if f.line:
                 file_display += f":{f.line}"
             lines.append(f"**파일:** `{file_display}`\n")
+
+        if len(f.instances) > 1:
+            if ANCHOR_STYLE == "html":
+                lines.append("**전체 인스턴스 목록:** 부록 참조\n")
+            else:
+                lines.append(f"**전체 인스턴스 목록:** {_anchor_link('appendix-instances', '부록 참조')}\n")
+            preview = f.instances[:10]
+            preview_items = []
+            for inst in preview:
+                inst_file = inst.get("file", "-") or "-"
+                inst_line = inst.get("line", "-") or "-"
+                preview_items.append(f"`{inst_file}:{inst_line}`")
+            suffix = ""
+            if len(f.instances) > 10:
+                suffix = f", ...외 {len(f.instances) - 10}개"
+            lines.append(f"**관련 파일(상위 10개):** {', '.join(preview_items)}{suffix}\n")
 
         # 취약점 설명
         lines.append(f"**설명:**\n")
@@ -378,6 +490,14 @@ def generate_category_detail(category_id: str, findings: list[Finding],
                     lang = "sql"
             lines.append(f"```{lang}")
 
+            title_marker = ""
+            if f.file:
+                file_display = f.file
+                if f.line:
+                    file_display += f":{f.line}"
+                title_marker = f"FILE: {file_display}"
+                lines.append(title_marker)
+
             # 라인 번호 계산
             start_line = max(1, f.line - len(f.context_before)) if f.line else 1
 
@@ -399,7 +519,49 @@ def generate_category_detail(category_id: str, findings: list[Finding],
             lines.append(f"**대응 방안:**\n")
             lines.append(f"{f.recommendation}\n")
 
+        if ANCHOR_STYLE == "html":
+            lines.append("**요약으로 돌아가기:** 진단 결과 요약\n")
+        else:
+            lines.append("**요약으로 돌아가기:** [진단 결과 요약](#summary-table)\n")
         lines.append("")
+
+    return "\n".join(lines)
+
+
+def generate_instance_appendix(all_findings: dict[str, list[Finding]]) -> str:
+    """인스턴스 상세 목록 부록 생성 (다중 위치만)"""
+    lines = []
+    appendix_items = []
+    for category_id, findings in all_findings.items():
+        for f in findings:
+            if len(f.instances) > 1:
+                appendix_items.append(f)
+
+    if not appendix_items:
+        return ""
+
+    if ANCHOR_STYLE == "md2cf":
+        lines.append("## appendix-instances\n")
+        lines.append("**4. 부록: 인스턴스 상세 목록**\n")
+    else:
+        lines.append("## 4. 부록: 인스턴스 상세 목록\n")
+        anchor_line = _anchor("appendix-instances")
+        if anchor_line:
+            lines.append(anchor_line)
+    for f in appendix_items:
+        lines.append(f"### {f.id} {f.subcategory}\n")
+        lines.append("| File | Line | Endpoint |")
+        lines.append("|:-----|:----:|:---------|")
+        for inst in f.instances:
+            inst_file = inst.get("file", "-") or "-"
+            inst_line = inst.get("line", "-") or "-"
+            inst_endpoint = inst.get("endpoint", "-") or "-"
+            lines.append(f"| `{inst_file}` | {inst_line} | `{inst_endpoint}` |")
+        lines.append("")
+    if ANCHOR_STYLE == "html":
+        lines.append("**요약으로 돌아가기:** 진단 결과 요약\n")
+    else:
+        lines.append("**요약으로 돌아가기:** [진단 결과 요약](#summary-table)\n")
 
     return "\n".join(lines)
 
@@ -415,8 +577,12 @@ def generate_report(
     commit: str | None = None,
     domain: str | None = None,
     source_label: str | None = None,
+    anchor_style: str | None = None,
 ):
     """최종 보고서 생성"""
+    global ANCHOR_STYLE
+    if anchor_style:
+        ANCHOR_STYLE = anchor_style
 
     today = date.today().strftime("%Y.%m.%d")
 
@@ -492,6 +658,11 @@ def generate_report(
                 generate_category_detail(category_id, all_findings[category_id], source_dir)
             )
 
+    # 부록 (다중 인스턴스 목록)
+    appendix = generate_instance_appendix(all_findings)
+    if appendix:
+        report_lines.append(appendix)
+
     # 파일 저장
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, "w", encoding="utf-8") as f:
@@ -559,6 +730,12 @@ def main():
         help="보고서에 표시할 소스 경로/URL (증적 추출 경로와 분리)",
         default=None,
     )
+    parser.add_argument(
+        "--anchor-style",
+        help="Anchor 출력 형식 (confluence|html|md2cf). md2cf 사용 시 md2cf 권장.",
+        default="confluence",
+        choices=["confluence", "html", "md2cf"],
+    )
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir)
@@ -578,6 +755,10 @@ def main():
         print("Error: 취약점 진단 결과 파일이 없습니다.")
         sys.exit(1)
 
+    if not args.source_label:
+        print("Error: --source-label 값이 필요합니다. (예: repo URL 또는 사용자 표시 경로)")
+        sys.exit(1)
+
     print(f"소스 디렉토리: {source_dir}")
     generate_report(
         source_dir,
@@ -590,6 +771,7 @@ def main():
         args.commit,
         args.domain,
         args.source_label,
+        args.anchor_style,
     )
 
 

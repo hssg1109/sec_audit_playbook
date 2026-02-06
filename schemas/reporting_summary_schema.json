@@ -44,6 +44,19 @@
           "report_path": {"type": "string"},
           "scope": {"type": "string"},
           "notes": {"type": "string"},
+          "source_repo_url": {"type": "string"},
+          "source_repo_path": {"type": "string"},
+          "source_modules": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "source_label": {"type": "string"},
+          "report_wiki_url": {"type": "string"},
+          "report_wiki_page_id": {"type": "string"},
+          "report_wiki_status": {
+            "type": "string",
+            "enum": ["not_published", "published", "failed", "partial"]
+          },
           "findings_count": {"type": "integer", "minimum": 0},
           "severity_counts": {
             "type": "object",

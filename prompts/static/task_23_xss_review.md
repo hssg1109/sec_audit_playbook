@@ -191,6 +191,13 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
       "recommendation": "조치 방안"
     }
   ],
+  "metadata": {
+    "source_repo_url": "http://code.example.com/projects/PROJ/repos/repo/",
+    "source_repo_path": "/path/to/local/repo",
+    "source_modules": ["module-a"],
+    "report_wiki_url": "https://wiki.example.com/pages/viewpage.action?pageId=123",
+    "report_wiki_status": "published"
+  },
   "executed_at": "",
   "claude_session": ""
 }

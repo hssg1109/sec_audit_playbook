@@ -15,6 +15,8 @@ Task 1-1에서 식별된 자산 정보를 기반으로, 소스코드에서 모�
 3. 각 API의 인증 필요 여부를 확인하세요
 4. 각 API가 정의된 소스 파일 위치를 기록하세요
 5. 결과를 JSON 형식으로 출력하세요
+6. `metadata`에 `source_repo_url`, `source_repo_path`, `source_modules`를 반드시 포함하세요
+7. 위키 배포 시 `report_wiki_url`과 `report_wiki_status`를 기록하세요
 
 ### 출력 형식
 ```json
@@ -31,6 +33,13 @@ Task 1-1에서 식별된 자산 정보를 기반으로, 소스코드에서 모�
       "middleware": ["rateLimit"]
     }
   ],
+  "metadata": {
+    "source_repo_url": "http://code.example.com/projects/PROJ/repos/repo/",
+    "source_repo_path": "/path/to/local/repo",
+    "source_modules": ["module-a"],
+    "report_wiki_url": "https://wiki.example.com/pages/viewpage.action?pageId=123",
+    "report_wiki_status": "published"
+  },
   "executed_at": "",
   "claude_session": ""
 }

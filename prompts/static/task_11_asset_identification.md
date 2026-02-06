@@ -26,6 +26,8 @@
 #### Step 3: 결과 검증
 1. 결과를 `task_output_schema.json` 형식에 맞춰 JSON으로 출력하세요
 2. `validate_task_output.py`로 스키마 검증을 수행하세요
+3. `metadata`에 `source_repo_url`, `source_repo_path`, `source_modules`를 반드시 포함하세요
+4. 위키 배포 시 `report_wiki_url`과 `report_wiki_status`를 기록하세요
 
 ### 출력 형식
 ```json
@@ -47,6 +49,11 @@
     }
   ],
   "metadata": {
+    "source_repo_url": "http://code.example.com/projects/PROJ/repos/repo/",
+    "source_repo_path": "/path/to/local/repo",
+    "source_modules": ["module-a"],
+    "report_wiki_url": "https://wiki.example.com/pages/viewpage.action?pageId=123",
+    "report_wiki_status": "published",
     "source_file": "자산정보.xlsx",
     "total_assets": 1,
     "parse_method": "openpyxl"

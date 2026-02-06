@@ -224,6 +224,16 @@ def _md_to_xhtml_fallback(md_text):
         return "\n".join(out)
 
     for line in lines:
+        # Confluence anchor token: [[ANCHOR:name]]
+        if line.startswith("[[ANCHOR:") and line.endswith("]]"):
+            name = line[len("[[ANCHOR:"):-2]
+            name = html_escape(name)
+            html_parts.append(
+                f'<ac:structured-macro ac:name="anchor">'
+                f'<ac:parameter ac:name="name">{name}</ac:parameter>'
+                f'</ac:structured-macro>'
+            )
+            continue
         # fenced code block
         m_fence = re.match(r'^```(\w*)$', line)
         if m_fence:
@@ -276,10 +286,28 @@ def _md_to_xhtml_fallback(md_text):
 
 def md_to_xhtml(md_text):
     """Convert Markdown text to XHTML, preferring the markdown package."""
+    def _preprocess_anchors(text: str) -> str:
+        # Convert <a id="name"></a> to token so both paths can render to Confluence anchor macro.
+        def repl(match):
+            name = match.group(1)
+            return f"[[ANCHOR:{name}]]"
+        return re.sub(r'<a\\s+id=["\\\']([^"\\\']+)["\\\']\\s*></a>', repl, text)
+
+    def _postprocess_anchors(xhtml: str) -> str:
+        def repl(match):
+            name = html_escape(match.group(1))
+            return (
+                f'<ac:structured-macro ac:name="anchor">'
+                f'<ac:parameter ac:name="name">{name}</ac:parameter>'
+                f'</ac:structured-macro>'
+            )
+        return re.sub(r'\[\[ANCHOR:([^\]]+)\]\]', repl, xhtml)
+
+    md_text = _preprocess_anchors(md_text)
     try:
-        return _md_to_xhtml_lib(md_text)
+        return _postprocess_anchors(_md_to_xhtml_lib(md_text))
     except ImportError:
-        return _md_to_xhtml_fallback(md_text)
+        return _postprocess_anchors(_md_to_xhtml_fallback(md_text))
 
 # ---------------------------------------------------------------------------
 # JSON -> XHTML helpers

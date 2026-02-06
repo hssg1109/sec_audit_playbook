@@ -168,6 +168,13 @@ python3 tools/scripts/scan_injection_enhanced.py <source_dir> \
       "recommendation": "조치 방안"
     }
   ],
+  "metadata": {
+    "source_repo_url": "http://code.example.com/projects/PROJ/repos/repo/",
+    "source_repo_path": "/path/to/local/repo",
+    "source_modules": ["module-a"],
+    "report_wiki_url": "https://wiki.example.com/pages/viewpage.action?pageId=123",
+    "report_wiki_status": "published"
+  },
   "endpoint_diagnoses": "... (스크립트 결과 그대로 포함)",
   "executed_at": "",
   "claude_session": ""

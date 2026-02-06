@@ -33,12 +33,16 @@ Run the static audit workflow for a codebase: asset identification, API inventor
 - For 2-2 (injection), if the codebase uses SQL/JDBC/R2DBC, always check for dynamic SQL assembly patterns (`toSql`, `String.format`, string concatenation, template SQL) even if seeds are empty.
  - Do not use CodeQL. Use Joern for flow-based checks.
 3. Produce outputs in JSON matching the schemas.
+   - Every task output **must** include `metadata.source_repo_url`, `metadata.source_repo_path`, and `metadata.source_modules`.
+   - If a wiki report is published, include `metadata.report_wiki_url` and set `metadata.report_wiki_status`.
 4. Generate final report and validate:
 - `tools/scripts/merge_results.py`
 - `tools/scripts/redact.py`
 - `tools/scripts/validate_task_output.py`
 5. Generate Markdown report (required):
 - `tools/scripts/generate_finding_report.py`
+   - Always pass `--source-label` (use repo URL or a user-facing path label).
+   - For Confluence publishing via `md2cf`, use `--anchor-style md2cf` and follow the Confluence anchor guidance in `references/static_scripts.md`.
 - Ensure subcategory classification is validated (e.g., NoSQL vs SQL) after report generation.
 
 ## Reporting

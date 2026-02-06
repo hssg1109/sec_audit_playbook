@@ -39,6 +39,9 @@ CORS 설정, 중요정보 노출, 하드코딩된 민감정보, 관리자 페이
    - Secret Key 복잡도 확인
    - 토큰 만료 시간 설정 여부
    - 관련 CWE: CWE-347
+5. **메타데이터 기록**
+   - 결과 JSON `metadata`에 `source_repo_url`, `source_repo_path`, `source_modules` 포함
+   - 위키 배포 시 `report_wiki_url`과 `report_wiki_status` 기록
 
 ### 판정 기준
 | 심각도 | 조건 |

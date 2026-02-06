@@ -17,3 +17,11 @@ Canonical automation scripts (repo `tools/scripts/`):
 - `rename_remove_prefix.py`: internal rename utility (use only if needed)
 
 Use only the scripts required for the target workflow; mark optional ones explicitly.
+
+Notes:
+- Task outputs must include `metadata.source_repo_url`, `metadata.source_repo_path`, `metadata.source_modules`.
+- `generate_finding_report.py` 실행 시 `--source-label` 필수.
+ - Confluence(md2cf) 업로드 시 `--anchor-style md2cf` 사용.
+ - Confluence 앵커 링크는 **헤더 텍스트 기반 자동 앵커**가 가장 안정적임.
+   - `finding-<id>` 형태의 헤더를 출력하고, 실제 취약점 제목은 별도 텍스트로 표시.
+   - 링크는 `#finding-<id>` 형태로 생성.

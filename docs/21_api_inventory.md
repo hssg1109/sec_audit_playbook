@@ -30,6 +30,8 @@
    - JSON 형식으로 API 목록 생성
    - 각 API별 파일 위치(소스 참조) 기록
    - 인증 미적용 API 별도 표시
+   - `metadata`에 `source_repo_url`, `source_repo_path`, `source_modules` 포함
+   - 위키 배포 시 `report_wiki_url`과 `report_wiki_status` 기록
 
 ### 출력 형식 예시
 ```json

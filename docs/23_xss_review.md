@@ -36,6 +36,9 @@ Reflected XSS, Stored XSS, DOM-based XSS 취약점을 식별합니다.
    - X-XSS-Protection 헤더
    - 템플릿 엔진의 자동 이스케이프 설정
    - DOMPurify 등 sanitizer 라이브러리 사용 여부
+5. **메타데이터 기록**
+   - 결과 JSON `metadata`에 `source_repo_url`, `source_repo_path`, `source_modules` 포함
+   - 위키 배포 시 `report_wiki_url`과 `report_wiki_status` 기록
 
 ### 판정 기준
 | 심각도 | 조건 |

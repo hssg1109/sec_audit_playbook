@@ -61,7 +61,8 @@
         {
           "title": "테스트4 - pcona-console 보고서 고도화",
           "entries": [
-            {"source": "state/pcona_진단보고서.md",  "title": "PCoNA 관리콘솔 보안진단 보고서",  "type": "doc"}
+            {"source": "state/pcona_진단보고서.md",  "title": "PCoNA 관리콘솔 보안진단 보고서",  "type": "doc"},
+            {"source": "state/pcona-console_report.md",  "title": "PCoNA 관리콘솔 보안진단 보고서",  "type": "doc"}
           ]
         }
       ]
