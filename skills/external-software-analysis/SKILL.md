@@ -17,7 +17,7 @@ Guide external software analysis from decompilation to vulnerability discovery a
 ## Reporting
 - Primary output: Markdown report (example reference provided).
 - Use severity mapping from `references/severity_criteria.md` and detailed criteria in `skills/SEVERITY_CRITERIA_DETAIL.md`.
-- Produce a common summary JSON using `schemas/reporting_summary_schema.json`.
+- Produce a common summary JSON per `references/reporting_summary.md`.
 
 ## Resources
 ### references/

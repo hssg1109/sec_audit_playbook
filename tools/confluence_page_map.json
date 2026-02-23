@@ -1,7 +1,7 @@
 {
   "version": "3.0",
   "prefix": "",
-  "next_test_number": 5,
+  "next_test_number": 9,
   "root_page": {
     "source": "README.md",
     "type": "doc"
@@ -63,6 +63,34 @@
           "entries": [
             {"source": "state/pcona_진단보고서.md",  "title": "PCoNA 관리콘솔 보안진단 보고서",  "type": "doc"},
             {"source": "state/pcona-console_report.md",  "title": "PCoNA 관리콘솔 보안진단 보고서",  "type": "doc"}
+          ]
+        },
+        {
+          "title": "테스트5 - pcona-console 인젝션 고도화 진단",
+          "entries": [
+            {"source": "state/t5_pcona_task_21_result.json",         "title": "API 인벤토리 결과",             "type": "finding"},
+            {"source": "state/t5_pcona_task_22_enhanced_v2.json",    "title": "인젝션 취약점 진단 결과",       "type": "finding"},
+            {"source": "state/t5_pcona_진단보고서.md",               "title": "PCoNA 인젝션 고도화 보고서",    "type": "doc"}
+          ]
+        },
+        {
+          "title": "테스트6 - OCB Community API 인젝션 고도화 진단",
+          "entries": [
+            {"source": "state/ocb_community_task22_injection_v3.json",  "title": "인젝션 취약점 진단 결과",       "type": "finding"},
+            {"source": "state/ocb_community_sqli_고도화_보고서.md",     "title": "OCB Community SQLi 고도화 보고서", "type": "doc"}
+          ]
+        },
+        {
+          "title": "테스트7 - OCB Community API 진단",
+          "entries": [
+            {"source": "state/ocb_community_api_inventory.json",  "title": "테스트7 - API 인벤토리 결과",  "type": "api_inventory"}
+          ]
+        },
+        {
+          "title": "테스트8 - MSG Sugar API 진단",
+          "entries": [
+            {"source": "state/msgsugar_api_inventory.json",       "title": "테스트8 - API 인벤토리 결과",         "type": "api_inventory"},
+            {"source": "state/msgsugar_task_22_injection.json",   "title": "테스트8 - 인젝션 취약점 진단 결과",   "type": "finding"}
           ]
         }
       ]

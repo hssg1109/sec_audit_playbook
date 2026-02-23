@@ -114,6 +114,81 @@ def extract_audit_action(text: str) -> Optional[str]:
 
 
 # ============================================================
+#  인증 어노테이션 파싱
+# ============================================================
+
+# 커스텀 인증 어노테이션 레지스트리 (프로젝트별 확장 가능)
+AUTH_ANNOTATIONS: set[str] = {
+    'PconaSession',   # Pcona 프로젝트 세션
+    'Session',        # OCB 등 커스텀 세션
+    'LoginUser',      # 로그인 사용자 주입
+    'AuthUser',       # 인증 사용자 주입
+    'CurrentUser',    # 현재 사용자 주입
+}
+
+
+@dataclass
+class AuthAnnotation:
+    """커스텀 인증 어노테이션 파싱 결과"""
+    name: str                               # "Session", "PconaSession"
+    required: bool = True                   # 인증 필수 여부
+    permitted: bool = False                 # 게스트 허용 여부
+    attributes: dict = field(default_factory=dict)  # 원본 속성
+
+
+def parse_auth_annotation(param_text: str, anno_name: str) -> AuthAnnotation:
+    """커스텀 인증 어노테이션의 속성을 파싱하여 AuthAnnotation 반환
+
+    @Session                           -> required=True, permitted=False
+    @Session(required = true)          -> required=True
+    @Session(required = false)         -> required=False
+    @Session(permitted = true)         -> permitted=True
+    @Session(permitted = true, required = true) -> required=True, permitted=True
+    @Session(disallowOgeulUserCheck = true)     -> required=True (default)
+    """
+    attrs: dict = {}
+    content = extract_annotation_value(param_text, anno_name)
+
+    if content:
+        # required = true/false
+        req_m = re.search(r'required\s*=\s*(true|false)', content, re.IGNORECASE)
+        if req_m:
+            attrs['required'] = req_m.group(1).lower() == 'true'
+
+        # permitted = true/false
+        perm_m = re.search(r'permitted\s*=\s*(true|false)', content, re.IGNORECASE)
+        if perm_m:
+            attrs['permitted'] = perm_m.group(1).lower() == 'true'
+
+        # field = true/false
+        field_m = re.search(r'field\s*=\s*(true|false)', content, re.IGNORECASE)
+        if field_m:
+            attrs['field'] = field_m.group(1).lower() == 'true'
+
+        # disallowOgeulUserCheck 등 기타 속성
+        for extra_m in re.finditer(r'(\w+)\s*=\s*(true|false|"[^"]*"|\d+)', content):
+            key = extra_m.group(1)
+            if key not in attrs:
+                val = extra_m.group(2).strip('"')
+                if val == 'true':
+                    attrs[key] = True
+                elif val == 'false':
+                    attrs[key] = False
+                else:
+                    attrs[key] = val
+
+    required = attrs.get('required', True)   # default: true
+    permitted = attrs.get('permitted', False)  # default: false
+
+    return AuthAnnotation(
+        name=anno_name,
+        required=required,
+        permitted=permitted,
+        attributes=attrs,
+    )
+
+
+# ============================================================
 #  파라미터 파싱
 # ============================================================
 
@@ -241,13 +316,19 @@ def parse_parameter(param_text: str) -> Optional[Parameter]:
                 default_value=anno_content.strip() if anno_content else None
             )
 
-    # @PconaSession (custom auth session)
-    ps_match = re.search(r'@PconaSession\s*(\w+)\s*:\s*(\S+)', param_text)
-    if ps_match:
-        return Parameter(
-            name=ps_match.group(1), type="session",
-            data_type=ps_match.group(2).rstrip(','), required=True
+    # 커스텀 인증 어노테이션 (범용: @Session, @PconaSession, @LoginUser 등)
+    for auth_anno in AUTH_ANNOTATIONS:
+        # Kotlin: @Session varName: Type  또는  @Session(required = true) varName: Type
+        ps_match = re.search(
+            rf'@{auth_anno}\s*(?:\([^)]*\))?\s*(\w+)\s*:\s*(\S+)', param_text
         )
+        if ps_match:
+            auth_info = parse_auth_annotation(param_text, auth_anno)
+            return Parameter(
+                name=ps_match.group(1), type="session",
+                data_type=ps_match.group(2).rstrip(','), required=True,
+                default_value=json.dumps(asdict(auth_info)),
+            )
 
     # @RequestPart (multipart)
     rpart_match = re.search(r'@RequestPart\s*(?:\(([^)]*)\))?\s*(\w+)\s*:\s*(\S+)', param_text)
@@ -308,6 +389,166 @@ def parse_parameter(param_text: str) -> Optional[Parameter]:
     return None
 
 
+def parse_parameter_java(param_text: str) -> Optional[Parameter]:
+    """Java 스타일 함수 파라미터 파싱 (Type name 순서)
+    예: '@RequestParam(value = "search") String search'
+    예: '@PathVariable Long id'
+    예: '@RequestBody UserDto dto'
+    """
+    param_text = param_text.strip()
+    if not param_text:
+        return None
+
+    # @Valid, @NotNull 등 유효성 어노테이션 제거
+    clean = re.sub(
+        r'@(?:Valid|NotNull|Nullable|Nonnull|NotEmpty|NotBlank'
+        r'|Size|Min|Max|Pattern|Email|Positive|Negative)\s*(?:\([^)]*\))?\s*',
+        '', param_text
+    )
+
+    # Java 제네릭 타입 패턴: String, List<User>, ResponseEntity<List<User>>, byte[]
+    _JTYPE = r'[\w.]+(?:<[\w<>,.?\s\[\]]+>)?(?:\[\])*(?:\.\.\.)?'
+
+    # @RequestParam
+    rp = re.search(
+        rf'@RequestParam\s*(?:\(([^)]*)\))?\s*({_JTYPE})\s+(\w+)', clean
+    )
+    if rp:
+        anno_args, data_type, param_name = rp.group(1) or "", rp.group(2), rp.group(3)
+        val = re.search(r'(?:value|name)\s*=\s*["\']([^"\']*)["\']', anno_args)
+        if val:
+            param_name = val.group(1)
+        elif '=' not in anno_args:
+            val2 = re.search(r'["\']([^"\']*)["\']', anno_args)
+            if val2:
+                param_name = val2.group(1)
+        required = True
+        req = re.search(r'required\s*=\s*(true|false)', anno_args, re.IGNORECASE)
+        if req:
+            required = req.group(1).lower() == 'true'
+        default = None
+        dv = re.search(r'defaultValue\s*=\s*["\']([^"\']*)["\']', anno_args)
+        if dv:
+            default = dv.group(1)
+            required = False
+        return Parameter(name=param_name, type="query", data_type=data_type,
+                         required=required, default_value=default)
+
+    # @PathVariable
+    pv = re.search(
+        rf'@PathVariable\s*(?:\(([^)]*)\))?\s*({_JTYPE})\s+(\w+)', clean
+    )
+    if pv:
+        anno_args, data_type, param_name = pv.group(1) or "", pv.group(2), pv.group(3)
+        val = re.search(r'(?:value|name)\s*=\s*["\']([^"\']*)["\']', anno_args)
+        if val:
+            param_name = val.group(1)
+        elif '=' not in anno_args:
+            val2 = re.search(r'["\']([^"\']*)["\']', anno_args)
+            if val2:
+                param_name = val2.group(1)
+        return Parameter(name=param_name, type="path", data_type=data_type, required=True)
+
+    # @RequestBody
+    rb = re.search(rf'@RequestBody\s*({_JTYPE})\s+(\w+)', clean)
+    if rb:
+        return Parameter(name=rb.group(2), type="body",
+                         data_type=rb.group(1), required=True)
+
+    # @RequestHeader
+    rh = re.search(
+        rf'@RequestHeader\s*(?:\(([^)]*)\))?\s*({_JTYPE})\s+(\w+)', clean
+    )
+    if rh:
+        anno_args, data_type, param_name = rh.group(1) or "", rh.group(2), rh.group(3)
+        val = re.search(r'["\']([^"\']*)["\']', anno_args)
+        if val:
+            param_name = val.group(1)
+        required = True
+        req = re.search(r'required\s*=\s*(true|false)', anno_args, re.IGNORECASE)
+        if req:
+            required = req.group(1).lower() == 'true'
+        return Parameter(name=param_name, type="header", data_type=data_type,
+                         required=required)
+
+    # @PageableDefault
+    if '@PageableDefault' in param_text:
+        anno_content = extract_annotation_value(param_text, 'PageableDefault')
+        pg = re.search(r'Pageable\s+(\w+)', param_text)
+        if pg:
+            return Parameter(name=pg.group(1), type="pageable",
+                             data_type="Pageable", required=False,
+                             default_value=anno_content.strip() if anno_content else None)
+
+    # @RequestPart
+    rpart = re.search(
+        rf'@RequestPart\s*(?:\(([^)]*)\))?\s*({_JTYPE})\s+(\w+)', clean
+    )
+    if rpart:
+        anno_args = rpart.group(1) or ""
+        param_name = rpart.group(3)
+        val = re.search(r'["\']([^"\']*)["\']', anno_args)
+        if val:
+            param_name = val.group(1)
+        return Parameter(name=param_name, type="multipart",
+                         data_type=rpart.group(2), required=True)
+
+    # @ModelAttribute
+    ma = re.search(
+        rf'@ModelAttribute\s*(?:\(([^)]*)\))?\s*({_JTYPE})\s+(\w+)', clean
+    )
+    if ma:
+        return Parameter(name=ma.group(3), type="model",
+                         data_type=ma.group(2), required=True)
+
+    # 커스텀 인증 어노테이션 (범용: @Session, @PconaSession 등) - Java style
+    # 패턴: @Session(...) HttpServletRequest varName  또는  @Session Type varName
+    for auth_anno in AUTH_ANNOTATIONS:
+        auth_match = re.search(
+            rf'@{auth_anno}\s*(?:\([^)]*\))?\s*({_JTYPE})\s+(\w+)', param_text
+        )
+        if auth_match:
+            auth_info = parse_auth_annotation(param_text, auth_anno)
+            return Parameter(
+                name=auth_match.group(2), type="session",
+                data_type=auth_match.group(1), required=True,
+                default_value=json.dumps(asdict(auth_info)),
+            )
+
+    # HttpServletRequest / HttpServletResponse (no annotation)
+    raw = re.search(
+        r'(HttpServletRequest|HttpServletResponse|ServerHttpRequest'
+        r'|ServerHttpResponse|ServerWebExchange)\s+(\w+)', clean
+    )
+    if raw:
+        ptype = "request" if "Request" in raw.group(1) else "response"
+        if "Exchange" in raw.group(1):
+            ptype = "exchange"
+        return Parameter(name=raw.group(2), type=ptype,
+                         data_type=raw.group(1), required=False)
+
+    # Pageable without annotation
+    pg = re.search(r'Pageable\s+(\w+)', clean)
+    if pg and '@' not in param_text:
+        return Parameter(name=pg.group(1), type="pageable",
+                         data_type="Pageable", required=False)
+
+    # Plain parameter (no annotation): Type name
+    plain = re.search(rf'({_JTYPE})\s+(\w+)\s*$', clean)
+    if plain:
+        dtype, name = plain.group(1), plain.group(2)
+        skip_types = {
+            'BindingResult', 'Errors', 'Model', 'ModelMap',
+            'RedirectAttributes', 'SessionStatus', 'UriComponentsBuilder',
+            'Locale', 'TimeZone', 'Principal',
+        }
+        if dtype in skip_types:
+            return None
+        return Parameter(name=name, type="unknown", data_type=dtype, required=False)
+
+    return None
+
+
 # ============================================================
 #  컨트롤러 파싱
 # ============================================================
@@ -326,6 +567,7 @@ class Endpoint:
     parameters: list
     middleware: list
     return_type: str
+    auth_annotations: list = field(default_factory=list)
 
 
 # HTTP 메서드 매핑 어노테이션
@@ -336,6 +578,24 @@ METHOD_ANNOTATIONS = {
     'DeleteMapping': 'DELETE',
     'PatchMapping': 'PATCH',
 }
+
+# Kotlin: (annotations) [open|override|suspend|...] fun name(
+KOTLIN_FUNC_PATTERN = re.compile(
+    r'((?:\s*@\w+(?:\s*\([^)]*(?:\([^)]*\))*[^)]*\))?(?:\s*\n)?)*)'
+    r'\s*(?:(?:open|override|public|private|protected|internal|abstract|final|suspend)\s+)*'
+    r'fun\s+(\w+)\s*\(',
+    re.MULTILINE
+)
+
+# Java: (annotations) [modifiers] ReturnType name(
+JAVA_FUNC_PATTERN = re.compile(
+    r'((?:\s*@\w+(?:\s*\([^)]*(?:\([^)]*\))*[^)]*\))?(?:\s*\n)?)*)'  # 어노테이션 블록
+    r'\s*(?:(?:public|protected|private)\s+)?'                          # 접근 제어자
+    r'(?:(?:static|final|abstract|synchronized)\s+)*'                   # 기타 제어자
+    r'(?:[\w.]+(?:<[\w<>,.?\s\[\]]+>)?(?:\[\])*)'                      # 반환 타입 (제네릭 포함)
+    r'\s+(\w+)\s*\(',                                                   # 메서드 이름
+    re.MULTILINE
+)
 
 
 def detect_module(filepath: Path, source_dir: Path) -> str:
@@ -351,7 +611,9 @@ def find_security_configs(source_dir: Path) -> dict[str, dict]:
     """모듈별 보안 설정을 탐색하여 기본 인증 정책 파악"""
     module_auth = {}
 
-    for f in source_dir.rglob("*.kt"):
+    # Kotlin + Java 모두 스캔
+    config_files = list(source_dir.rglob("*.kt")) + list(source_dir.rglob("*.java"))
+    for f in config_files:
         if any(ex in f.parts for ex in {"node_modules", ".idea", "target", "build", ".git", "test"}):
             continue
 
@@ -427,19 +689,26 @@ def is_path_authenticated(api_path: str, module_auth: dict) -> bool:
 
 
 def split_function_params(params_text: str) -> list[str]:
-    """함수 파라미터 문자열을 개별 파라미터로 분리 (중첩 괄호 고려)"""
+    """함수 파라미터 문자열을 개별 파라미터로 분리 (중첩 괄호 + 제네릭 고려)"""
     params = []
-    depth = 0
+    paren_depth = 0
+    angle_depth = 0
     current = []
 
     for char in params_text:
         if char in '([':
-            depth += 1
+            paren_depth += 1
             current.append(char)
         elif char in ')]':
-            depth -= 1
+            paren_depth -= 1
             current.append(char)
-        elif char == ',' and depth == 0:
+        elif char == '<':
+            angle_depth += 1
+            current.append(char)
+        elif char == '>':
+            angle_depth -= 1
+            current.append(char)
+        elif char == ',' and paren_depth == 0 and angle_depth == 0:
             params.append(''.join(current).strip())
             current = []
         else:
@@ -472,20 +741,79 @@ def generate_description(func_name: str, http_method: str, path: str,
     return desc
 
 
+def strip_block_comments(content: str) -> tuple[str, list[dict]]:
+    """/* ... */ 블록 주석을 제거하고 주석 내 컨트롤러 정보를 수집
+
+    Returns:
+        (cleaned_content, list of commented-out controller info dicts)
+    """
+    commented_controllers = []
+    result = []
+    i = 0
+    in_comment = False
+    comment_buf = []
+
+    while i < len(content):
+        if not in_comment:
+            # 한 줄 주석 (//) 은 유지 (어노테이션이 아니므로 무해)
+            if content[i:i+2] == '/*':
+                in_comment = True
+                comment_buf = []
+                i += 2
+                continue
+            result.append(content[i])
+            i += 1
+        else:
+            if content[i:i+2] == '*/':
+                in_comment = False
+                comment_text = ''.join(comment_buf)
+                # 주석 내에 @Controller 또는 @RestController가 있으면 기록
+                ctrl_match = re.search(r'@(?:Rest)?Controller', comment_text)
+                if ctrl_match:
+                    class_match = re.search(r'\bclass\s+(\w+)', comment_text)
+                    class_name = class_match.group(1) if class_match else "Unknown"
+                    # 주석 내 엔드포인트 수 추정
+                    ep_count = len(re.findall(
+                        r'@(?:Get|Post|Put|Delete|Patch|Request)Mapping', comment_text
+                    ))
+                    commented_controllers.append({
+                        "class": class_name,
+                        "endpoint_count": ep_count,
+                        "reason": "Block comment (/* ... */)",
+                    })
+                i += 2
+                continue
+            comment_buf.append(content[i])
+            i += 1
+
+    return ''.join(result), commented_controllers
+
+
 def parse_controller_file(filepath: Path, source_dir: Path,
-                          module_auth: dict) -> list[Endpoint]:
-    """컨트롤러 파일을 파싱하여 엔드포인트 목록 반환"""
+                          module_auth: dict) -> tuple[list, list[dict]]:
+    """컨트롤러 파일을 파싱하여 엔드포인트 목록 반환
+
+    Returns:
+        (list[Endpoint], list[dict] of commented-out controllers)
+    """
     endpoints = []
 
     try:
-        content = filepath.read_text(encoding="utf-8", errors="replace")
-        lines = content.splitlines()
+        raw_content = filepath.read_text(encoding="utf-8", errors="replace")
     except (IOError, UnicodeDecodeError):
-        return endpoints
+        return endpoints, []
 
-    # @RestController 또는 @Controller 확인
+    # 블록 주석 제거 (주석 내 컨트롤러 정보 수집)
+    content, commented = strip_block_comments(raw_content)
+    lines = content.splitlines()
+
+    # @RestController 또는 @Controller 확인 (주석 제거 후)
     if not re.search(r'@(?:Rest)?Controller', content):
-        return endpoints
+        # 주석 처리된 컨트롤러 정보만 반환
+        if commented:
+            for c in commented:
+                c["file"] = str(filepath.relative_to(source_dir))
+        return endpoints, commented
 
     module = detect_module(filepath, source_dir)
     rel_path = str(filepath.relative_to(source_dir))
@@ -506,14 +834,10 @@ def parse_controller_file(filepath: Path, source_dir: Path,
         if not base_paths:
             base_paths = [""]
 
-    # 함수 단위로 파싱
-    # 어노테이션 블록 + fun 선언을 찾음
-    # 패턴: (어노테이션들) fun 함수명(파라미터): 반환타입
-    func_pattern = re.compile(
-        r'((?:\s*@\w+(?:\s*\([^)]*(?:\([^)]*\))*[^)]*\))?(?:\s*\n)?)*)'  # 어노테이션 블록
-        r'\s*(?:suspend\s+)?fun\s+(\w+)\s*\(',  # fun 이름
-        re.MULTILINE
-    )
+    # 언어 감지
+    is_java = filepath.suffix == '.java'
+    func_pattern = JAVA_FUNC_PATTERN if is_java else KOTLIN_FUNC_PATTERN
+    param_parser = parse_parameter_java if is_java else parse_parameter
 
     for match in func_pattern.finditer(content):
         anno_block = match.group(1)
@@ -566,15 +890,32 @@ def parse_controller_file(filepath: Path, source_dir: Path,
         # 반환 타입 추출
         return_type = ""
         after_params = content[i:i + 200]
-        rt_match = re.search(r':\s*([^\n{=]+)', after_params)
-        if rt_match:
-            return_type = rt_match.group(1).strip().rstrip('{').strip()
+        if is_java:
+            # Java: 반환 타입은 메서드 선언 앞에 위치 (func_pattern에서 이미 스킵)
+            # 어노테이션 블록 이후~메서드명 이전에서 추출 시도
+            anno_end = anno_block.rstrip()
+            pre_func = content[match.start() + len(anno_block):match.end()]
+            rt_java = re.search(
+                r'(?:(?:public|protected|private)\s+)?'
+                r'(?:(?:static|final|abstract|synchronized)\s+)*'
+                r'([\w.]+(?:<[\w<>,.?\s\[\]]+>)?(?:\[\])*)\s+\w+\s*$',
+                pre_func.strip()
+            )
+            if rt_java:
+                return_type = rt_java.group(1)
+            # throws 절 확인
+            throws_match = re.search(r'throws\s+[\w.,\s]+', after_params)
+        else:
+            # Kotlin: fun name(...): ReturnType
+            rt_match = re.search(r':\s*([^\n{=]+)', after_params)
+            if rt_match:
+                return_type = rt_match.group(1).strip().rstrip('{').strip()
 
         # 파라미터 파싱
         param_strings = split_function_params(params_text)
         parameters = []
         for ps in param_strings:
-            p = parse_parameter(ps)
+            p = param_parser(ps)
             if p:
                 parameters.append(p)
 
@@ -630,19 +971,72 @@ def parse_controller_file(filepath: Path, source_dir: Path,
                     # 인증 여부 판단
                     auth_required = False
                     auth_detail = ""
+                    ep_auth_annotations = []
+
+                    # 1) @PreAuthorize
                     if preauthorize:
                         auth_required = True
                         auth_detail = preauthorize
+
+                    # 2) @Secured
+                    elif secured:
+                        auth_required = True
+                        auth_detail = f"@Secured({secured})"
+
+                    # 3) Security config 경로 매칭
                     elif mod_auth:
                         auth_required = is_path_authenticated(full_path, mod_auth)
                         if auth_required:
                             auth_detail = "Security config (path-based)"
 
-                    # @PconaSession 이 있으면 인증 필요
-                    if any(p.type == "session" for p in parameters):
-                        auth_required = True
-                        if not auth_detail:
-                            auth_detail = "@PconaSession (authenticated user required)"
+                    # 4) 커스텀 인증 어노테이션 파라미터 분석
+                    #    보안 등급 (4-Level 매트릭스):
+                    #      Level 1: required=true,  permitted=true  → 완전 인증 (Active User)
+                    #      Level 2: required=true,  permitted=false → 기본 인증 (Logged-in Only)
+                    #      Level 3: required=false, permitted=false → 비인증 (Public)
+                    #      Level 4: required=false, permitted=true  → 조건부 인증 (Guest or Safe User)
+                    #    auth_required 이진 분류:
+                    #      required=true  → auth_required=True  (Level 1, 2)
+                    #      required=false → auth_required=False (Level 3, 4)
+                    session_params = [p for p in parameters if p.type == "session"]
+                    for sp in session_params:
+                        auth_info = None
+                        if sp.default_value:
+                            try:
+                                auth_info = json.loads(sp.default_value)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+
+                        if auth_info:
+                            ep_auth_annotations.append(auth_info)
+                            anno_name = auth_info.get('name', 'Unknown')
+                            is_required = auth_info.get('required', True)
+                            is_permitted = auth_info.get('permitted', False)
+
+                            if is_required:
+                                auth_required = True
+                                if is_permitted:
+                                    # Level 1: 완전 인증 - 로그인 필수 + 활동 가능 유저만
+                                    if not auth_detail:
+                                        auth_detail = f"@{anno_name}(required=true, permitted=true)"
+                                else:
+                                    # Level 2: 기본 인증 - 로그인 필수
+                                    if not auth_detail:
+                                        auth_detail = f"@{anno_name}(required=true)"
+                            else:
+                                if is_permitted:
+                                    # Level 4: 조건부 인증 - 비회원 OK, 로그인 시 정상 유저만
+                                    if not auth_required and not auth_detail:
+                                        auth_detail = f"@{anno_name}(required=false, permitted=true)"
+                                else:
+                                    # Level 3: 비인증 - 누구나 접근 가능
+                                    if not auth_required and not auth_detail:
+                                        auth_detail = f"@{anno_name}(required=false)"
+                        else:
+                            # AuthAnnotation 정보 없으면 보수적으로 인증 필요 처리
+                            auth_required = True
+                            if not auth_detail:
+                                auth_detail = "Custom auth annotation (session parameter)"
 
                     endpoints.append(Endpoint(
                         method=http_method,
@@ -657,16 +1051,84 @@ def parse_controller_file(filepath: Path, source_dir: Path,
                         parameters=[asdict(p) for p in parameters],
                         middleware=middleware,
                         return_type=return_type,
+                        auth_annotations=ep_auth_annotations,
                     ))
 
-    return endpoints
+    return endpoints, commented
+
+
+# ============================================================
+#  DTO 연동
+# ============================================================
+
+_PRIMITIVE_TYPES = {
+    'String', 'Int', 'Long', 'Double', 'Float', 'Boolean', 'Byte',
+    'Short', 'Char', 'Unit', 'Void', 'void', 'Object', 'Any',
+    'int', 'long', 'double', 'float', 'boolean', 'byte', 'short', 'char',
+    'Integer', 'BigDecimal', 'BigInteger', 'Number',
+    'Date', 'LocalDate', 'LocalDateTime', 'Instant', 'ZonedDateTime',
+    'UUID', 'Pageable', 'MultipartFile', 'Part',
+    'HttpServletRequest', 'HttpServletResponse',
+    'ServerHttpRequest', 'ServerHttpResponse', 'ServerWebExchange',
+    'Authentication', 'Principal',
+}
+
+
+def is_primitive_type(dtype: str) -> bool:
+    """프리미티브/표준 라이브러리 타입 여부 판별"""
+    base = dtype.rstrip('?').split('<')[0].split('.')[-1].rstrip('[]')
+    return base in _PRIMITIVE_TYPES
+
+
+def enrich_parameters_with_dto(endpoints: list, dto_catalog: dict) -> None:
+    """엔드포인트 파라미터에 DTO 필드 정보를 추가
+
+    각 파라미터의 data_type이 커스텀 타입이면 DTO 카탈로그에서 조회하여
+    resolved_fields, resolved_from 필드를 추가합니다.
+    """
+    type_index = dto_catalog.get("type_index", {})
+    types = dto_catalog.get("types", {})
+
+    for ep in endpoints:
+        for param in ep.parameters:
+            dtype = param.get("data_type", "")
+            if not dtype or is_primitive_type(dtype):
+                continue
+
+            # ? 제거, 제네릭 내부 타입도 시도
+            clean_type = dtype.rstrip('?')
+
+            # 1차: 전체 이름으로 조회
+            qualified_names = type_index.get(clean_type, [])
+
+            # 2차: 마지막 부분 (simple name)으로 조회
+            if not qualified_names:
+                simple = clean_type.split('.')[-1]
+                qualified_names = type_index.get(simple, [])
+
+            # 3차: 제네릭 파라미터 타입 시도 (List<UserDTO> → UserDTO)
+            if not qualified_names and '<' in clean_type:
+                inner = re.search(r'<(.+?)>', clean_type)
+                if inner:
+                    inner_type = inner.group(1).split(',')[0].strip()
+                    if not is_primitive_type(inner_type):
+                        qualified_names = type_index.get(inner_type, [])
+                        if not qualified_names:
+                            simple = inner_type.split('.')[-1]
+                            qualified_names = type_index.get(simple, [])
+
+            if qualified_names:
+                type_info = types.get(qualified_names[0])
+                if type_info and type_info.get("fields"):
+                    param["resolved_fields"] = type_info["fields"]
+                    param["resolved_from"] = qualified_names[0]
 
 
 # ============================================================
 #  디렉토리 스캔
 # ============================================================
 
-def scan_directory(source_dir: Path) -> dict:
+def scan_directory(source_dir: Path, dto_catalog: dict = None) -> dict:
     """디렉토리 전체를 스캔하여 API 엔드포인트 추출"""
 
     # 1. 보안 설정 먼저 탐색
@@ -687,23 +1149,31 @@ def scan_directory(source_dir: Path) -> dict:
 
     # 3. 각 파일에서 엔드포인트 추출
     all_endpoints = []
+    all_commented_controllers = []
     scanned_files = 0
     controller_count = 0
 
     for f in controller_files:
         try:
-            content = f.read_text(encoding="utf-8", errors="replace")
+            raw = f.read_text(encoding="utf-8", errors="replace")
         except (IOError, UnicodeDecodeError):
             continue
 
         scanned_files += 1
 
-        if not re.search(r'@(?:Rest)?Controller', content):
+        # @Controller/@RestController 가 있는 파일만 파싱 (raw에서 체크)
+        if not re.search(r'@(?:Rest)?Controller', raw):
             continue
 
-        controller_count += 1
-        endpoints = parse_controller_file(f, source_dir, module_auth)
+        endpoints, commented = parse_controller_file(f, source_dir, module_auth)
+        if endpoints:
+            controller_count += 1
         all_endpoints.extend(endpoints)
+        all_commented_controllers.extend(commented)
+
+    # 3.5. DTO 카탈로그 연동 (파라미터 타입 해석)
+    if dto_catalog:
+        enrich_parameters_with_dto(all_endpoints, dto_catalog)
 
     # 4. 모듈별 통계
     module_stats = {}
@@ -723,7 +1193,37 @@ def scan_directory(source_dir: Path) -> dict:
         m = ep.method
         method_stats[m] = method_stats.get(m, 0) + 1
 
-    return {
+    # 6. 인증 통계 (이진 분류)
+    auth_stats = {
+        "auth_required": sum(1 for ep in all_endpoints if ep.auth_required),
+        "auth_not_required": sum(1 for ep in all_endpoints if not ep.auth_required),
+    }
+
+    # 보안 등급별 통계 (4-Level 매트릭스)
+    auth_detail_stats = {}
+    for ep in all_endpoints:
+        detail = ep.auth_detail or "(none)"
+        if "PreAuthorize" in detail:
+            cat = "preauthorize"
+        elif detail.startswith("@Secured"):
+            cat = "secured"
+        elif "Security config" in detail:
+            cat = "security_config"
+        elif "required=true, permitted=true" in detail:
+            cat = "L1_완전인증"
+        elif "required=true" in detail:
+            cat = "L2_기본인증"
+        elif "required=false, permitted=true" in detail:
+            cat = "L4_조건부인증"
+        elif "required=false" in detail:
+            cat = "L3_비인증"
+        elif ep.auth_annotations:
+            cat = "L2_기본인증"
+        else:
+            cat = "no_auth_annotation"
+        auth_detail_stats[cat] = auth_detail_stats.get(cat, 0) + 1
+
+    result = {
         "source_dir": str(source_dir),
         "total_files_scanned": scanned_files,
         "total_controllers": controller_count,
@@ -731,8 +1231,15 @@ def scan_directory(source_dir: Path) -> dict:
         "security_configs": module_auth,
         "module_stats": module_stats,
         "method_stats": method_stats,
+        "auth_stats": auth_stats,
+        "auth_detail_stats": auth_detail_stats,
         "endpoints": [asdict(ep) for ep in all_endpoints],
     }
+
+    if all_commented_controllers:
+        result["commented_controllers"] = all_commented_controllers
+
+    return result
 
 
 # ============================================================
@@ -757,6 +1264,17 @@ def main():
         help="요약만 출력",
         action="store_true",
     )
+    parser.add_argument(
+        "--auth-annotations",
+        nargs="*",
+        help="추가 커스텀 인증 어노테이션 이름 (예: Session LoginUser)",
+        default=[],
+    )
+    parser.add_argument(
+        "--dto-catalog", "-d",
+        help="DTO 타입 카탈로그 JSON (scan_dto.py 출력) 경로",
+        default=None,
+    )
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir)
@@ -764,8 +1282,24 @@ def main():
         print(f"Error: 디렉토리를 찾을 수 없습니다: {source_dir}")
         sys.exit(1)
 
+    # 커스텀 인증 어노테이션 추가
+    if args.auth_annotations:
+        AUTH_ANNOTATIONS.update(args.auth_annotations)
+        print(f"인증 어노테이션: {sorted(AUTH_ANNOTATIONS)}")
+
+    # DTO 카탈로그 로드
+    dto_catalog = None
+    if args.dto_catalog:
+        dto_path = Path(args.dto_catalog)
+        if dto_path.exists():
+            with open(dto_path, encoding="utf-8") as f:
+                dto_catalog = json.load(f)
+            print(f"DTO 카탈로그 로드: {dto_catalog.get('total_types', 0)}개 타입")
+        else:
+            print(f"Warning: DTO 카탈로그를 찾을 수 없습니다: {dto_path}")
+
     print(f"스캔 대상: {source_dir}")
-    result = scan_directory(source_dir)
+    result = scan_directory(source_dir, dto_catalog=dto_catalog)
 
     # 요약 출력
     print(f"\n스캔 완료: {result['total_files_scanned']}개 파일, "
@@ -780,6 +1314,29 @@ def main():
     print(f"\nHTTP 메서드별:")
     for method, count in sorted(result["method_stats"].items()):
         print(f"  {method}: {count}개")
+
+    auth_s = result.get("auth_stats", {})
+    if auth_s:
+        print(f"\n인증 분류:")
+        print(f"  인증 필요 (auth_required=true): {auth_s.get('auth_required', 0)}개")
+        print(f"  인증 불필요 (auth_required=false): {auth_s.get('auth_not_required', 0)}개")
+
+    auth_ds = result.get("auth_detail_stats", {})
+    if auth_ds:
+        level_desc = {
+            "L1_완전인증": "Level 1 - 완전 인증 (required=true, permitted=true)",
+            "L2_기본인증": "Level 2 - 기본 인증 (required=true)",
+            "L3_비인증": "Level 3 - 비인증 (required=false)",
+            "L4_조건부인증": "Level 4 - 조건부 인증 (required=false, permitted=true)",
+            "preauthorize": "@PreAuthorize",
+            "secured": "@Secured",
+            "security_config": "Security Config",
+            "no_auth_annotation": "인증 어노테이션 없음",
+        }
+        print(f"\n보안 등급 상세:")
+        for key, count in sorted(auth_ds.items(), key=lambda x: -x[1]):
+            label = level_desc.get(key, key)
+            print(f"  {label}: {count}개")
 
     if not args.quiet:
         # 보안 설정 요약
@@ -803,6 +1360,13 @@ def main():
             )
             print(f"  [{ep['method']:6s}] {ep['api']:<40s} [{auth}] "
                   f"{ep['handler']:<40s} params=({params})")
+
+    # 주석 처리된 컨트롤러 출력
+    commented = result.get("commented_controllers", [])
+    if commented:
+        print(f"\n주석 처리된 컨트롤러 ({len(commented)}개, 분석 제외됨):")
+        for cc in commented:
+            print(f"  - {cc['class']}: 엔드포인트 {cc['endpoint_count']}개 ({cc['reason']})")
 
     # 파일 출력
     if args.output:

@@ -272,12 +272,16 @@ OS_CMD_PATTERNS = [
         "category": "OS Command Injection / Java",
     },
     # 2.1.2 Node.js 명령실행 (진단가이드 §2.1.2)
+    # 주의: 브라우저(클라이언트) JS의 eval()은 OS Command Injection이 아님 (DOM-based XSS 영역)
+    # → file_content_check로 서버사이드 Node.js 파일만 대상으로 한정
     {
         "id": "CMD_NODEJS_EVAL",
         "name": "Node.js eval() 사용",
-        "desc": "eval()은 문자열을 코드로 실행 - 사용자 입력 시 명령 실행 취약 (진단가이드 §2.1.2)",
+        "desc": "서버사이드 eval()은 문자열을 코드로 실행 - 사용자 입력 시 RCE 취약 (진단가이드 §2.1.2)",
         "pattern": r'\beval\s*\(',
         "file_glob": ["*.js", "*.ts"],
+        # 서버사이드 Node.js 파일만 대상 (require/module.exports/import from 존재)
+        "file_content_check": r'(?:require\s*\(|module\.exports|exports\.\w+\s*=|from\s+["\'])',
         "category": "OS Command Injection / Node.js",
     },
     {
@@ -286,6 +290,8 @@ OS_CMD_PATTERNS = [
         "desc": "setTimeout/setInterval에 문자열 인자 전달 시 eval과 동일 효과 (진단가이드 §2.1.2, §2.3)",
         "pattern": r'(?:setTimeout|setInterval)\s*\(\s*["\']',
         "file_glob": ["*.js", "*.ts"],
+        # 서버사이드 Node.js 파일만 대상
+        "file_content_check": r'(?:require\s*\(|module\.exports|exports\.\w+\s*=|from\s+["\'])',
         "category": "OS Command Injection / Node.js",
     },
     {
@@ -302,6 +308,8 @@ OS_CMD_PATTERNS = [
         "desc": "외부 명령 직접 실행 함수 (진단가이드 §2.1.2)",
         "pattern": r'(?:exec|execSync|spawn|execFile|execFileSync|spawnSync)\s*\(',
         "file_glob": ["*.js", "*.ts"],
+        # 서버사이드 Node.js 파일만 대상
+        "file_content_check": r'(?:require\s*\(|module\.exports|exports\.\w+\s*=|from\s+["\'])',
         "category": "OS Command Injection / Node.js",
         # RegExp.exec(), Array.find() 등 일반 JS 메서드 제외
         "line_exclude": r'(?:\.exec\s*\(|RegExp|/[^/]+/[gimsuy]*\.exec|\.(?:find|map|filter|forEach|reduce)\s*\()',
@@ -324,18 +332,45 @@ OS_CMD_PATTERNS = [
         "file_glob": ["*.kt", "*.java"],
         "category": "OS Command Injection / Java / JSch",
     },
+    # ── GroovyShell / ScriptEngine 판정 기준 ──
+    # 취약 (Direct RCE):
+    #   HTTP request → GroovyShell.parse()/evaluate() 코드 영역에 직접 전달
+    #   예: shell.evaluate(request.getParameter("script"))
+    # 정보 (Stored RCE):
+    #   DB/Config → GroovyShell 코드 영역 전달 (관리자/DB 침해 시 RCE)
+    #   예: shell.evaluate(entity.getScript())  ← DB 엔티티 필드
+    #   replaceAll() 등 syntax 치환은 보안 필터가 아님 → RCE 차단 불가
+    # 양호:
+    #   classpath 고정 파일만 parse + SecureASTCustomizer 샌드박싱
+    #   사용자 입력은 Binding 변수(값)로만 전달, 코드 영역 미도달
     {
         "id": "CMD_GROOVY_SHELL",
         "name": "GroovyShell 동적 스크립트 실행",
-        "desc": "GroovyShell을 통한 동적 코드 실행 - 사용자 입력 시 RCE 가능",
+        "desc": "GroovyShell을 통한 동적 코드 실행 - "
+                "스크립트 소스가 HTTP 입력이면 취약(Direct RCE), "
+                "DB/Config이면 정보(Stored RCE), "
+                "classpath 고정이면 양호",
         "pattern": r'GroovyShell\s*\(',
         "file_glob": ["*.kt", "*.java", "*.groovy"],
         "category": "OS Command Injection / Java / Groovy",
     },
     {
+        "id": "CMD_GROOVY_EVALUATE",
+        "name": "GroovyShell.evaluate() 동적 평가",
+        "desc": "GroovyShell.evaluate()에 동적 문자열 전달 시 코드 실행 - "
+                "DB 엔티티 스크립트 전달 시 Stored RCE 위험 "
+                "(replaceAll 등 syntax 치환은 보안 필터 아님)",
+        "pattern": r'\.evaluate\s*\(',
+        "file_glob": ["*.groovy"],
+        "category": "OS Command Injection / Java / Groovy",
+        "context_check": r'(?:script|Script|condition|expression|code)',
+        "context_window": 5,
+    },
+    {
         "id": "CMD_SCRIPT_ENGINE",
         "name": "ScriptEngineManager 동적 스크립트 실행",
-        "desc": "Java ScriptEngine을 통한 동적 스크립트(JavaScript/Groovy 등) 실행",
+        "desc": "Java ScriptEngine을 통한 동적 스크립트(JavaScript/Groovy 등) 실행 - "
+                "스크립트 소스가 HTTP 입력이면 취약, DB/Config이면 정보",
         "pattern": r'ScriptEngineManager\s*\(|ScriptEngine\b.*?\.eval\s*\(',
         "file_glob": ["*.kt", "*.java"],
         "category": "OS Command Injection / Java / ScriptEngine",
@@ -482,6 +517,20 @@ OS_CMD_SAFE_PATTERNS = [
         "name": "setTimeout/setInterval function 객체 전달 (진단가이드 §2.3)",
         "pattern": r'(?:setTimeout|setInterval)\s*\(\s*(?:function|\(\)|[a-zA-Z_]+\s*(?:,|\)))',
         "file_glob": ["*.js", "*.ts"],
+    },
+    {
+        "id": "CMD_SAFE_GROOVY_CLASSPATH",
+        "name": "GroovyShell classpath 고정 스크립트 파싱",
+        "desc": "classpath 리소스 파일만 parse → 사용자 입력이 코드 영역 미도달",
+        "pattern": r'(?:classpath:|ResourceUtils\.getFile|getResourceAsStream)',
+        "file_glob": ["*.kt", "*.java"],
+    },
+    {
+        "id": "CMD_SAFE_GROOVY_SANDBOX",
+        "name": "GroovyShell SecureAST 샌드박싱",
+        "desc": "SecureASTCustomizer로 허용 클래스/메서드 화이트리스트 적용",
+        "pattern": r'SecureASTCustomizer|CompilerConfiguration',
+        "file_glob": ["*.kt", "*.java", "*.groovy"],
     },
     {
         "id": "CMD_SAFE_CSP_HEADER",

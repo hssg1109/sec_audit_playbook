@@ -1,14 +1,22 @@
 # Static Playbook Sources
 
-Use these as the canonical sources for procedure, prompts, and schemas:
+All resources are now self-contained within `skills/sec-audit-static/references/`.
 
-- Playbook guide: `docs/PLAYBOOK_GUIDE.md`
-- Overview: `docs/00_overview.md`
-- Asset identification: `docs/10_asset_identification.md`
-- Static analysis overview: `docs/20_static_analysis.md`
-- Task docs: `docs/21_api_inventory.md`, `docs/22_injection_review.md`, `docs/23_xss_review.md`, `docs/24_file_handling_review.md`, `docs/25_data_protection_review.md`
-- Prompts: `prompts/static/task_11_asset_identification.md`, `prompts/static/task_21_api_inventory.md`, `prompts/static/task_22_injection_review.md`, `prompts/static/task_23_xss_review.md`, `prompts/static/task_24_file_handling.md`, `prompts/static/task_25_data_protection.md`
-- Schemas: `schemas/task_output_schema.json`, `schemas/finding_schema.json`
-- Governance: `ai/AI_USAGE_POLICY.md`, `ai/PROMPT_STYLE_GUIDE.md`, `ai/REDACTION_RULES.md`
+## Task Prompts (진단 기준 + 실행 지침)
+- `references/task_prompts/task_11_asset_identification.md`
+- `references/task_prompts/task_21_api_inventory.md`
+- `references/task_prompts/task_22_injection_review.md`
+- `references/task_prompts/task_23_xss_review.md`
+- `references/task_prompts/task_24_file_handling.md`
+- `references/task_prompts/task_25_data_protection.md`
 
-Use `workflows/audit_workflow.yaml` as the phase/task execution map.
+## Schemas
+- `references/output_schemas.md` (task_output_schema + finding_schema embedded)
+- `references/schemas/finding_schema.json` (JSON schema for validation script)
+- `references/schemas/task_output_schema.json` (JSON schema for validation script)
+
+## Workflow
+- `references/workflow.md` (phase/task execution map)
+
+## Scripts
+- `tools/scripts/` directory (see `references/static_scripts.md` for full list)

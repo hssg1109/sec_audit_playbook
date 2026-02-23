@@ -406,7 +406,17 @@ def _json_to_xhtml_asset(data):
 
 
 def _json_to_xhtml_api(data):
-    """Convert task_21 (API inventory) JSON to XHTML."""
+    """Convert API inventory JSON to XHTML.
+
+    Supports both:
+    - task_21 standard format (findings key)
+    - scan_api.py v3.0 format (endpoints key + auth_stats + resolved_fields)
+    """
+    # --- scan_api.py v3.0 format (endpoints key) ---
+    if "endpoints" in data:
+        return _json_to_xhtml_api_inventory(data)
+
+    # --- task_21 standard format (findings key) ---
     task_id = html_escape(str(data.get("task_id", "")))
     target = html_escape(str(data.get("target", "")))
     parts = [f"<h2>API 인벤토리 (Task {task_id})</h2>"]
@@ -523,6 +533,226 @@ def _json_to_xhtml_api(data):
             parts.append(f"<p>엔드포인트 수: {meta['endpoint_count']}</p>")
         if meta.get("auth_mechanism"):
             parts.append(f"<p>인증 방식: {html_escape(str(meta['auth_mechanism']))}</p>")
+
+    return "\n".join(parts)
+
+
+def _json_to_xhtml_api_inventory(data):
+    """Convert scan_api.py v3.0 output (endpoints key) to XHTML.
+
+    Renders: summary stats, auth classification, endpoint table with
+    auth detail, and per-endpoint parameter detail with DTO resolved fields.
+    """
+    source_dir = html_escape(str(data.get("source_dir", "")))
+    total_ep = data.get("total_endpoints", 0)
+    total_ctrl = data.get("total_controllers", 0)
+    total_files = data.get("total_files_scanned", 0)
+
+    parts = ["<h2>API 인벤토리</h2>"]
+    parts.append(f"<p><strong>소스:</strong> <code>{source_dir}</code></p>")
+
+    # --- 요약 통계 ---
+    parts.append("<h3>스캔 요약</h3>")
+    sum_rows = [
+        ["스캔 파일", str(total_files)],
+        ["컨트롤러", str(total_ctrl)],
+        ["엔드포인트", f"<strong>{total_ep}</strong>"],
+    ]
+    parts.append(_table(["항목", "값"], sum_rows))
+
+    # HTTP 메서드별
+    method_stats = data.get("method_stats", {})
+    if method_stats:
+        parts.append("<h3>HTTP 메서드별</h3>")
+        m_rows = [[f"<code>{html_escape(k)}</code>", str(v)]
+                   for k, v in sorted(method_stats.items())]
+        parts.append(_table(["메서드", "건수"], m_rows))
+
+    # 인증 분류 (이진)
+    auth_stats = data.get("auth_stats", {})
+    if auth_stats:
+        parts.append("<h3>인증 분류</h3>")
+        auth_req = auth_stats.get("auth_required", 0)
+        auth_not = auth_stats.get("auth_not_required", 0)
+        a_rows = [
+            [_severity_badge("High").replace("High", "인증 필요"), f"<strong>{auth_req}</strong>"],
+            [_severity_badge("Info").replace("Info", "인증 불필요"), f"<strong>{auth_not}</strong>"],
+        ]
+        parts.append(_table(["분류", "건수"], a_rows))
+
+    # 보안 등급 상세 (4-Level 매트릭스)
+    auth_detail_stats = data.get("auth_detail_stats", {})
+    if auth_detail_stats:
+        detail_labels = {
+            "L1_완전인증": "L1 완전 인증 (required=true, permitted=true)",
+            "L2_기본인증": "L2 기본 인증 (required=true)",
+            "L3_비인증": "L3 비인증 (required=false)",
+            "L4_조건부인증": "L4 조건부 인증 (required=false, permitted=true)",
+            "preauthorize": "@PreAuthorize",
+            "secured": "@Secured",
+            "security_config": "Security Config",
+            "no_auth_annotation": "인증 어노테이션 없음",
+        }
+        d_rows = []
+        for key, count in sorted(auth_detail_stats.items(), key=lambda x: -x[1]):
+            label = detail_labels.get(key, key)
+            d_rows.append([html_escape(label), str(count)])
+        if d_rows:
+            parts.append("<p><em>보안 등급 상세:</em></p>")
+            parts.append(_table(["등급", "건수"], d_rows))
+
+    # 주석 처리된 컨트롤러
+    commented = data.get("commented_controllers", [])
+    if commented:
+        parts.append("<h3>주석 처리된 컨트롤러 (분석 제외)</h3>")
+        c_rows = []
+        for cc in commented:
+            c_rows.append([
+                f"<code>{html_escape(cc.get('class', ''))}</code>",
+                str(cc.get("endpoint_count", 0)),
+                html_escape(cc.get("reason", "")),
+                f"<code>{html_escape(cc.get('file', ''))}</code>" if cc.get("file") else "-",
+            ])
+        parts.append(_table(["클래스", "엔드포인트 수", "사유", "파일"], c_rows))
+
+    # 모듈별 통계
+    module_stats = data.get("module_stats", {})
+    if module_stats:
+        parts.append("<h3>모듈별</h3>")
+        mod_rows = []
+        for mod, stats in module_stats.items():
+            mod_rows.append([
+                html_escape(mod),
+                str(stats.get("total", 0)),
+                str(stats.get("auth_required", 0)),
+                str(stats.get("no_auth", 0)),
+            ])
+        parts.append(_table(["모듈", "전체", "인증", "비인증"], mod_rows))
+
+    # 보안 설정
+    sec_configs = data.get("security_configs", {})
+    if sec_configs:
+        parts.append("<h3>보안 설정</h3>")
+        for mod, cfg in sec_configs.items():
+            cfg_file = html_escape(str(cfg.get("config_file", "")))
+            csrf = "비활성화" if cfg.get("csrf_disabled") else "활성화"
+            cors = "개방(*)" if cfg.get("cors_open") else "제한"
+            parts.append(f"<p><strong>{html_escape(mod)}:</strong> "
+                         f"<code>{cfg_file}</code> "
+                         f"(CSRF: {csrf}, CORS: {cors})</p>")
+
+    # --- 엔드포인트 목록 테이블 ---
+    endpoints = data.get("endpoints", [])
+    if endpoints:
+        parts.append("<h2>엔드포인트 목록</h2>")
+        headers = ["#", "Method", "API", "인증", "인증 상세", "핸들러", "파일"]
+        rows = []
+        for idx, ep in enumerate(endpoints, 1):
+            auth_required = ep.get("auth_required", False)
+            auth_detail = ep.get("auth_detail", "")
+
+            if auth_required:
+                auth_badge = _severity_badge("High").replace("High", "필수")
+            else:
+                auth_badge = _severity_badge("Info").replace("Info", "불필요")
+
+            rows.append([
+                str(idx),
+                f"<code>{html_escape(str(ep.get('method', '')))}</code>",
+                f"<code>{html_escape(str(ep.get('api', '')))}</code>",
+                auth_badge,
+                f"<code>{html_escape(auth_detail)}</code>" if auth_detail else "-",
+                f"<code>{html_escape(str(ep.get('handler', '')))}</code>",
+                f"<code>{html_escape(str(ep.get('file', '')))}</code>",
+            ])
+        parts.append(_table(headers, rows))
+
+    # --- 엔드포인트 상세 (파라미터 보유) ---
+    has_params = [ep for ep in endpoints
+                  if ep.get("parameters")
+                  and any(p.get("type") not in ("request", "response", "exchange")
+                          for p in ep["parameters"])]
+    if has_params:
+        parts.append("<h2>엔드포인트 상세</h2>")
+        for ep in has_params:
+            api = html_escape(str(ep.get("api", "")))
+            method = html_escape(str(ep.get("method", "")))
+            handler = html_escape(str(ep.get("handler", "")))
+            desc = html_escape(str(ep.get("description", "")))
+            file_loc = html_escape(str(ep.get("file", "")))
+            ret_type = html_escape(str(ep.get("return_type", "")))
+
+            parts.append(f"<h3><code>{method} {api}</code></h3>")
+            parts.append(f"<p><strong>핸들러:</strong> <code>{handler}</code> "
+                         f"(<code>{file_loc}:{ep.get('line', '')}</code>)</p>")
+            if desc:
+                parts.append(f"<p>{desc}</p>")
+            if ret_type:
+                parts.append(f"<p><strong>응답:</strong> <code>{ret_type}</code></p>")
+
+            # 인증 정보
+            auth_detail = ep.get("auth_detail", "")
+            if auth_detail:
+                parts.append(f"<p><strong>인증:</strong> <code>{html_escape(auth_detail)}</code></p>")
+
+            # 미들웨어
+            mw = ep.get("middleware", [])
+            if mw:
+                mw_str = ", ".join(f"<code>{html_escape(m)}</code>" for m in mw)
+                parts.append(f"<p><strong>미들웨어:</strong> {mw_str}</p>")
+
+            # 파라미터 테이블
+            params = [p for p in ep.get("parameters", [])
+                      if p.get("type") not in ("request", "response", "exchange")]
+            if params:
+                p_headers = ["파라미터", "출처", "데이터 타입", "필수", "기본값"]
+                p_rows = []
+                for p in params:
+                    req_str = "Y" if p.get("required") else "-"
+                    default = p.get("default_value")
+                    default_str = f"<code>{html_escape(str(default))}</code>" if default else "-"
+                    dtype = html_escape(str(p.get("data_type", "")))
+                    resolved = p.get("resolved_from", "")
+                    if resolved:
+                        dtype += f' <em>({html_escape(resolved)})</em>'
+
+                    p_rows.append([
+                        f"<code>{html_escape(str(p.get('name', '')))}</code>",
+                        f"<code>{html_escape(str(p.get('type', '')))}</code>",
+                        f"<code>{dtype}</code>",
+                        req_str,
+                        default_str,
+                    ])
+                parts.append(_table(p_headers, p_rows))
+
+                # DTO resolved fields (세부 필드)
+                for p in params:
+                    resolved_fields = p.get("resolved_fields", [])
+                    if resolved_fields:
+                        resolved_from = html_escape(str(p.get("resolved_from", p.get("data_type", ""))))
+                        parts.append(
+                            f"<p><em><code>{html_escape(str(p.get('name', '')))}</code> "
+                            f"타입 <code>{resolved_from}</code> 필드:</em></p>"
+                        )
+                        rf_headers = ["필드", "타입", "어노테이션", "Nullable"]
+                        rf_rows = []
+                        for rf in resolved_fields:
+                            annos = rf.get("annotations", [])
+                            anno_str = " ".join(
+                                f"<code>{html_escape(a)}</code>" for a in annos
+                            ) if annos else "-"
+                            inherited = rf.get("inherited", False)
+                            name_str = html_escape(str(rf.get("name", "")))
+                            if inherited:
+                                inh_from = html_escape(str(rf.get("inherited_from", "")))
+                                name_str += f" <em>(← {inh_from})</em>"
+                            rf_rows.append([
+                                f"<code>{name_str}</code>",
+                                f"<code>{html_escape(str(rf.get('data_type', '')))}</code>",
+                                anno_str,
+                                "Y" if rf.get("nullable") else "-",
+                            ])
+                        parts.append(_table(rf_headers, rf_rows))
 
     return "\n".join(parts)
 
@@ -677,6 +907,160 @@ def _json_to_xhtml_vuln(data):
     return "\n".join(parts)
 
 
+def _json_to_xhtml_enhanced_injection(data):
+    """Convert scan_injection_enhanced.py output (endpoint_diagnoses key) to XHTML.
+
+    Renders: summary stats, endpoint diagnosis table, global findings detail.
+    """
+    parts = ["<h2>인젝션 취약점 진단 결과</h2>"]
+
+    # 메타데이터
+    meta = data.get("scan_metadata", {})
+    if meta:
+        parts.append(f"<p><strong>소스:</strong> <code>{html_escape(str(meta.get('source_dir', '')))}</code></p>")
+        parts.append(f"<p><strong>API 인벤토리:</strong> <code>{html_escape(str(meta.get('api_inventory', '')))}</code></p>")
+
+    # --- 요약 ---
+    summary = data.get("summary", {})
+    if summary:
+        parts.append("<h3>진단 요약</h3>")
+        total = summary.get("total_endpoints", 0)
+        sqli = summary.get("sqli", {})
+        os_cmd = summary.get("os_command", {})
+        ssi = summary.get("ssi", {})
+        needs_review = summary.get("needs_review", 0)
+
+        sum_rows = [
+            ["총 엔드포인트", f"<strong>{total}</strong>"],
+            ["SQLi 양호", str(sqli.get("양호", 0))],
+            ["SQLi 취약", f"<strong>{sqli.get('취약', 0)}</strong>"],
+            ["SQLi 정보 (수동검토)", str(sqli.get("정보", 0))],
+            ["OS Command Injection", f"<strong>{os_cmd.get('total', 0)}</strong>건"],
+            ["SSI Injection", str(ssi.get("total", 0)) + "건"],
+        ]
+        parts.append(_table(["항목", "결과"], sum_rows))
+
+    # --- 엔드포인트별 진단 목록 ---
+    diagnoses = data.get("endpoint_diagnoses", [])
+    if diagnoses:
+        # 결과별 분류
+        result_groups = {}
+        for ep in diagnoses:
+            result = ep.get("result", "정보")
+            result_groups.setdefault(result, []).append(ep)
+
+        parts.append(f"<h3>엔드포인트별 진단 ({len(diagnoses)}건)</h3>")
+
+        # 결과별 건수 요약
+        result_order = ["취약", "정보", "양호", "N/A"]
+        r_rows = []
+        for r in result_order:
+            eps = result_groups.get(r, [])
+            if eps:
+                if r == "취약":
+                    badge = _severity_badge("High").replace("High", "취약")
+                elif r == "양호":
+                    badge = _severity_badge("Info").replace("Info", "양호")
+                else:
+                    badge = _severity_badge("Medium").replace("Medium", r)
+                r_rows.append([badge, str(len(eps))])
+        if r_rows:
+            parts.append(_table(["판정", "건수"], r_rows))
+
+        # 취약 엔드포인트 상세 (있으면)
+        vuln_eps = result_groups.get("취약", [])
+        if vuln_eps:
+            parts.append("<h4>취약 판정 엔드포인트</h4>")
+            v_headers = ["#", "Method", "API", "핸들러", "취약 유형", "파일"]
+            v_rows = []
+            for idx, ep in enumerate(vuln_eps, 1):
+                v_rows.append([
+                    str(idx),
+                    f"<code>{html_escape(str(ep.get('http_method', '')))}</code>",
+                    f"<code>{html_escape(str(ep.get('request_mapping', '')))}</code>",
+                    f"<code>{html_escape(str(ep.get('handler', '')))}</code>",
+                    html_escape(str(ep.get("filter_type", ""))),
+                    f"<code>{html_escape(str(ep.get('process_file', '')))}</code>",
+                ])
+            parts.append(_table(v_headers, v_rows))
+
+        # 전체 엔드포인트 테이블 (축약)
+        parts.append("<h4>전체 엔드포인트 진단 목록</h4>")
+        ep_headers = ["#", "판정", "Method", "API", "핸들러", "서비스 호출", "DB 연산"]
+        ep_rows = []
+        for idx, ep in enumerate(diagnoses, 1):
+            result = ep.get("result", "정보")
+            if result == "취약":
+                badge = _severity_badge("High").replace("High", "취약")
+            elif result == "양호":
+                badge = _severity_badge("Info").replace("Info", "양호")
+            else:
+                badge = _severity_badge("Medium").replace("Medium", result)
+
+            svc = ep.get("service_calls", [])
+            svc_str = ", ".join(f"<code>{html_escape(str(s))}</code>"
+                                for s in (svc[:3] if isinstance(svc, list) else []))
+            if isinstance(svc, list) and len(svc) > 3:
+                svc_str += f" +{len(svc)-3}"
+
+            db_ops = ep.get("db_operations", [])
+            db_str = str(len(db_ops)) + "건" if db_ops else "-"
+
+            ep_rows.append([
+                str(idx),
+                badge,
+                f"<code>{html_escape(str(ep.get('http_method', '')))}</code>",
+                f"<code>{html_escape(str(ep.get('request_mapping', '')))}</code>",
+                f"<code>{html_escape(str(ep.get('handler', '')))}</code>",
+                svc_str if svc_str else "-",
+                db_str,
+            ])
+        parts.append(_table(ep_headers, ep_rows))
+
+    # --- 전역 취약점 ---
+    global_findings = data.get("global_findings", {})
+    if isinstance(global_findings, dict):
+        has_findings = any(
+            v.get("total", 0) > 0 if isinstance(v, dict) else len(v) > 0
+            for v in global_findings.values()
+        )
+        if has_findings:
+            parts.append("<h3>전역 취약점 (Global Findings)</h3>")
+            for cat, cat_data in global_findings.items():
+                if isinstance(cat_data, dict):
+                    total = cat_data.get("total", 0)
+                    findings = cat_data.get("findings", [])
+                else:
+                    total = len(cat_data) if isinstance(cat_data, list) else 0
+                    findings = cat_data if isinstance(cat_data, list) else []
+
+                if total == 0:
+                    continue
+
+                cat_label = cat.replace("_", " ").title()
+                parts.append(f"<h4>{html_escape(cat_label)} ({total}건)</h4>")
+
+                if findings:
+                    gf_headers = ["#", "패턴", "파일", "라인", "코드"]
+                    gf_rows = []
+                    for idx, f in enumerate(findings[:50], 1):  # 최대 50건
+                        snippet = str(f.get("code_snippet", ""))
+                        if len(snippet) > 100:
+                            snippet = snippet[:100] + "..."
+                        gf_rows.append([
+                            str(idx),
+                            f"<code>{html_escape(str(f.get('pattern_name', '')))}</code>",
+                            f"<code>{html_escape(str(f.get('file', '')))}</code>",
+                            str(f.get("line", "")),
+                            f"<code>{html_escape(snippet)}</code>",
+                        ])
+                    parts.append(_table(gf_headers, gf_rows))
+                    if len(findings) > 50:
+                        parts.append(f"<p><em>... 외 {len(findings)-50}건 (JSON 원본 참조)</em></p>")
+
+    return "\n".join(parts)
+
+
 def _json_to_xhtml_final(data):
     """Convert final_report.json to XHTML."""
     parts = ["<h1>AI 보안 진단 최종 보고서</h1>"]
@@ -776,11 +1160,19 @@ def _json_to_xhtml_final(data):
 def json_to_xhtml(data, json_type, source_path=""):
     """Route JSON data to the appropriate XHTML renderer based on type.
 
-    json_type is one of: "finding", "final_report"
+    json_type is one of: "finding", "final_report", "api_inventory"
     source_path helps disambiguate finding sub-types.
     """
     if json_type == "final_report":
         return _json_to_xhtml_final(data)
+
+    # scan_api.py v3.0 format auto-detection (endpoints key)
+    if json_type == "api_inventory" or "endpoints" in data:
+        return _json_to_xhtml_api_inventory(data)
+
+    # scan_injection_enhanced.py format auto-detection (endpoint_diagnoses key)
+    if "endpoint_diagnoses" in data:
+        return _json_to_xhtml_enhanced_injection(data)
 
     # finding type - disambiguate by source file name or task_id
     basename = os.path.basename(source_path)

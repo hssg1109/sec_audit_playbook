@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Task Output Schema",
+  "description": "모든 작업 결과가 준수해야 하는 JSON 스키마",
+  "type": "object",
+  "required": ["task_id", "status", "findings"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "작업 ID (예: 1-1, 2-1)",
+      "pattern": "^[0-9]+-[0-9]+$"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "failed", "partial"],
+      "description": "작업 완료 상태"
+    },
+    "findings": {
+      "type": "array",
+      "description": "발견 사항 목록",
+      "items": {
+        "type": "object"
+      }
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "실행 시각 (ISO 8601)"
+    },
+    "claude_session": {
+      "type": "string",
+      "description": "Claude 세션 ID"
+    },
+    "notes": {
+      "type": "string",
+      "description": "추가 메모"
+    },
+    "errors": {
+      "type": "array",
+      "description": "오류 목록",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "작업 메타데이터 (파싱 방법, 소스 파일 등)"
+    }
+  },
+  "additionalProperties": false
+}

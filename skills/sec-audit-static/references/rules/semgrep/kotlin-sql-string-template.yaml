@@ -1,0 +1,61 @@
+rules:
+  - id: kotlin-sql-string-template-interpolation
+    patterns:
+      - pattern-either:
+          # $variable in SQL string context
+          - pattern: |
+              fun $FUNC(..., $PARAM: String, ...): String {
+                ...
+                "... '$$$PARAM' ..."
+                ...
+              }
+          # ${expression} in SQL string context
+          - pattern: |
+              fun $FUNC(..., $PARAM: String, ...): String {
+                ...
+                "... '${...}' ..."
+                ...
+              }
+    message: >
+      Kotlin string template '$$$PARAM' or '${...}' used in SQL query function.
+      This may allow SQL injection if the parameter comes from user input.
+      Use named parameter binding (:param) instead.
+    languages: [kotlin]
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: sqli
+      cwe: "CWE-89"
+      owasp: "A03:2021 Injection"
+      confidence: MEDIUM
+      technology: [kotlin, spring, jdbc]
+
+  - id: kotlin-sql-string-concatenation
+    patterns:
+      - pattern: |
+          $SQL += "..." + $VAR + "..."
+      - metavariable-regex:
+          metavariable: $SQL
+          regex: (sql|query|stmt|statement)
+    message: >
+      SQL string concatenation with variable '$VAR'.
+      Use parameterized queries instead.
+    languages: [kotlin]
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: sqli
+      cwe: "CWE-89"
+
+  - id: kotlin-sql-dynamic-order-by
+    pattern: |
+      "... ORDER BY ... $$$VAR ..."
+    message: >
+      Dynamic ORDER BY clause using string interpolation.
+      Validate against a whitelist of allowed column names.
+    languages: [kotlin]
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: sqli
+      cwe: "CWE-89"
