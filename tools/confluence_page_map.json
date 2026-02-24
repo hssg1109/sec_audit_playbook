@@ -1,7 +1,7 @@
 {
   "version": "3.0",
   "prefix": "",
-  "next_test_number": 9,
+  "next_test_number": 11,
   "root_page": {
     "source": "README.md",
     "type": "doc"
@@ -89,8 +89,22 @@
         {
           "title": "테스트8 - MSG Sugar API 진단",
           "entries": [
-            {"source": "state/msgsugar_api_inventory.json",       "title": "테스트8 - API 인벤토리 결과",         "type": "api_inventory"},
-            {"source": "state/msgsugar_task_22_injection.json",   "title": "테스트8 - 인젝션 취약점 진단 결과",   "type": "finding"}
+            {"source": "state/msgsugar_api_inventory.json",          "title": "테스트8 - API 인벤토리 결과",         "type": "api_inventory"},
+            {"source": "state/msgsugar_injection_v45d_run1.json",     "title": "테스트8 - 인젝션 취약점 진단 결과",   "type": "finding"}
+          ]
+        },
+        {
+          "title": "테스트9 - OCB Community API 인젝션 진단",
+          "entries": [
+            {"source": "state/ocb_community_new_api_inventory.json",   "title": "테스트9 - API 인벤토리 결과",         "type": "api_inventory"},
+            {"source": "state/ocb_community_injection_v45d_run1.json",  "title": "테스트9 - 인젝션 취약점 진단 결과",   "type": "finding"}
+          ]
+        },
+        {
+          "title": "테스트10 - PCoNA Console 인젝션 진단 (v4.5.2 정합성 검증)",
+          "entries": [
+            {"source": "state/t5_pcona_api_scan.json",             "title": "테스트10 - API 인벤토리 결과",         "type": "api_inventory"},
+            {"source": "state/pcona_console_v452_run1.json",       "title": "테스트10 - 인젝션 취약점 진단 결과",   "type": "finding"}
           ]
         }
       ]

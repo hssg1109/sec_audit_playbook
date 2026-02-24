@@ -828,7 +828,7 @@ def _json_to_xhtml_vuln(data):
                 elif efile_name.endswith(".kts"):
                     lang = "groovy"
                 elif efile_name.endswith(".kt"):
-                    lang = "kotlin"
+                    lang = "java"  # Confluence Server/DC does not support "kotlin"
                 elif efile_name.endswith(".py"):
                     lang = "python"
                 elif efile_name.endswith(".js") or efile_name.endswith(".ts"):
@@ -907,156 +907,364 @@ def _json_to_xhtml_vuln(data):
     return "\n".join(parts)
 
 
-def _json_to_xhtml_enhanced_injection(data):
-    """Convert scan_injection_enhanced.py output (endpoint_diagnoses key) to XHTML.
+# ============================================================
+#  Enhanced Injection Report — Helper Functions
+# ============================================================
 
-    Renders: summary stats, endpoint diagnosis table, global findings detail.
+_INTERNAL_TAG_RE = re.compile(
+    r'\s*\[(?:non-DB method|non-DB|external|direct repo|from controller'
+    r'|via [^\]]*|deprecated|JPA Repository[^\]]*)\]',
+    re.IGNORECASE
+)
+
+
+def _clean_call(s: str) -> str:
+    """Remove internal analysis tags from service/repo call strings."""
+    return _INTERNAL_TAG_RE.sub('', s).strip()
+
+
+def _simplify_category(ep: dict) -> str:
+    """Map a diagnosis to a developer-friendly category name.
+
+    취약:
+      [실제 위협] SQL Injection       — 확인된 taint 경로 (HTTP 파라미터 → ${} 삽입)
+      [잠재적 위협] 취약한 쿼리 구조   — 취약 구조이나 taint 미확인
+    정보:
+      외부 의존성 호출                 — external_module (외부 모듈 의존)
+      XML 미발견 패턴 추정             — mybatis_safe + 추정 (XML 미발견)
+      호출 경로 추적 불가              — 자동 추적 실패
+      DB 접근 경로 미확인              — Service 호출 후 Repository 미추적
+    양호:
+      JPA & ORM 방식                  — JPA 내장 메서드 / @Query / ORM
+      MyBatis #{} 바인딩              — MyBatis XML/어노테이션 #{} 바인딩
+      DB 미접근 엔드포인트             — 비DB Service, 비DB 핸들러, 파라미터 없음
+      제어 흐름상 안전                 — 기타 안전 패턴 (bind, criteria 등)
+    """
+    result = ep.get("result", "정보")
+    dtype = ep.get("diagnosis_type", "")
+    filter_type = ep.get("filter_type", "")
+
+    if result == "취약":
+        if "[실제]" in dtype:
+            return "[실제 위협] SQL Injection"
+        elif "[잠재]" in dtype:
+            return "[잠재적 위협] 취약한 쿼리 구조"
+        # Fallback: legacy diagnosis_type 값 대응
+        ft = filter_type.lower()
+        if "tosql" in ft or "utils.tosql" in dtype.lower():
+            return "[잠재적 위협] 취약한 쿼리 구조"
+        return "[실제 위협] SQL Injection"
+
+    elif result == "정보":
+        if "외부 의존성" in dtype:
+            return "외부 의존성 호출"
+        elif "XML 미발견" in dtype:
+            return "XML 미발견 패턴 추정"
+        elif "추적 불가" in dtype:
+            return "호출 경로 추적 불가"
+        elif "DB 접근 미확인" in dtype:
+            return "DB 접근 경로 미확인"
+        return "수동 검토 필요"
+
+    else:  # 양호
+        if "JPA" in dtype or "@Query" in dtype or "ORM" in dtype:
+            return "JPA & ORM 방식"
+        elif ("MyBatis" in dtype or "iBatis" in dtype
+              or (filter_type.lower() == "mybatis" and "추정" not in dtype)):
+            return "MyBatis #{} 바인딩"
+        elif ("비DB" in dtype or "미접근" in dtype or "미호출" in dtype
+              or "DB 없음" in dtype or "DB 접근 없음" in dtype
+              or "유형4" in dtype or "파라미터없음" in dtype
+              or "세션" in dtype or "deprecated" in dtype.lower()
+              or "비활성" in dtype):
+            return "DB 미접근 엔드포인트"
+        return "제어 흐름상 안전"
+
+
+def _confluence_code_block(content: str, language: str = "text") -> str:
+    """Render a Confluence code block macro (XHTML storage format)."""
+    safe = content.replace("]]>", "]] >")
+    return (
+        f'<ac:structured-macro ac:name="code">'
+        f'<ac:parameter ac:name="language">{language}</ac:parameter>'
+        f'<ac:parameter ac:name="theme">Confluence</ac:parameter>'
+        f'<ac:plain-text-body><![CDATA[{safe}]]></ac:plain-text-body>'
+        f'</ac:structured-macro>'
+    )
+
+
+def _confluence_expand(title: str, content: str) -> str:
+    """Render a Confluence expand (accordion) macro."""
+    return (
+        f'<ac:structured-macro ac:name="expand">'
+        f'<ac:parameter ac:name="title">{html_escape(title)}</ac:parameter>'
+        f'<ac:rich-text-body>{content}</ac:rich-text-body>'
+        f'</ac:structured-macro>'
+    )
+
+
+def _render_call_graph_text(ep: dict) -> str:
+    """Build a text-format call graph for one endpoint."""
+    handler = ep.get("handler", "")
+    svc_calls = [_clean_call(s) for s in ep.get("service_calls", [])]
+    repo_calls = [_clean_call(r) for r in ep.get("repository_calls", [])]
+    db_ops = ep.get("db_operations", [])
+
+    lines = []
+    if handler:
+        lines.append(f"[Controller] {handler}")
+    for sc in svc_calls[:6]:
+        if sc:
+            lines.append(f"    └─ [Service] {sc}")
+    for rc in repo_calls[:6]:
+        lines.append(f"        └─ [Repository] {rc}")
+    if db_ops and isinstance(db_ops, list):
+        for op in db_ops[:2]:
+            if isinstance(op, dict):
+                detail = op.get("detail", "")
+                # Trim verbose boilerplate
+                detail = re.sub(r'\(메서드 호출 추출[^)]*\)', '', detail).strip().rstrip(':')
+                if detail:
+                    lines.append(f"            └─ [DB] {detail}")
+    return "\n".join(lines) if lines else ""
+
+
+def _render_ep_detail(ep: dict) -> str:
+    """Render detailed evidence block for a representative endpoint."""
+    parts = []
+    method = ep.get("http_method", "")
+    path = ep.get("request_mapping", "")
+    handler = ep.get("handler", "")
+    proc_file = ep.get("process_file", "")
+    params = ep.get("parameters", "")
+    diagnosis_detail = ep.get("diagnosis_detail", "")
+    filter_detail = ep.get("filter_detail", "")
+    db_ops = ep.get("db_operations", [])
+
+    # Info table
+    info_rows = [
+        ["API", f"<code>{html_escape(method)} {html_escape(str(path))}</code>"],
+        ["핸들러", f"<code>{html_escape(handler)}</code>"],
+    ]
+    if proc_file:
+        info_rows.append(["소스 파일", f"<code>{html_escape(proc_file)}</code>"])
+    if params:
+        info_rows.append(["파라미터", f"<code>{html_escape(str(params)[:300])}</code>"])
+    if diagnosis_detail:
+        clean_detail = re.sub(
+            r'\(메서드 호출 추출 실패하였으나 JPA 내장 메서드는 안전\)', '', diagnosis_detail)
+        info_rows.append(["판정 근거", html_escape(clean_detail.strip())])
+    parts.append(_table(["항목", "내용"], info_rows))
+
+    # Call graph
+    cg = _render_call_graph_text(ep)
+    if cg:
+        parts.append("<p><strong>호출 경로 (Call Graph)</strong></p>")
+        parts.append(_confluence_code_block(cg, "text"))
+
+    # Code snippet from db_operations
+    if db_ops and isinstance(db_ops, list):
+        for op in db_ops:
+            if isinstance(op, dict) and op.get("code_snippet"):
+                lang = "java"  # Confluence Server/DC does not support "kotlin"
+                parts.append("<p><strong>코드 스니펫</strong></p>")
+                parts.append(_confluence_code_block(op["code_snippet"], lang))
+                break
+
+    # Vulnerable pattern detail
+    if filter_detail and filter_detail not in ("N/A", ""):
+        parts.append(
+            f"<p><strong>취약 패턴:</strong> "
+            f"<code>{html_escape(filter_detail[:500])}</code></p>")
+
+    return "".join(parts)
+
+
+def _json_to_xhtml_enhanced_injection(data):
+    """Convert scan_injection_enhanced.py output to developer-friendly XHTML.
+
+    Structure:
+      - 진단 요약
+      - 🚨 취약 (Vulnerable)  — category grouping, representative + expand
+      - ⚠️ 정보 (Manual Check) — category grouping, representative + expand
+      - ✅ 양호 (Safe)         — category grouping, representative + expand
+      - 🔍 전역 취약점 (OS Command etc.) — code snippets with context
     """
     parts = ["<h2>인젝션 취약점 진단 결과</h2>"]
 
-    # 메타데이터
+    # Metadata
     meta = data.get("scan_metadata", {})
     if meta:
-        parts.append(f"<p><strong>소스:</strong> <code>{html_escape(str(meta.get('source_dir', '')))}</code></p>")
-        parts.append(f"<p><strong>API 인벤토리:</strong> <code>{html_escape(str(meta.get('api_inventory', '')))}</code></p>")
+        parts.append(
+            f"<p>"
+            f"<strong>소스:</strong> <code>{html_escape(str(meta.get('source_dir', '')))}</code>"
+            f" &nbsp;|&nbsp; "
+            f"<strong>분석 버전:</strong> <code>{html_escape(str(meta.get('script_version', '')))}</code>"
+            f"</p>"
+        )
 
-    # --- 요약 ---
+    # Summary table
     summary = data.get("summary", {})
-    if summary:
-        parts.append("<h3>진단 요약</h3>")
-        total = summary.get("total_endpoints", 0)
-        sqli = summary.get("sqli", {})
-        os_cmd = summary.get("os_command", {})
-        ssi = summary.get("ssi", {})
-        needs_review = summary.get("needs_review", 0)
+    sqli = summary.get("sqli", {})
+    os_cmd = summary.get("os_command", {})
+    total = summary.get("total_endpoints", 0)
+    vuln_n = sqli.get("취약", 0)
+    info_n = sqli.get("정보", 0)
+    safe_n = sqli.get("양호", 0)
 
-        sum_rows = [
-            ["총 엔드포인트", f"<strong>{total}</strong>"],
-            ["SQLi 양호", str(sqli.get("양호", 0))],
-            ["SQLi 취약", f"<strong>{sqli.get('취약', 0)}</strong>"],
-            ["SQLi 정보 (수동검토)", str(sqli.get("정보", 0))],
-            ["OS Command Injection", f"<strong>{os_cmd.get('total', 0)}</strong>건"],
-            ["SSI Injection", str(ssi.get("total", 0)) + "건"],
-        ]
-        parts.append(_table(["항목", "결과"], sum_rows))
+    parts.append("<h3>진단 요약</h3>")
+    sum_rows = [
+        ["총 분석 엔드포인트", f"<strong>{total}</strong>건"],
+        [
+            f'{_severity_badge("High").replace("High", "취약")} SQL Injection',
+            f"<strong>{vuln_n}</strong>건"
+        ],
+        [
+            f'{_severity_badge("Medium").replace("Medium", "정보")} 수동 검토 필요',
+            f"<strong>{info_n}</strong>건"
+        ],
+        [
+            f'{_severity_badge("Info").replace("Info", "양호")} 안전',
+            f"<strong>{safe_n}</strong>건"
+        ],
+        ["OS Command Injection", f"{os_cmd.get('total', 0)}건 (하단 참조)"],
+    ]
+    parts.append(_table(["항목", "결과"], sum_rows))
 
-    # --- 엔드포인트별 진단 목록 ---
+    # Group endpoints by result
     diagnoses = data.get("endpoint_diagnoses", [])
-    if diagnoses:
-        # 결과별 분류
-        result_groups = {}
-        for ep in diagnoses:
-            result = ep.get("result", "정보")
-            result_groups.setdefault(result, []).append(ep)
+    result_groups: dict = {}
+    for ep in diagnoses:
+        r = ep.get("result", "정보")
+        result_groups.setdefault(r, []).append(ep)
 
-        parts.append(f"<h3>엔드포인트별 진단 ({len(diagnoses)}건)</h3>")
+    def _render_result_section(result_key: str, icon: str, title_ko: str) -> str:
+        eps = result_groups.get(result_key, [])
+        if not eps:
+            return ""
 
-        # 결과별 건수 요약
-        result_order = ["취약", "정보", "양호", "N/A"]
-        r_rows = []
-        for r in result_order:
-            eps = result_groups.get(r, [])
-            if eps:
-                if r == "취약":
-                    badge = _severity_badge("High").replace("High", "취약")
-                elif r == "양호":
-                    badge = _severity_badge("Info").replace("Info", "양호")
-                else:
-                    badge = _severity_badge("Medium").replace("Medium", r)
-                r_rows.append([badge, str(len(eps))])
-        if r_rows:
-            parts.append(_table(["판정", "건수"], r_rows))
+        sec = [f"<h3>{icon} {html_escape(title_ko)} — {len(eps)}건</h3>"]
 
-        # 취약 엔드포인트 상세 (있으면)
-        vuln_eps = result_groups.get("취약", [])
-        if vuln_eps:
-            parts.append("<h4>취약 판정 엔드포인트</h4>")
-            v_headers = ["#", "Method", "API", "핸들러", "취약 유형", "파일"]
-            v_rows = []
-            for idx, ep in enumerate(vuln_eps, 1):
-                v_rows.append([
-                    str(idx),
-                    f"<code>{html_escape(str(ep.get('http_method', '')))}</code>",
-                    f"<code>{html_escape(str(ep.get('request_mapping', '')))}</code>",
-                    f"<code>{html_escape(str(ep.get('handler', '')))}</code>",
-                    html_escape(str(ep.get("filter_type", ""))),
-                    f"<code>{html_escape(str(ep.get('process_file', '')))}</code>",
-                ])
-            parts.append(_table(v_headers, v_rows))
+        # Sub-group by simplified category
+        cat_groups: dict = {}
+        for ep in eps:
+            cat = _simplify_category(ep)
+            cat_groups.setdefault(cat, []).append(ep)
 
-        # 전체 엔드포인트 테이블 (축약)
-        parts.append("<h4>전체 엔드포인트 진단 목록</h4>")
-        ep_headers = ["#", "판정", "Method", "API", "핸들러", "서비스 호출", "DB 연산"]
-        ep_rows = []
-        for idx, ep in enumerate(diagnoses, 1):
-            result = ep.get("result", "정보")
-            if result == "취약":
-                badge = _severity_badge("High").replace("High", "취약")
-            elif result == "양호":
-                badge = _severity_badge("Info").replace("Info", "양호")
-            else:
-                badge = _severity_badge("Medium").replace("Medium", result)
+        # Category summary table
+        cat_rows = [
+            [html_escape(cat), f"{len(ce)}건"]
+            for cat, ce in sorted(cat_groups.items(), key=lambda x: -len(x[1]))
+        ]
+        sec.append(_table(["원인 카테고리", "건수"], cat_rows))
 
-            svc = ep.get("service_calls", [])
-            svc_str = ", ".join(f"<code>{html_escape(str(s))}</code>"
-                                for s in (svc[:3] if isinstance(svc, list) else []))
-            if isinstance(svc, list) and len(svc) > 3:
-                svc_str += f" +{len(svc)-3}"
+        # Per-category detail
+        for cat, cat_eps in sorted(cat_groups.items(), key=lambda x: -len(x[1])):
+            representative = cat_eps[0]
+            rest = cat_eps[1:]
 
-            db_ops = ep.get("db_operations", [])
-            db_str = str(len(db_ops)) + "건" if db_ops else "-"
+            sec.append(f"<h4>{html_escape(cat)} ({len(cat_eps)}건)</h4>")
+            sec.append("<p><em>대표 사례 상세:</em></p>")
+            sec.append(_render_ep_detail(representative))
 
-            ep_rows.append([
-                str(idx),
-                badge,
-                f"<code>{html_escape(str(ep.get('http_method', '')))}</code>",
-                f"<code>{html_escape(str(ep.get('request_mapping', '')))}</code>",
-                f"<code>{html_escape(str(ep.get('handler', '')))}</code>",
-                svc_str if svc_str else "-",
-                db_str,
-            ])
-        parts.append(_table(ep_headers, ep_rows))
+            if rest:
+                rest_rows = []
+                for idx, ep in enumerate(rest, 2):
+                    svc = [_clean_call(s) for s in ep.get("service_calls", [])]
+                    svc_str = " → ".join(svc[:3]) if svc else "-"
+                    if len(svc) > 3:
+                        svc_str += f" +{len(svc) - 3}"
+                    repo = [_clean_call(r) for r in ep.get("repository_calls", [])]
+                    repo_str = ", ".join(repo[:2]) if repo else "-"
+                    if len(repo) > 2:
+                        repo_str += f" +{len(repo) - 2}"
+                    rest_rows.append([
+                        str(idx),
+                        f"<code>{html_escape(str(ep.get('http_method', '')))}</code>",
+                        f"<code>{html_escape(str(ep.get('request_mapping', '')))}</code>",
+                        f"<code>{html_escape(str(ep.get('handler', '')))}</code>",
+                        html_escape(svc_str),
+                        html_escape(repo_str),
+                    ])
+                rest_table = _table(
+                    ["#", "Method", "API", "핸들러", "서비스 호출", "Repository"],
+                    rest_rows
+                )
+                sec.append(_confluence_expand(
+                    f"나머지 {len(rest)}개 API 목록 펼치기 ▶",
+                    rest_table
+                ))
 
-    # --- 전역 취약점 ---
+        return "".join(sec)
+
+    parts.append(_render_result_section("취약", "🚨", "취약 (Vulnerable)"))
+    parts.append(_render_result_section("정보", "⚠️", "정보 — 수동 검토 필요 (Info)"))
+    parts.append(_render_result_section("양호", "✅", "양호 (Safe)"))
+
+    # --- Global Findings: OS Command, SSI ---
     global_findings = data.get("global_findings", {})
     if isinstance(global_findings, dict):
-        has_findings = any(
-            v.get("total", 0) > 0 if isinstance(v, dict) else len(v) > 0
-            for v in global_findings.values()
-        )
-        if has_findings:
-            parts.append("<h3>전역 취약점 (Global Findings)</h3>")
-            for cat, cat_data in global_findings.items():
-                if isinstance(cat_data, dict):
-                    total = cat_data.get("total", 0)
-                    findings = cat_data.get("findings", [])
-                else:
-                    total = len(cat_data) if isinstance(cat_data, list) else 0
-                    findings = cat_data if isinstance(cat_data, list) else []
+        for cat_key, cat_data in global_findings.items():
+            if isinstance(cat_data, dict):
+                findings = cat_data.get("findings", [])
+                total_f = cat_data.get("total", 0)
+            elif isinstance(cat_data, list):
+                findings = cat_data
+                total_f = len(findings)
+            else:
+                continue
+            if not findings:
+                continue
 
-                if total == 0:
-                    continue
+            cat_label = cat_key.replace("_", " ").title()
+            parts.append(
+                f"<h3>🔍 전역 취약점 — {html_escape(cat_label)} ({total_f}건)</h3>"
+            )
+            parts.append(
+                "<p><em>아래 패턴은 전체 소스코드 수준에서 감지된 항목입니다. "
+                "exec() 동반 여부 및 사용자 입력 소스를 수동으로 확인하세요.</em></p>"
+            )
 
-                cat_label = cat.replace("_", " ").title()
-                parts.append(f"<h4>{html_escape(cat_label)} ({total}건)</h4>")
+            def _render_global_finding(f: dict, idx: int) -> str:
+                fname = f.get("file", "")
+                line = f.get("line", 0)
+                pattern = f.get("pattern_name", f.get("pattern_id", ""))
+                desc = f.get("description", "")
+                snippet = f.get("code_snippet", "")
+                ctx_before = f.get("context_before", [])
+                ctx_after = f.get("context_after", [])
+                safe_indicators = f.get("safe_indicators", [])
 
-                if findings:
-                    gf_headers = ["#", "패턴", "파일", "라인", "코드"]
-                    gf_rows = []
-                    for idx, f in enumerate(findings[:50], 1):  # 최대 50건
-                        snippet = str(f.get("code_snippet", ""))
-                        if len(snippet) > 100:
-                            snippet = snippet[:100] + "..."
-                        gf_rows.append([
-                            str(idx),
-                            f"<code>{html_escape(str(f.get('pattern_name', '')))}</code>",
-                            f"<code>{html_escape(str(f.get('file', '')))}</code>",
-                            str(f.get("line", "")),
-                            f"<code>{html_escape(snippet)}</code>",
-                        ])
-                    parts.append(_table(gf_headers, gf_rows))
-                    if len(findings) > 50:
-                        parts.append(f"<p><em>... 외 {len(findings)-50}건 (JSON 원본 참조)</em></p>")
+                fp = [f"<h5>{idx}. {html_escape(pattern)}</h5>"]
+                d_rows = [
+                    ["파일", f"<code>{html_escape(fname)}:{line}</code>"],
+                    ["설명", html_escape(desc)],
+                ]
+                if safe_indicators:
+                    d_rows.append(["안전 지표", html_escape(", ".join(str(s) for s in safe_indicators))])
+                fp.append(_table(["항목", "내용"], d_rows))
+
+                if snippet or ctx_before or ctx_after:
+                    full_lines = [str(ln) for ln in (ctx_before or [])[-3:]]
+                    if snippet:
+                        full_lines.append(f">>> {snippet}   ← 검출 라인 {line}")
+                    full_lines.extend(str(ln) for ln in (ctx_after or [])[:3])
+                    lang = "java"  # Confluence Server/DC does not support "kotlin"
+                    fp.append("<p><strong>코드 스니펫</strong></p>")
+                    fp.append(_confluence_code_block("\n".join(full_lines), lang))
+                return "".join(fp)
+
+            # First finding shown directly
+            parts.append(_render_global_finding(findings[0], 1))
+            if len(findings) > 1:
+                rest_content = "".join(
+                    _render_global_finding(f, i)
+                    for i, f in enumerate(findings[1:], 2)
+                )
+                parts.append(_confluence_expand(
+                    f"나머지 {len(findings) - 1}건 더 보기 ▶",
+                    rest_content
+                ))
 
     return "\n".join(parts)
 
@@ -1134,7 +1342,7 @@ def _json_to_xhtml_final(data):
                 parts.append(f"<p><strong>증거:</strong> {efile}:{elines}</p>")
                 snippet = evidence.get("code_snippet", "")
                 if snippet:
-                    parts.append(_code_macro(snippet, "kotlin"))
+                    parts.append(_code_macro(snippet, "java"))
 
             cwe = f.get("cwe_id", "")
             owasp = f.get("owasp_category", "")

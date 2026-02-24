@@ -61,6 +61,14 @@ _TRACEABLE_COMPONENT_SUFFIXES = (
     'Component', 'Coordinator',
 )
 
+# [Phase 24] Kotlin 예약어 집합 (taint 체크 시 식별자 후보에서 제외) — 모듈 상수
+_KT_KEYWORDS: frozenset = frozenset({
+    'if', 'else', 'when', 'for', 'while', 'do', 'return', 'fun',
+    'val', 'var', 'is', 'as', 'in', 'it', 'this', 'super', 'null',
+    'true', 'false', 'class', 'object', 'companion', 'by', 'and',
+    'or', 'not',
+})
+
 
 # ============================================================
 #  1. 데이터 구조
@@ -84,6 +92,7 @@ class DbOperation:
     line: int = 0
     code_snippet: str = ""
     is_vulnerable: bool = False
+    taint_confirmed: Optional[bool] = None  # True=HTTP 파라미터→SQL 삽입 확인, False=내부 값, None=미추적
 
 
 @dataclass
@@ -165,9 +174,19 @@ def extract_constructor_deps(content: str) -> list:
     #    @Autowired private FooService fooService;
     #    @Autowired FooService fooService;  (package-private, 접근제한자 없음)
     #    @Autowired protected FooService fooService;
+    #    @Autowired private final FooService fooService;  (final 포함)
     #    줄바꿈/불규칙 공백 대응
+    #
+    # [Phase 18] multi-annotation 지원:
+    #    @Autowired
+    #    @Qualifier("primary")
+    #    private FooService fooService;
     for m in re.finditer(
-        r'@(?:Autowired|Inject|Resource)[\s\n]+(?:(?:private|protected|public)[\s\n]+)?(\w+)[\s\n]+(\w+)\s*;',
+        r'@(?:Autowired|Inject|Resource)(?:\s*\([^)]*\))?'
+        r'(?:[\s\n]+@\w+(?:\s*\([^)]*\))?)*'   # 중간 어노테이션 0개 이상
+        r'[\s\n]+(?:(?:private|protected|public)[\s\n]+)?'
+        r'(?:final[\s\n]+)?'                    # [Phase 18] final 키워드 허용
+        r'(\w+)(?:<[^>]*>)?[\s\n]+(\w+)\s*;',
         content
     ):
         if (m.group(2), m.group(1)) not in deps:
@@ -227,7 +246,13 @@ def extract_constructor_deps(content: str) -> list:
 
 
 def extract_method_body(content: str, method_name: str) -> str:
-    """메서드 본문 추출 (중괄호 매칭)"""
+    """메서드 본문 추출 (중괄호 매칭)
+
+    [Phase 19] Kotlin single-expression 함수 지원:
+    fun foo(params): ReturnType = expr  (중괄호 없는 expression body)
+    파라미터 내부 { (어노테이션/람다 기본값)와 실제 본문 { 를 구분하기 위해
+    먼저 파라미터 목록의 닫는 ) 위치를 탐색한 후 본문 시작을 결정한다.
+    """
     # fun methodName( 또는 def methodName(
     pattern = rf'fun\s+{re.escape(method_name)}\s*\('
     match = re.search(pattern, content)
@@ -244,23 +269,45 @@ def extract_method_body(content: str, method_name: str) -> str:
     if not match:
         return ""
 
-    # 함수 시작부터 본문 추출
     start = match.start()
-    # { 를 찾을 때까지
-    brace_start = content.find('{', start)
-    if brace_start == -1:
-        # expression body (= ...) 처리
-        eq_pos = content.find('=', start)
-        if eq_pos != -1:
-            # 다음 fun/class/} 까지
-            end = len(content)
-            for end_pat in [r'\n\s*fun\s', r'\n\s*class\s', r'\n\}']:
-                m = re.search(end_pat, content[eq_pos:])
-                if m and eq_pos + m.start() < end:
-                    end = eq_pos + m.start()
-            return content[start:end]
+
+    # [Phase 19] 파라미터 목록의 닫는 ) 위치를 탐색 (어노테이션 내 { 오탐 방지)
+    # 예: fun foo(@RequestParam(value = ["a","b"]) x: Int) = expr
+    #         fun foo(@RequestHeader({"Authorization"}) h: String) = expr
+    paren_open = content.find('(', start)
+    after_params = start  # fallback
+    if paren_open != -1:
+        depth = 0
+        for idx in range(paren_open, min(paren_open + 50000, len(content))):
+            ch = content[idx]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    after_params = idx + 1
+                    break
+
+    # after_params 이후에서 { (블록 본문) vs = (expression 본문) 탐지
+    after_str = content[after_params:]
+    brace_pos = after_str.find('{')
+    eq_pos    = after_str.find('=')
+
+    if eq_pos != -1 and (brace_pos == -1 or eq_pos < brace_pos):
+        # Expression body: = 이 { 보다 앞에 있거나 { 없음
+        eq_abs = after_params + eq_pos
+        end = len(content)
+        for end_pat in [r'\n\s*fun\s', r'\n\s*class\s', r'\n\}']:
+            m = re.search(end_pat, content[eq_abs:])
+            if m and eq_abs + m.start() < end:
+                end = eq_abs + m.start()
+        return content[start:end]
+
+    # Block body: { ... }
+    if brace_pos == -1:
         return ""
 
+    brace_start = after_params + brace_pos
     depth = 0
     i = brace_start
     while i < len(content):
@@ -687,7 +734,8 @@ def _trace_service_chain(svc_class: str, svc_method: str,
         if not repo_content:
             continue
         db_ops = analyze_repository_method(repo_content, repo_method,
-                                            repo_file, mybatis_index)
+                                            repo_file, mybatis_index,
+                                            source_dir=source_dir)
         result["db_operations"].extend(db_ops)
 
     # DB 클라이언트 직접 사용
@@ -768,7 +816,9 @@ def _trace_internal_methods(svc_content: str, method_name: str,
                             repo_fields: list, repo_field_names: list,
                             class_index: dict, mybatis_index: dict,
                             depth: int = 1, max_depth: int = 3,
-                            visited: set = None) -> list:
+                            visited: set = None,
+                            source_dir: Path = None,
+                            tainted_names: set = None) -> list:
     """Service 내부 private 메서드 위임 재귀 추적 (depth-limited).
 
     publicMethod() → helper1() → helper2() → repo.query() 패턴 추적.
@@ -809,8 +859,19 @@ def _trace_internal_methods(svc_content: str, method_name: str,
             repo_content = read_file_safe(repo_file)
             if repo_content:
                 db_ops = analyze_repository_method(
-                    repo_content, repo_method, repo_file, mybatis_index)
+                    repo_content, repo_method, repo_file, mybatis_index,
+                    source_dir=source_dir, tainted_names=tainted_names)
                 db_operations.extend(db_ops)
+        else:
+            # [Phase 18] 외부 모듈 Mapper/DAO: class_index 미존재 → 안전 추정
+            if any(repo_class.endswith(s) for s in ('Mapper', 'Dao', 'DAO', 'Repository')):
+                db_operations.append(DbOperation(
+                    method=repo_method,
+                    access_type="mybatis_safe",
+                    detail=f"양호(추정): {repo_class}는 외부 모듈 Mapper - "
+                           f"#{'{}'} 기본 바인딩 추정 (외부 모듈)",
+                    is_vulnerable=False,
+                ))
 
     if db_operations:
         return [(repo_results, db_operations)]
@@ -824,7 +885,8 @@ def _trace_internal_methods(svc_content: str, method_name: str,
         sub = _trace_internal_methods(
             svc_content, ic, repo_fields, repo_field_names,
             class_index, mybatis_index,
-            depth + 1, max_depth, visited)
+            depth + 1, max_depth, visited,
+            source_dir=source_dir, tainted_names=tainted_names)
         if sub:
             return sub
 
@@ -907,6 +969,9 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
     # [Phase 15] handler 메서드 본문을 결과에 포함 (stub 판정용)
     result["handler_method_body"] = method_body
 
+    # [Phase 24] Controller HTTP 파라미터 → 초기 taint 집합
+    initial_tainted: set = _extract_param_names(endpoint.get("parameters", []))
+
     svc_field_names = [name for name, _ in service_fields]
     svc_calls = extract_method_calls(method_body, svc_field_names)
 
@@ -947,7 +1012,30 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
                 svc_content = read_file_safe(impl_file)
                 svc_file = impl_file
             else:
+                # [Phase 18] 구현체 미발견: JPA Repository 또는 MyBatis Mapper 인터페이스
+                # Controller 에서 직접 Repository/Mapper 를 주입받아 호출하는 패턴 처리
+                db_ops = analyze_repository_method(
+                    svc_content, svc_method, svc_file, mybatis_index,
+                    source_dir=source_dir)
+                if db_ops:
+                    result["service_calls"][-1] = (
+                        f"{svc_class}.{svc_method}() [direct repo]")
+                    result["repository_calls"].append(
+                        f"{svc_class}.{svc_method}()")
+                    result["db_operations"].extend(db_ops)
+                elif not any(svc_class.endswith(s)
+                             for s in ('Repository', 'Mapper', 'Dao', 'DAO')):
+                    # [Phase 21] Service 인터페이스, 구현체 미발견 →
+                    # DB 접근 추적 불가이나 Service 계층 인터페이스로 비DB 추정
+                    result["service_calls"][-1] = (
+                        f"{svc_class}.{svc_method}() [non-DB]")
                 continue
+
+        # [Phase 24] Controller → Service 위치 인덱스 기반 taint 전파
+        svc_tainted: set = (
+            _propagate_taint_by_index(method_body, svc_method, svc_content, initial_tainted)
+            if initial_tainted else set()
+        )
 
         svc_deps = extract_constructor_deps(svc_content)
 
@@ -1017,14 +1105,36 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
             # 5. Repository 메서드의 DB 접근 방식 분석
             repo_file = class_index.get(repo_class)
             if not repo_file:
+                # [Phase 18] 외부 모듈 Mapper/DAO: class_index 미존재 → 안전 추정
+                # (외부 공유 모듈의 MyBatis Mapper는 정적 #{} 바인딩 사용 추정)
+                if any(repo_class.endswith(s) for s in ('Mapper', 'Dao', 'DAO', 'Repository')):
+                    result["db_operations"].append(DbOperation(
+                        method=repo_method,
+                        access_type="mybatis_safe",
+                        detail=f"양호(추정): {repo_class}는 외부 모듈 Mapper - "
+                               f"#{'{}'} 기본 바인딩 추정 (외부 모듈)",
+                        is_vulnerable=False,
+                    ))
                 continue
 
             repo_content = read_file_safe(repo_file)
             if not repo_content:
                 continue
 
+            # [Phase 24] Service → Repository 위치 인덱스 기반 taint 전파
+            # 전파 결과가 non-empty → 위치 인덱스 추적 사용
+            # empty (DTO 랩핑/파싱 실패) → None 전달 → name-based 폴백
+            repo_tainted: set = (
+                _propagate_taint_by_index(svc_method_body, repo_method,
+                                          repo_content, svc_tainted)
+                if svc_tainted else set()
+            )
+            tainted_arg = repo_tainted or svc_tainted or None
+
             db_ops = analyze_repository_method(repo_content, repo_method,
-                                                repo_file, mybatis_index)
+                                                repo_file, mybatis_index,
+                                                source_dir=source_dir,
+                                                tainted_names=tainted_arg)
             result["db_operations"].extend(db_ops)
 
         # DB 클라이언트 직접 사용 추적 (Service에서 직접 sqlMapClientTemplate 호출)
@@ -1063,7 +1173,9 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
             internal_result = _trace_internal_methods(
                 svc_content, svc_method, repo_fields, repo_field_names,
                 class_index, mybatis_index,
-                depth=1, max_depth=3, visited=None)
+                depth=1, max_depth=3, visited=None,
+                source_dir=source_dir,
+                tainted_names=svc_tainted or None)
             if internal_result:
                 for repo_entries, db_ops in internal_result:
                     result["repository_calls"].extend(repo_entries)
@@ -1097,6 +1209,64 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
                     result["db_operations"].extend(
                         sub["db_operations"])
                     break
+
+        # [Phase 20] Service 메서드 수준 비DB 판정
+        # repo_fields 보유 서비스지만 특정 메서드가 DB 미사용인 경우:
+        #   - 직접 repo 호출 없음 (repo_calls 비어 있음)
+        #   - 내부 위임/서비스 위임 추적도 미발견 (db_operations 여전히 없음)
+        # → 해당 메서드는 DB 미접근 → [non-DB method] 양호 판정
+        if (not result["db_operations"] and repo_fields
+                and svc_method_body and not repo_calls):
+            result["service_calls"][-1] = (
+                f"{svc_class}.{svc_method}() [non-DB method]")
+
+    # [Phase 22] Controller → Mapper/DAO 직접 호출 추적
+    # Service 레이어 없이 Controller에서 직접 Mapper를 호출하는 패턴 처리
+    if not result["db_operations"]:
+        ctrl_repo_fields = [
+            (name, cls) for name, cls in ctrl_deps
+            if any(cls.endswith(s) for s in ('Repository', 'Mapper', 'Dao', 'DAO'))
+        ]
+        if ctrl_repo_fields:
+            ctrl_repo_calls = extract_method_calls(
+                method_body, [n for n, _ in ctrl_repo_fields])
+            for repo_field, repo_method in ctrl_repo_calls:
+                repo_class = None
+                for fname, cls in ctrl_repo_fields:
+                    if fname == repo_field:
+                        repo_class = cls
+                        break
+                if not repo_class:
+                    continue
+                result["repository_calls"].append(
+                    f"{repo_class}.{repo_method}() [from controller]")
+                repo_file = class_index.get(repo_class)
+                if not repo_file:
+                    if any(repo_class.endswith(s)
+                           for s in ('Mapper', 'Dao', 'DAO', 'Repository')):
+                        result["db_operations"].append(DbOperation(
+                            method=repo_method,
+                            access_type="mybatis_safe",
+                            detail=f"양호(추정): {repo_class}는 외부 모듈 Mapper - "
+                                   f"#{'{}'} 기본 바인딩 추정",
+                            is_vulnerable=False,
+                        ))
+                    continue
+                repo_content = read_file_safe(repo_file)
+                if not repo_content:
+                    continue
+                # [Phase 24] Controller → Repository 직접 호출: Controller taint 전파
+                # 전파 결과 non-empty → 사용, empty (DTO랩핑 등) → None (name-based 폴백)
+                ctrl_repo_tainted: set = (
+                    _propagate_taint_by_index(
+                        method_body, repo_method, repo_content, initial_tainted)
+                    if initial_tainted else set()
+                )
+                ctrl_tainted_arg = ctrl_repo_tainted or initial_tainted or None
+                db_ops = analyze_repository_method(
+                    repo_content, repo_method, repo_file, mybatis_index,
+                    source_dir=source_dir, tainted_names=ctrl_tainted_arg)
+                result["db_operations"].extend(db_ops)
 
     return result
 
@@ -1291,15 +1461,224 @@ def _lookup_mybatis_xml(content: str, method_name: str,
     return ops
 
 
+def _extract_kt_func_params(kt_content: str, func_name: str) -> set:
+    """Kotlin 함수 시그니처에서 파라미터 이름 집합 추출."""
+    params: set = set()
+    for m in re.finditer(
+            rf'fun\s+{re.escape(func_name)}\s*\(([^)]*)\)', kt_content):
+        for param in m.group(1).split(','):
+            # "name: Type" 또는 "name: Type = default" 형식
+            p = param.strip().split(':')[0].strip()
+            if p:
+                params.add(p)
+        break
+    return params
+
+
+def _extract_kt_local_vars(kt_body: str) -> set:
+    """Kotlin 함수 본문에서 var/val 지역변수 이름 집합 추출."""
+    return set(re.findall(r'(?:var|val)\s+([A-Za-z_]\w*)\s*[=:]', kt_body))
+
+
+def _extract_kt_sql_varname(op) -> str:
+    """Kotlin SQL injection DbOperation detail에서 삽입 변수명 추출.
+
+    kotlin_template_sqli: "취약: Kotlin ${ordering} 표현식이 SQL에 직접 삽입 (...)"
+    kotlin_var_sqli:      "취약: Kotlin $category 변수가 SQL에 직접 삽입 (...)"
+    """
+    if op.access_type == "kotlin_template_sqli":
+        m = re.search(r'\$\{([^}]+)\}', op.detail)
+        if m:
+            first_id = re.match(r'[A-Za-z_]\w*', m.group(1).strip())
+            return first_id.group() if first_id else ""
+    elif op.access_type == "kotlin_var_sqli":
+        m = re.search(r'\$(\w+)\s+변수가', op.detail)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _scan_kt_body_for_sqli(kt_body: str, kt_content: str,
+                            func_name: str, kt_file: Path,
+                            kt_content_lines: list,
+                            tainted_names: set = None) -> list:
+    """Kotlin 함수 본문에서 SQL injection 패턴 탐지.
+
+    - 파라미터 변수만 취약으로 판정 (지역 var/val 제외)
+    - tainted_names: 위치 인덱스 기반 전파 후 오염된 변수명 집합 (None이면 미추적)
+      - ${expr}: 표현식 내 모든 비-키워드 식별자 집합과 교차 검증
+      - $variable: 변수명 직접 확인
+    - 파일 절대 줄 번호 계산
+    """
+    ops_out = []
+
+    # 함수 시작 줄 계산
+    func_start_line = 0
+    for i, line in enumerate(kt_content_lines):
+        if re.search(rf'fun\s+{re.escape(func_name)}\s*\(', line):
+            func_start_line = i + 1
+            break
+
+    # 파라미터 목록 (취약 대상) + 지역변수 목록 (제외 대상)
+    param_names = _extract_kt_func_params(kt_content, func_name)
+    local_vars  = _extract_kt_local_vars(kt_body)
+    safe_vars   = local_vars - param_names   # 지역변수이며 파라미터가 아닌 것
+
+    kt_body_lines = kt_body.splitlines()
+
+    # Kotlin 예약어 (taint 체크 시 식별자 후보에서 제외)
+    # ${ ... } 패턴
+    for m in re.finditer(r'\$\{([^}]+)\}', kt_body):
+        expr = m.group(1).strip()
+        # 표현식 첫 번째 식별자가 safe_vars 안에 있으면 제외 (지역변수 필터)
+        first_id = re.match(r'[A-Za-z_]\w*', expr)
+        if first_id and first_id.group() in safe_vars:
+            continue
+        line_idx = kt_body[:m.start()].count('\n')
+        code_line = kt_body_lines[line_idx].strip() if line_idx < len(kt_body_lines) else ""
+        abs_line = func_start_line + line_idx
+        # [Phase 24] Taint 확인: 표현식 내 모든 비-키워드 식별자 × tainted_names 교차
+        tc: Optional[bool] = None
+        if tainted_names is not None:
+            expr_ids = set(re.findall(r'\b([A-Za-z_]\w*)\b', expr)) - _KT_KEYWORDS
+            tc = bool(expr_ids & tainted_names)
+        ops_out.append(DbOperation(
+            method=func_name,
+            access_type="kotlin_template_sqli",
+            detail=(f"취약: Kotlin ${{{expr}}} 표현식이 SQL에 직접 삽입 "
+                    f"({kt_file.name}:{abs_line})"),
+            line=abs_line,
+            code_snippet=code_line,
+            is_vulnerable=True,
+            taint_confirmed=tc,
+        ))
+
+    # $variable 패턴 (단순 변수 보간, ${ 는 제외)
+    _KT_SKIP = {'this', 'super', 'it', 'null', 'true', 'false',
+                'class', 'object', 'companion'}
+    for m in re.finditer(r'(?<!\$)\$(?!\{)([A-Za-z_]\w*)', kt_body):
+        var_name = m.group(1)
+        if var_name in _KT_SKIP:
+            continue
+        if var_name in safe_vars:
+            continue     # 지역변수 → 제외
+        line_idx = kt_body[:m.start()].count('\n')
+        code_line = kt_body_lines[line_idx].strip() if line_idx < len(kt_body_lines) else ""
+        abs_line = func_start_line + line_idx
+        # [Phase 24] Taint 확인: 변수명 직접 검증
+        tc = (var_name in tainted_names) if tainted_names is not None else None
+        ops_out.append(DbOperation(
+            method=func_name,
+            access_type="kotlin_var_sqli",
+            detail=(f"취약: Kotlin ${var_name} 변수가 SQL에 직접 삽입 "
+                    f"({kt_file.name}:{abs_line})"),
+            line=abs_line,
+            code_snippet=code_line,
+            is_vulnerable=True,
+            taint_confirmed=tc,
+        ))
+
+    return ops_out
+
+
+def _analyze_kotlin_sql_builder(method_body: str, source_dir: Path,
+                                 tainted_names: set = None) -> list:
+    """[Phase 23+24] Java Repository에서 Kotlin SQL Builder 위임 탐지.
+
+    패턴: masterJdbcTemplate.query(FeedQueryKt.selectFeedListTradeType(..args..), ...)
+      1. 메서드 본문에서 XxxKt.functionName(args) 호출 추출
+      2. Xxx.kt 파일에서 해당 Kotlin 함수 본문 추출
+         - SQL 없고 다른 Kotlin 함수로 위임하는 경우 1단계 재귀 추적
+      3. [Phase 24] 위치 인덱스 기반 taint 전파: Java repo 인자 → Kotlin 파라미터
+         - 위임 함수 체인에서도 추가 전파 수행
+      4. Kotlin 파라미터 $var / ${expr} 탐지 (지역 var/val 제외)
+    """
+    ops = []
+    if source_dir is None:
+        return ops
+
+    # 1) XxxKt.funcName( 패턴 탐지 – Java Kotlin interop 호출
+    kt_calls = re.findall(r'(\w+Kt)\s*\.\s*(\w+)\s*\(', method_body)
+    if not kt_calls:
+        return ops
+
+    for kt_class, func_name in kt_calls:
+        # FeedQueryKt → FeedQuery.kt
+        kt_filename = kt_class[:-2] + ".kt"   # strip trailing "Kt"
+
+        # source_dir 내에서 파일 탐색
+        kt_file = None
+        for p in source_dir.rglob(kt_filename):
+            if not any(ex in p.parts for ex in ("test", "Test", "target", "build")):
+                kt_file = p
+                break
+        if kt_file is None:
+            continue
+
+        kt_content = read_file_safe(kt_file)
+        if not kt_content:
+            continue
+        kt_content_lines = kt_content.splitlines()
+
+        # 2) Kotlin 함수 본문 추출
+        kt_body = extract_method_body(kt_content, func_name)
+        if not kt_body:
+            continue
+
+        # [Phase 24] Java repo → Kotlin func 위치 인덱스 기반 taint 전파
+        # method_body (Java repo) 에서 func_name(args) 호출 인자 분석
+        kt_tainted: Optional[set] = None
+        if tainted_names is not None:
+            kt_tainted = _propagate_taint_by_index(
+                method_body, func_name, kt_content, tainted_names)
+
+        # SQL 컨텍스트 없으면 → 위임 함수 1단계 추적
+        # 단어 경계(\b) 사용: selectCommentList 내의 'select' 오탐 방지
+        _SQL_RE = re.compile(
+            r'\b(?:SELECT|INSERT|UPDATE|DELETE|WHERE|FROM|ORDER\s+BY)\b',
+            re.IGNORECASE)
+        if not _SQL_RE.search(kt_body):
+            # 단순 위임: return otherFunc(args) 패턴 탐지
+            delegated = re.search(r'return\s+(\w+)\s*\(', kt_body)
+            if delegated:
+                delegate_func = delegated.group(1)
+                delegate_body = extract_method_body(kt_content, delegate_func)
+                if delegate_body and _SQL_RE.search(delegate_body):
+                    # [Phase 24] 위임 함수로 taint 추가 전파: func → delegate_func
+                    if kt_tainted is not None:
+                        propagated = _propagate_taint_by_index(
+                            kt_body, delegate_func, kt_content, kt_tainted)
+                        if propagated:
+                            kt_tainted = propagated
+                    kt_body = delegate_body
+                    func_name = delegate_func
+                    kt_content_lines = kt_content.splitlines()
+                else:
+                    continue
+            else:
+                continue
+
+        # 3) 파라미터 기반 injection 탐지 (지역변수 제외) + taint_confirmed 설정
+        body_ops = _scan_kt_body_for_sqli(
+            kt_body, kt_content, func_name, kt_file, kt_content_lines,
+            tainted_names=kt_tainted)
+        ops.extend(body_ops)
+
+    return ops
+
+
 def analyze_repository_method(content: str, method_name: str,
                                file_path: Path = None,
-                               mybatis_index: dict = None) -> list:
+                               mybatis_index: dict = None,
+                               source_dir: Path = None,
+                               tainted_names: set = None) -> list:
     """Repository 메서드의 DB 접근 패턴을 분석하여 진단 유형 결정
 
     우선순위:
       1. 메서드 본문에서 직접 사용하는 DB 접근 패턴 확인
       2. 양호/취약 패턴이 공존 시 메서드의 주된 작업 기준으로 판정
       3. ORM(.using(entity)) > bind > criteria > raw_concat 순으로 판정
+    tainted_names: Phase 24 위치 인덱스 기반 전파로 도달한 오염 변수명 집합
     """
     if mybatis_index is None:
         mybatis_index = {}
@@ -1332,22 +1711,20 @@ def analyze_repository_method(content: str, method_name: str,
             if xml_ops:
                 return xml_ops
 
-        # --- [Phase 10] Mapper interface fallback: XML 미발견 시 MyBatis 안전 추정 ---
+        # --- [Phase 10/18] Mapper interface fallback: XML 미발견 시 MyBatis 안전 추정 ---
+        # [Phase 18] CRUD 접두사 제한 제거: Mapper/Dao 클래스의 모든 메서드에 적용
+        # 이유: XML 스캔에서 ${}를 탐지했다면 mybatis_index에 이미 반영됨.
+        #       XML 미발견 = 안전한 #{} 사용 or 정적 SQL 이므로 safe 추정 가능.
         class_name = extract_class_name(content)
         if class_name and class_name.endswith(('Mapper', 'Dao', 'DAO')) \
                 and not _is_jpa_repository(content):
-            mybatis_crud_prefixes = ('select', 'insert', 'update', 'delete',
-                                     'get', 'find', 'count', 'query', 'list',
-                                     'set', 'del', 'remove', 'save', 'add',
-                                     'merge', 'upsert', 'batch', 'bulk')
-            if any(method_name.lower().startswith(p) for p in mybatis_crud_prefixes):
-                return [DbOperation(
-                    method=method_name,
-                    access_type="mybatis_safe",
-                    detail=f"양호(추정): {class_name} MyBatis Mapper - "
-                           f"#{{}} 기본 바인딩 추정 (XML 미발견)",
-                    is_vulnerable=False,
-                )]
+            return [DbOperation(
+                method=method_name,
+                access_type="mybatis_safe",
+                detail=f"양호(추정): {class_name} MyBatis Mapper - "
+                       f"#{{}} 기본 바인딩 추정 (XML 미발견/미매칭)",
+                is_vulnerable=False,
+            )]
 
         # --- 0-3단계: JPA Repository 내장 메서드 확인 ---
         if _is_jpa_repository(content):
@@ -1442,6 +1819,19 @@ def analyze_repository_method(content: str, method_name: str,
         if not re.search(r'(?:SELECT|INSERT|UPDATE|DELETE|WHERE|FROM|_SQL|\.execute|\.sql)',
                          method_body, re.IGNORECASE):
             found_raw_concat = False
+
+    # [Phase 17] Raw concat + bind() 존재 + Utils.toSql() 없음
+    #   → quoted string literal 끼리의 멀티라인 연결로 판단하여 안전 처리
+    #   케이스: client.execute("SELECT " + " FROM t WHERE id = :id").bind("id", v)
+    #   ↑ + 연결이지만 실제 변수(sql, definition, criteria 등)는 없음
+    if found_raw_concat and found_bind and not found_criteria_tosql:
+        has_variable_concat = bool(re.search(
+            r'\b(?:sql|query|definition|criteria|condition)\s*\+'
+            r'|\+\s*(?:sql|query|definition|criteria|Utils)',
+            method_body, re.IGNORECASE,
+        ))
+        if not has_variable_concat:
+            found_raw_concat = False  # 리터럴 연결로 간주 → 안전
 
     # --- 2단계: 우선순위 기반 판정 ---
 
@@ -1590,6 +1980,14 @@ def analyze_repository_method(content: str, method_name: str,
         ))
         return ops
 
+    # [Phase 23] Kotlin SQL Builder 위임 탐지
+    # Java Repository → XxxKt.func(...) → Kotlin triple-quoted SQL with $var/${expr}
+    if source_dir:
+        kt_ops = _analyze_kotlin_sql_builder(method_body, source_dir,
+                                              tainted_names=tainted_names)
+        if kt_ops:
+            return kt_ops
+
     # 판정 불가
     ops.append(DbOperation(
         method=method_name,
@@ -1635,6 +2033,151 @@ def has_search_like_params(params: list) -> bool:
     return False
 
 
+def _extract_param_names(params: list) -> set:
+    """HTTP endpoint 파라미터 이름 집합 추출 (query/path/body type).
+
+    taint tracking: ${var} 변수명과 HTTP 파라미터명 교차 검증에 사용
+    """
+    names: set = set()
+    skip_types = {"User", "ServerWebExchange", "ServerHttpRequest",
+                  "ServerHttpResponse", "WebSession", "Authentication",
+                  "Principal", "Model", "BindingResult", "Errors"}
+    for p in params:
+        if not isinstance(p, dict):
+            continue
+        if p.get("type") in ("query", "path", "body", "pageable") \
+                and p.get("data_type", "") not in skip_types:
+            name = p.get("name", "")
+            if name:
+                names.add(name)
+    return names
+
+
+def _extract_call_args(body: str, method_name: str) -> list:
+    """메서드 호출에서 인자 문자열 목록 추출 (위치 인덱스 기반 taint 전파용).
+
+    괄호 depth 추적으로 중첩 호출(e.g. method(a, b.get(x), c)) 도 처리.
+    파싱 실패 시 빈 리스트 반환 (caller에서 fallback 처리).
+
+    [Phase 24 Fix] 탐색 우선순위:
+      1. '.methodName(' 패턴  — inter-layer 호출 (FeedQueryKt.funcName, repo.method 등)
+         선언부와 이름이 같아도 오탐 방지 (선언부는 도트 없음)
+      2. '= methodName(' / 'return methodName(' 패턴  — Kotlin 단일식 함수 위임
+      3. '\b methodName(' 폴백  — 기타 (직접 호출 등)
+    """
+    # 1. .methodName( 패턴 우선
+    m = re.search(rf'\.{re.escape(method_name)}\s*\(([^;]*?)\)', body)
+    if not m:
+        # 2. return/= methodName( 패턴
+        m = re.search(
+            rf'(?:return|=)\s+{re.escape(method_name)}\s*\(([^;]*?)\)',
+            body)
+    if not m:
+        # 3. word-boundary 폴백
+        m = re.search(rf'\b{re.escape(method_name)}\s*\(([^;]*?)\)', body)
+    if not m:
+        return []
+    args_str = m.group(1).strip()
+    if not args_str:
+        return []
+    # Depth-aware comma split
+    args: list = []
+    current: list = []
+    depth = 0
+    for ch in args_str:
+        if ch in ('(', '[', '{', '<'):
+            depth += 1
+            current.append(ch)
+        elif ch in (')', ']', '}', '>'):
+            depth -= 1
+            current.append(ch)
+        elif ch == ',' and depth == 0:
+            token = ''.join(current).strip()
+            if token:
+                args.append(token)
+            current = []
+        else:
+            current.append(ch)
+    token = ''.join(current).strip()
+    if token:
+        args.append(token)
+    return args
+
+
+def _get_method_param_names(content: str, method_name: str) -> list:
+    """메서드/함수 시그니처에서 파라미터 이름 목록을 순서대로 추출 (Java/Kotlin 공용).
+
+    Java:   Type name, @Annotation Type name, final Type name
+    Kotlin: name: Type, @Ann name: Type
+    """
+    m = re.search(
+        rf'\b{re.escape(method_name)}\s*\(([^)]*)\)',
+        content
+    )
+    if not m:
+        return []
+    params_str = m.group(1).strip()
+    if not params_str:
+        return []
+    params: list = []
+    for param in params_str.split(','):
+        param = param.strip()
+        # 어노테이션 제거: @PathVariable("id") String uid → String uid
+        param = re.sub(r'@\w+(?:\s*\([^)]*\))?\s*', '', param).strip()
+        # Kotlin 스타일: "name: Type" → name
+        if ':' in param:
+            name = param.split(':')[0].strip()
+        else:
+            # Java 스타일: "Type name" 또는 "final Type name"
+            parts = param.split()
+            name = parts[-1] if len(parts) >= 2 else ''
+        # 식별자 문자만 남기기
+        name = re.sub(r'[^A-Za-z_0-9]', '', name)
+        if name:
+            params.append(name)
+    return params
+
+
+def _propagate_taint_by_index(
+        caller_body: str,
+        callee_name: str,
+        callee_content: str,
+        tainted: set) -> set:
+    """호출 인자의 위치 인덱스 기반으로 taint를 callee 파라미터명으로 전파.
+
+    예:
+        caller:  feedService.getFeeds(uid, category, page)   # uid 오염
+        callee:  fun getFeeds(accountId: Long, ...)
+        결과:    {"accountId"}  (uid=arg[0] → accountId=param[0])
+
+    파싱 실패 시 (args/params 추출 불가):
+        보수적 폴백 → tainted.copy() 반환 (추적 유실 방지)
+    tainted 인자 없음 (파싱 성공 + 매칭 없음):
+        empty set 반환 (taint 미전파)
+    """
+    if not tainted:
+        return set()
+
+    args = _extract_call_args(caller_body, callee_name)
+    if not args:
+        return tainted.copy()  # 파싱 실패 → 보수적 유지
+
+    callee_params = _get_method_param_names(callee_content, callee_name)
+    if not callee_params:
+        return tainted.copy()  # 파싱 실패 → 보수적 유지
+
+    new_tainted: set = set()
+    for i, arg in enumerate(args):
+        if i >= len(callee_params):
+            break
+        for t in tainted:
+            if re.search(rf'\b{re.escape(t)}\b', arg):
+                new_tainted.add(callee_params[i])
+                break
+
+    return new_tainted  # 정상 파싱이지만 오염 인자 없으면 empty set
+
+
 def is_non_db_endpoint(endpoint: dict) -> bool:
     """DB 접근이 필요 없는 엔드포인트인지 판별"""
     mapping = endpoint.get("api", "")
@@ -1652,7 +2195,14 @@ def is_non_db_endpoint(endpoint: dict) -> bool:
 
 
 def judge_endpoint(trace_result: dict, endpoint: dict) -> dict:
-    """endpoint에 대한 최종 양호/취약/정보 판정"""
+    """endpoint에 대한 최종 양호/취약/정보 판정
+
+    판정 우선순위 (Worst-Case Override):
+      4: 취약(실제) — 확인된 taint 경로 (HTTP 파라미터 → ${} SQL 직접 삽입)
+      3: 취약(잠재) — 취약 구조이나 taint 미확인 (내부 값 삽입 또는 경로 불분명)
+      1: 정보        — 외부 의존성 호출 / XML 미발견 추정 / 추적 불가
+      0: 양호        — 안전한 DB 접근 패턴
+    """
 
     # [Phase 16] 제거(deprecated) 엔드포인트 → 양호
     handler = endpoint.get("handler", "")
@@ -1671,6 +2221,7 @@ def judge_endpoint(trace_result: dict, endpoint: dict) -> dict:
 
     has_user_params = has_db_input_params(params)
     has_search_params = has_search_like_params(params)
+    param_names = _extract_param_names(params)
 
     # 비DB 엔드포인트 (healthcheck, login 등) → 양호
     if is_non_db_endpoint(endpoint):
@@ -1685,13 +2236,20 @@ def judge_endpoint(trace_result: dict, endpoint: dict) -> dict:
             }
 
     if not db_ops:
-        # [Phase 11] 모든 Service가 비DB → 양호
+        # [Phase 11/20] 모든 Service가 비DB → 양호
+        # Phase 11: [non-DB]        = 서비스 클래스 자체가 DB 의존성 없음
+        # Phase 20: [non-DB method] = 서비스 클래스는 Mapper 보유하나 해당 메서드가 DB 미사용
         svc_calls = trace_result.get("service_calls", [])
-        if svc_calls and all("[non-DB]" in s for s in svc_calls):
+        if svc_calls and all("[non-DB" in s for s in svc_calls):
+            all_method_level = all("[non-DB method]" in s for s in svc_calls)
             return {
                 "result": "양호",
-                "diagnosis_type": "비DB Service",
-                "diagnosis_detail": "모든 Service가 DB 의존성 없음 (Repository/Mapper/Template 미보유)",
+                "diagnosis_type": "비DB Service 메서드" if all_method_level else "비DB Service",
+                "diagnosis_detail": (
+                    "해당 엔드포인트 처리 메서드가 DB 미사용 (Mapper 보유 Service이나 직접 DB 호출 없음)"
+                    if all_method_level else
+                    "모든 Service가 DB 의존성 없음 (Repository/Mapper/Template 미보유)"
+                ),
                 "filter_type": "N/A",
                 "filter_detail": "N/A",
                 "needs_review": False,
@@ -1760,122 +2318,272 @@ def judge_endpoint(trace_result: dict, endpoint: dict) -> dict:
             "needs_review": True,
         }
 
-    # 취약 패턴 존재 여부
-    vulnerable_ops = [op for op in db_ops if op.is_vulnerable]
-    safe_ops = [op for op in db_ops if not op.is_vulnerable and
-                op.access_type != "none"]
+    # ===================================================================
+    #  Worst-Case Override: 모든 db_ops 평가 후 최악 케이스 선택
+    #  우선순위: 취약(실제:4) > 취약(잠재:3) > 정보(1) > 양호(0)
+    # ===================================================================
 
-    if vulnerable_ops:
-        op = vulnerable_ops[0]
+    def _assess_op(op: DbOperation) -> dict:
+        """단일 DbOperation → (_priority 포함) 판정 결과 dict 반환."""
+        evidence = [{
+            "file": str(op.code_snippet),
+            "line": op.line,
+            "detail": op.detail,
+        }] if op.code_snippet else []
 
-        # 취약 판정 세분화:
-        # - Utils.toSql() + 검색 파라미터 → 취약
-        # - Utils.toSql() + Pageable만 → 정보 (sort 파라미터로 제한적)
-        # - Utils.toSql() + 파라미터 없음 → 정보
-        # - Raw concat + 사용자 입력 → 취약
-        # - Raw concat + 내부 파라미터만 → 정보
-        if op.access_type == "criteria_tosql":
-            if has_search_params:
-                result_str = "취약"
-                detail = op.detail
-            elif has_user_params:
-                result_str = "정보"
-                detail = op.detail + " (사용자 입력값이 Criteria에 간접 전달될 수 있음)"
+        # ----- Kotlin SQL Builder (Phase 23/24) -----
+        if op.access_type in ("kotlin_template_sqli", "kotlin_var_sqli"):
+            var_name = _extract_kt_sql_varname(op)
+            # [Phase 24] positional taint 추적 결과 우선 사용; 없으면 이름 기반 폴백
+            if op.taint_confirmed is not None:
+                taint_ok = op.taint_confirmed
+            elif var_name and var_name not in _KT_KEYWORDS:
+                # 단순 $var 또는 ${simpleId} 케이스: 이름 직접 매칭
+                taint_ok = var_name in param_names if param_names else has_user_params
             else:
-                result_str = "정보"
-                detail = op.detail + " (사용자 입력 파라미터 없어 직접 입력 불가)"
-        elif op.access_type == "raw_concat":
-            if has_search_params:
-                result_str = "취약"
-                detail = op.detail
-            elif has_user_params:
-                result_str = "정보"
-                detail = op.detail + " (사용자 파라미터가 SQL 결합에 도달하는지 수동 확인 필요)"
-            else:
-                result_str = "정보"
-                detail = op.detail + " (사용자 입력 파라미터 없음)"
-        elif op.access_type in ("mybatis_unsafe", "ibatis_unsafe"):
-            # MyBatis/iBatis ${} 사용 → 동적 바인딩 예외 + 검색 파라미터 기준 판정
-            is_dynamic_binding = "동적 바인딩" in op.detail
-            if is_dynamic_binding:
-                # ORDER BY ${col} 등 기능상 불가피한 동적 바인딩
-                if has_search_params:
-                    result_str = "정보"
-                    detail = op.detail + " (동적 바인딩 + 사용자 입력 존재 - 수동 검증 필요)"
-                elif has_user_params:
-                    result_str = "정보"
-                    detail = op.detail + " (동적 바인딩 - 사용자 입력 도달 여부 수동 확인 필요)"
+                # 복잡한 ${if(x==...) ... else x} 표현식: detail에서 모든 비-키워드 식별자 추출
+                if op.access_type == "kotlin_template_sqli":
+                    m_expr = re.search(r'\$\{([^}]+)\}', op.detail)
+                    expr_ids = (set(re.findall(r'\b([A-Za-z_]\w*)\b', m_expr.group(1)))
+                                - _KT_KEYWORDS) if m_expr else set()
+                    taint_ok = bool(expr_ids & param_names) if (expr_ids and param_names) \
+                        else has_user_params
                 else:
-                    result_str = "정보"
-                    detail = op.detail + " (동적 바인딩 - 사용자 입력 파라미터 없음)"
-            elif has_search_params:
-                result_str = "취약"
-                detail = op.detail
-            elif has_user_params:
-                result_str = "취약"
-                detail = op.detail + " (사용자 입력이 ${} 치환에 도달 가능)"
+                    taint_ok = has_user_params
+            if op.access_type == "kotlin_template_sqli":
+                filter_val = f"${{{var_name}}}" if (var_name and var_name not in _KT_KEYWORDS) \
+                    else "${...}"
             else:
-                result_str = "정보"
-                detail = op.detail + " (사용자 입력 파라미터 없음)"
-        else:
-            result_str = "취약" if has_user_params else "정보"
-            detail = op.detail
+                filter_val = f"${var_name}" if var_name else "$var"
+            if taint_ok:
+                if op.taint_confirmed is True:
+                    suffix = (f" (HTTP 파라미터 인덱스 추적: '{var_name}' → SQL 직접 삽입 확인)"
+                              if (var_name and var_name not in _KT_KEYWORDS)
+                              else " (HTTP 파라미터 인덱스 추적: SQL 삽입 경로 확인)")
+                else:
+                    suffix = (f" (HTTP 파라미터 '{var_name}' → SQL 직접 삽입 확인)"
+                              if (var_name and var_name not in _KT_KEYWORDS)
+                              else " (HTTP 파라미터 → SQL 삽입 경로 확인)")
+                return {
+                    "_priority": 4,
+                    "result": "취약",
+                    "diagnosis_type": "[실제] SQL Injection - Kotlin 문자열 보간",
+                    "diagnosis_detail": op.detail + suffix,
+                    "filter_type": "kotlin",
+                    "filter_detail": filter_val,
+                    "needs_review": False,
+                    "evidence": evidence,
+                }
+            else:
+                return {
+                    "_priority": 3,
+                    "result": "취약",
+                    "diagnosis_type": "[잠재] 취약한 쿼리 구조 - Kotlin 문자열 보간",
+                    "diagnosis_detail": op.detail + " (HTTP 파라미터 도달 여부 수동 확인 필요)",
+                    "filter_type": "kotlin",
+                    "filter_detail": filter_val,
+                    "needs_review": True,
+                    "evidence": evidence,
+                }
 
-        filter_type = "N/A"
-        filter_detail = "N/A"
+        # ----- Utils.toSql() -----
         if op.access_type == "criteria_tosql":
+            if has_search_params:
+                return {
+                    "_priority": 4,
+                    "result": "취약",
+                    "diagnosis_type": "[실제] SQL Injection - Utils.toSql() 동적 쿼리",
+                    "diagnosis_detail": op.detail,
+                    "filter_type": "r2dbc",
+                    "filter_detail": "toSql()",
+                    "needs_review": False,
+                    "evidence": evidence,
+                }
+            elif has_user_params:
+                return {
+                    "_priority": 3,
+                    "result": "취약",
+                    "diagnosis_type": "[잠재] 취약한 쿼리 구조 - Utils.toSql()",
+                    "diagnosis_detail": op.detail + " (사용자 입력값이 Criteria에 간접 전달될 수 있음)",
+                    "filter_type": "r2dbc",
+                    "filter_detail": "toSql()",
+                    "needs_review": True,
+                    "evidence": evidence,
+                }
+            else:
+                return {
+                    "_priority": 1,
+                    "result": "정보",
+                    "diagnosis_type": "Utils.toSql() - 사용자 입력 없음",
+                    "diagnosis_detail": op.detail + " (사용자 입력 파라미터 없어 직접 입력 불가)",
+                    "filter_type": "r2dbc",
+                    "filter_detail": "toSql()",
+                    "needs_review": False,
+                    "evidence": evidence,
+                }
+
+        # ----- Raw SQL Concat -----
+        if op.access_type == "raw_concat":
+            if has_search_params:
+                return {
+                    "_priority": 4,
+                    "result": "취약",
+                    "diagnosis_type": "[실제] SQL Injection - Raw SQL 문자열 결합",
+                    "diagnosis_detail": op.detail,
+                    "filter_type": "N/A",
+                    "filter_detail": "N/A",
+                    "needs_review": False,
+                    "evidence": evidence,
+                }
+            elif has_user_params:
+                return {
+                    "_priority": 3,
+                    "result": "취약",
+                    "diagnosis_type": "[잠재] 취약한 쿼리 구조 - Raw SQL 결합",
+                    "diagnosis_detail": op.detail + " (사용자 파라미터가 SQL 결합에 도달하는지 수동 확인 필요)",
+                    "filter_type": "N/A",
+                    "filter_detail": "N/A",
+                    "needs_review": True,
+                    "evidence": evidence,
+                }
+            else:
+                return {
+                    "_priority": 1,
+                    "result": "정보",
+                    "diagnosis_type": "Raw SQL 결합 - 사용자 입력 없음",
+                    "diagnosis_detail": op.detail + " (사용자 입력 파라미터 없음)",
+                    "filter_type": "N/A",
+                    "filter_detail": "N/A",
+                    "needs_review": False,
+                    "evidence": evidence,
+                }
+
+        # ----- MyBatis / iBatis ${} -----
+        if op.access_type in ("mybatis_unsafe", "ibatis_unsafe"):
+            is_dynamic = "동적 바인딩" in op.detail
+            # detail에서 변수명 추출하여 taint 교차 검증
+            m_vars = re.search(r'\(변수:\s*([^)]+)\)', op.detail)
+            mybatis_vars = (
+                {v.strip() for v in m_vars.group(1).split(',')} if m_vars else set()
+            )
+            if mybatis_vars and param_names:
+                taint_ok = bool(mybatis_vars & param_names)
+            else:
+                taint_ok = has_user_params
+            if is_dynamic:
+                return {
+                    "_priority": 3,
+                    "result": "취약",
+                    "diagnosis_type": "[잠재] 취약한 쿼리 구조 - MyBatis 동적 바인딩",
+                    "diagnosis_detail": op.detail + " (동적 바인딩 - 사용자 입력 도달 여부 수동 확인 필요)",
+                    "filter_type": "mybatis",
+                    "filter_detail": "${}",
+                    "needs_review": True,
+                    "evidence": evidence,
+                }
+            elif taint_ok:
+                return {
+                    "_priority": 4,
+                    "result": "취약",
+                    "diagnosis_type": "[실제] SQL Injection - MyBatis ${} 직접 삽입",
+                    "diagnosis_detail": op.detail,
+                    "filter_type": "mybatis",
+                    "filter_detail": "${}",
+                    "needs_review": False,
+                    "evidence": evidence,
+                }
+            else:
+                return {
+                    "_priority": 3,
+                    "result": "취약",
+                    "diagnosis_type": "[잠재] 취약한 쿼리 구조 - MyBatis ${} 직접 삽입",
+                    "diagnosis_detail": op.detail + " (사용자 입력 파라미터 없음 - 내부 값 삽입)",
+                    "filter_type": "mybatis",
+                    "filter_detail": "${}",
+                    "needs_review": False,
+                    "evidence": evidence,
+                }
+
+        # ----- [Requirement 2] 양호 추정 → 정보 강등 -----
+        if op.access_type == "external_module":
+            return {
+                "_priority": 1,
+                "result": "정보",
+                "diagnosis_type": "외부 의존성 호출",
+                "diagnosis_detail": op.detail + " (외부 모듈 의존 - 실제 구현 수동 확인 필요)",
+                "filter_type": "N/A",
+                "filter_detail": "external",
+                "needs_review": True,
+                "evidence": evidence,
+            }
+
+        if op.access_type == "mybatis_safe" and "추정" in op.detail:
+            return {
+                "_priority": 1,
+                "result": "정보",
+                "diagnosis_type": "XML 미발견 패턴 추정",
+                "diagnosis_detail": op.detail + " (XML 미발견으로 안전 추정 - 수동 검증 권장)",
+                "filter_type": "mybatis",
+                "filter_detail": "#{}(추정)",
+                "needs_review": True,
+                "evidence": evidence,
+            }
+
+        # ----- none (DB 접근 없음) -----
+        if op.access_type == "none":
+            return {
+                "_priority": 0,
+                "result": "양호",
+                "diagnosis_type": "DB 접근 없음",
+                "diagnosis_detail": "Repository 메서드에서 직접 DB 접근 없음",
+                "filter_type": "N/A",
+                "filter_detail": "N/A",
+                "needs_review": False,
+                "evidence": evidence,
+            }
+
+        # ----- 안전 패턴 → 양호 -----
+        if not op.is_vulnerable:
             filter_type = "r2dbc"
-            filter_detail = "toSql()"
-        elif op.access_type in ("mybatis_unsafe", "ibatis_unsafe"):
-            filter_type = "mybatis"
-            filter_detail = "${}"
-
-        return {
-            "result": result_str,
-            "diagnosis_type": op.detail.split(":")[0].strip() if ":" in op.detail else op.access_type,
-            "diagnosis_detail": detail,
-            "filter_type": filter_type,
-            "filter_detail": filter_detail,
-            "needs_review": result_str == "정보" and has_user_params,
-            "evidence": [{
-                "file": str(op.code_snippet),
-                "line": op.line,
-                "detail": op.detail,
-            }] if op.code_snippet else [],
-        }
-
-    if safe_ops:
-        op = safe_ops[0]
-        filter_type = "r2dbc"
-        filter_detail = ":"
-        if op.access_type == "orm":
-            filter_detail = "orm"
-        elif op.access_type == "criteria":
-            filter_detail = "criteria"
-        elif op.access_type == "bind":
             filter_detail = ":"
-        elif op.access_type == "jpa_builtin":
-            filter_type = "jpa"
-            filter_detail = "built-in"
-        elif op.access_type in ("mybatis_safe", "ibatis_safe"):
-            filter_type = "mybatis"
-            filter_detail = "#{}"
-        elif op.access_type == "external_module":
-            filter_type = "N/A"
-            filter_detail = "external"
+            if op.access_type == "orm":
+                filter_detail = "orm"
+            elif op.access_type == "criteria":
+                filter_detail = "criteria"
+            elif op.access_type == "bind":
+                filter_detail = ":"
+            elif op.access_type == "jpa_builtin":
+                filter_type = "jpa"
+                filter_detail = "built-in"
+            elif op.access_type in ("mybatis_safe", "ibatis_safe"):
+                filter_type = "mybatis"
+                filter_detail = "#{}"
+            return {
+                "_priority": 0,
+                "result": "양호",
+                "diagnosis_type": op.detail,
+                "diagnosis_detail": op.detail,
+                "filter_type": filter_type,
+                "filter_detail": filter_detail,
+                "needs_review": False,
+                "evidence": evidence,
+            }
 
+        # Unknown vulnerable (기타 취약 패턴)
         return {
-            "result": "양호",
-            "diagnosis_type": op.detail,
+            "_priority": 2,
+            "result": "취약",
+            "diagnosis_type": "[실제] SQL Injection - 기타 패턴",
             "diagnosis_detail": op.detail,
-            "filter_type": filter_type,
-            "filter_detail": filter_detail,
-            "needs_review": op.access_type == "external_module",
+            "filter_type": "N/A",
+            "filter_detail": "N/A",
+            "needs_review": True,
+            "evidence": evidence,
         }
 
-    # DB 접근 없음
-    no_db_ops = [op for op in db_ops if op.access_type == "none"]
-    if no_db_ops:
+    # DB 접근 없음 (none only) → 유형4 판정
+    non_none_ops = [op for op in db_ops if op.access_type != "none"]
+    if not non_none_ops:
         if not has_user_params:
             return {
                 "result": "양호",
@@ -1894,15 +2602,20 @@ def judge_endpoint(trace_result: dict, endpoint: dict) -> dict:
             "needs_review": False,
         }
 
-    # unknown
-    return {
-        "result": "정보",
-        "diagnosis_type": "자동 판정 불가",
-        "diagnosis_detail": "자동 판정 불가 - 수동 검토 필요",
-        "filter_type": "N/A",
-        "filter_detail": "N/A",
-        "needs_review": True,
-    }
+    # Worst-Case Override: 모든 op 평가 후 최악 케이스 선택
+    assessed = [_assess_op(op) for op in db_ops]
+    if not assessed:
+        return {
+            "result": "정보",
+            "diagnosis_type": "자동 판정 불가",
+            "diagnosis_detail": "자동 판정 불가 - 수동 검토 필요",
+            "filter_type": "N/A",
+            "filter_detail": "N/A",
+            "needs_review": True,
+        }
+    best = max(assessed, key=lambda x: x["_priority"])
+    del best["_priority"]
+    return best
 
 
 # ============================================================
@@ -2086,7 +2799,7 @@ def run_diagnosis(source_dir: Path, inventory_path: Path,
             "total_classes_indexed": len(class_index),
             "total_mybatis_mappings": len(mybatis_index),
             "scanned_at": datetime.now().isoformat(),
-            "script_version": "3.4.0",
+            "script_version": "4.5.2",
         },
         "endpoint_diagnoses": [asdict(d) for d in diagnoses],
         "global_findings": global_findings,
