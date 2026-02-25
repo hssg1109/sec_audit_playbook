@@ -54,8 +54,11 @@ REMOTE_NAME = "bitbucket"
 REMOTE_HTTP = f"{BITBUCKET_URL}/scm/{PROJECT_KEY}/{REPO_SLUG}.git"
 API_BASE = f"{BITBUCKET_URL}/rest/api/1.0/projects/{PROJECT_KEY}/repos/{REPO_SLUG}"
 
-# Bitbucket에 포함할 디렉토리/파일
+# Bitbucket에 포함할 디렉토리
 INCLUDE_PATHS = ["skills", "tools"]
+
+# Bitbucket에 포함할 루트 단일 파일
+INCLUDE_FILES = ["RELEASENOTE.md", "TODO.md"]
 
 # WSL2 환경에서는 powershell.exe를 통해 push (사내망 접근)
 USE_POWERSHELL = True
@@ -207,7 +210,7 @@ def create_incremental_commit(repo_root, message):
             run("git checkout main", cwd=tmpdir)
 
         # 2. 대상 파일 복사 (기존 내용 교체)
-        print("[2/4] skills/, tools/ 복사...")
+        print("[2/4] skills/, tools/ 및 루트 문서 복사...")
         for path in INCLUDE_PATHS:
             dst = os.path.join(tmpdir, path)
             if os.path.exists(dst):
@@ -217,6 +220,13 @@ def create_incremental_commit(repo_root, message):
                 shutil.copytree(src, dst)
             else:
                 print(f"  [WARN] {path} 경로가 존재하지 않습니다.", file=sys.stderr)
+
+        for fname in INCLUDE_FILES:
+            src = os.path.join(repo_root, fname)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(tmpdir, fname))
+            else:
+                print(f"  [WARN] {fname} 파일이 존재하지 않습니다.", file=sys.stderr)
 
         # 3. README.md 생성
         print("[3/4] README.md 생성...")
@@ -376,6 +386,10 @@ def show_diff_summary(repo_root):
             print(f"  {path}/ : {count} files")
         else:
             print(f"  {path}/ : [NOT FOUND]")
+    for fname in INCLUDE_FILES:
+        full = os.path.join(repo_root, fname)
+        status = "OK" if os.path.isfile(full) else "NOT FOUND"
+        print(f"  {fname} : {status}")
     print(f"  README.md : 정책보고서 기반 자동 생성")
 
     # 이전 히스토리 ref 상태 표시
