@@ -23,11 +23,21 @@ Bitbucket Push Automation Script
 
 환경변수:
   BITBUCKET_TOKEN  - HTTP Access Token (--token 대신 사용 가능)
+
+
+
+사용법 (tag 포함):
+  # push 후 v4.5.2 태그 생성 (RELEASENOTE.md에서 릴리즈 노트 자동 추출)
+  python push_bitbucket.py --token <TOKEN> --tag v4.5.2
+
+  # 릴리즈 노트 직접 지정
+  python push_bitbucket.py --token <TOKEN> --tag v4.5.2 --release-notes "버그 수정"
 """
 
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -69,6 +79,95 @@ def get_repo_root():
     """Get the git repository root directory."""
     result = run("git rev-parse --show-toplevel")
     return result.stdout.strip()
+
+
+def parse_release_notes(repo_root, version):
+    """RELEASENOTE.md에서 특정 버전의 릴리즈 노트 섹션을 추출.
+
+    ## [v4.5.2] - 2026-02-25 형식의 헤더를 찾아 다음 ## 헤더 전까지 반환.
+    버전을 찾지 못하면 빈 문자열 반환.
+    """
+    note_path = os.path.join(repo_root, "RELEASENOTE.md")
+    if not os.path.isfile(note_path):
+        return ""
+    with open(note_path, encoding="utf-8") as f:
+        content = f.read()
+    # ## [v4.5.2] 또는 ## [4.5.2] 형식 모두 허용
+    ver_escaped = re.escape(version.lstrip("v"))
+    pattern = rf"## \[v?{ver_escaped}\][^\n]*\n(.*?)(?=\n## \[|\Z)"
+    m = re.search(pattern, content, re.DOTALL)
+    return m.group(1).strip() if m else ""
+
+
+def create_bitbucket_tag(token, tag_name, commit_hash, release_notes):
+    """Bitbucket Server REST API로 annotated tag 생성.
+
+    tag 메시지 = "Release {tag_name}\\n\\n{release_notes}"
+    JSON body를 임시 파일로 저장 후 PowerShell로 POST (Unicode 안전).
+    """
+    repo_root = get_repo_root()
+    tag_message = f"Release {tag_name}\n\n{release_notes}" if release_notes \
+        else f"Release {tag_name}"
+
+    tag_data = {
+        "name": tag_name,
+        "startPoint": commit_hash,
+        "message": tag_message,
+        "type": "ANNOTATED",
+    }
+    url = f"{API_BASE}/tags"
+
+    # JSON을 임시 파일로 저장 (한글 등 Unicode 안전 처리)
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", encoding="utf-8", delete=False
+    )
+    json.dump(tag_data, tmp, ensure_ascii=False)
+    tmp.close()
+
+    try:
+        if USE_POWERSHELL:
+            repo_root_win = repo_root.replace("/mnt/g", "G:")
+            # WSL /tmp → Windows \\wsl$\Ubuntu\tmp 경로 변환
+            json_path_win = tmp.name.replace("/tmp/", "\\\\wsl$\\Ubuntu\\tmp\\")
+            cmd = (
+                f'powershell.exe -Command "'
+                f"$body = [System.IO.File]::ReadAllText('{json_path_win}', "
+                f"[System.Text.Encoding]::UTF8); "
+                f"Invoke-RestMethod -Uri '{url}' "
+                f"-Method POST "
+                f"-ContentType 'application/json; charset=utf-8' "
+                f"-Headers @{{'Authorization'='Bearer {token}'}} "
+                f"-Body ([System.Text.Encoding]::UTF8.GetBytes($body))"
+                f'"'
+            )
+            result = run(cmd, check=False)
+            if result.returncode == 0:
+                print(f"  [TAG] {tag_name} 생성 완료")
+                return True
+            else:
+                print(f"  [ERROR] Tag 생성 실패:\n{result.stderr}", file=sys.stderr)
+                return False
+        else:
+            data = json.dumps(tag_data, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=data, method="POST",
+                headers={
+                    "Content-Type": "application/json; charset=utf-8",
+                    "Authorization": f"Bearer {token}",
+                },
+            )
+            try:
+                resp = urllib.request.urlopen(req, timeout=15)
+                tag_result = json.loads(resp.read())
+                print(f"  [TAG] {tag_name} 생성 완료: "
+                      f"{tag_result.get('displayId', tag_name)}")
+                return True
+            except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+                print(f"  [ERROR] Tag 생성 실패 ({e.code}): {body}", file=sys.stderr)
+                return False
+    finally:
+        os.unlink(tmp.name)
 
 
 def generate_readme(repo_root):
@@ -346,6 +445,19 @@ def main():
         "--reset-history", action="store_true",
         help="로컬 히스토리 ref 초기화 후 orphan 커밋으로 재시작 (force push)"
     )
+    parser.add_argument(
+        "--tag", "-T",
+        default=None,
+        metavar="VERSION",
+        help="push 후 Bitbucket annotated tag 생성 (예: v4.5.2). "
+             "RELEASENOTE.md에서 해당 버전 릴리즈 노트를 자동 추출."
+    )
+    parser.add_argument(
+        "--release-notes",
+        default=None,
+        metavar="TEXT",
+        help="tag 릴리즈 노트 직접 지정 (기본: RELEASENOTE.md 자동 추출)"
+    )
     args = parser.parse_args()
 
     if not args.token:
@@ -409,6 +521,20 @@ def main():
         if ok:
             print(f"\n[DONE] Bitbucket push 완료!")
             print(f"  URL: {BITBUCKET_URL}/projects/{PROJECT_KEY}/repos/{REPO_SLUG}/browse")
+
+            # --tag: push 성공 후 annotated tag 생성
+            if args.tag:
+                pushed_hash = run(
+                    f"git rev-parse {BB_HISTORY_REF}", cwd=repo_root
+                ).stdout.strip()
+                notes = args.release_notes or parse_release_notes(repo_root, args.tag)
+                if not notes:
+                    print(f"  [WARN] RELEASENOTE.md에서 {args.tag} 섹션을 찾지 못했습니다. "
+                          f"tag 메시지 없이 생성합니다.", file=sys.stderr)
+                print(f"\n== Tag 생성: {args.tag} ==")
+                create_bitbucket_tag(args.token, args.tag, pushed_hash, notes)
+                print(f"  Tags: {BITBUCKET_URL}/projects/{PROJECT_KEY}"
+                      f"/repos/{REPO_SLUG}/tags")
         else:
             print("\n[FAIL] Push 실패. 네트워크 및 토큰을 확인하세요.", file=sys.stderr)
             sys.exit(1)
