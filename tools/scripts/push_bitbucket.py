@@ -160,24 +160,16 @@ def create_bitbucket_tag(token, tag_name, commit_hash, release_notes):
 
 
 def generate_readme(repo_root):
-    """Generate Bitbucket README.md from policy report or template."""
-    source = os.path.join(repo_root, "docs", "정책보고서.md")
+    """루트 README.md를 그대로 사용. 없으면 최소 템플릿 반환."""
+    source = os.path.join(repo_root, "README.md")
     if os.path.exists(source):
         with open(source, "r", encoding="utf-8") as f:
-            content = f.read()
-        header = (
-            "# AI-SEC-OPS Playbook — Team Shared Assets\n\n"
-            "> 이 저장소는 보안진단 자동화 프로젝트의 **팀 공유 자산**(skills/, tools/)을 관리합니다.\n"
-            "> 전체 프로젝트 워크스페이스는 별도 GitHub 저장소에서 관리됩니다.\n\n"
-            "---\n\n"
-        )
-        return header + content
-    else:
-        return (
-            "# AI-SEC-OPS Playbook — Team Shared Assets\n\n"
-            "- `skills/` — 진단 기준, 정책, 스키마, 프롬프트, 탐지 룰\n"
-            "- `tools/` — 실행 스크립트, 자동화 도구\n"
-        )
+            return f.read()
+    return (
+        "# AI-SEC-OPS Playbook — Team Shared Assets\n\n"
+        "- `skills/` — 진단 기준, 정책, 스키마, 프롬프트, 탐지 룰\n"
+        "- `tools/` — 실행 스크립트, 자동화 도구\n"
+    )
 
 
 def create_incremental_commit(repo_root, message):
