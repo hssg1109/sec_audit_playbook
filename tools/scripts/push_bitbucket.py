@@ -64,10 +64,11 @@ USE_POWERSHELL = True
 BB_HISTORY_REF = "refs/bb-push/main"
 
 
-def run(cmd, capture=True, check=True, cwd=None):
-    """Run a shell command."""
+def run(cmd, capture=True, check=True, cwd=None, shell=True):
+    """Run a shell command. cmd이 list이면 shell=False로 직접 실행."""
     result = subprocess.run(
-        cmd, shell=True, capture_output=capture, text=True, cwd=cwd
+        cmd, shell=shell, capture_output=capture, text=True,
+        encoding="utf-8", errors="replace", cwd=cwd
     )
     if check and result.returncode != 0:
         print(f"[ERROR] {cmd}\n{result.stderr}", file=sys.stderr)
@@ -102,10 +103,9 @@ def parse_release_notes(repo_root, version):
 def create_bitbucket_tag(token, tag_name, commit_hash, release_notes):
     """Bitbucket Server REST API로 annotated tag 생성.
 
-    tag 메시지 = "Release {tag_name}\\n\\n{release_notes}"
-    JSON body를 임시 파일로 저장 후 PowerShell로 POST (Unicode 안전).
+    json.dumps() 기본값(ensure_ascii=True)으로 모든 비-ASCII를 \\uXXXX 이스케이프하여
+    PowerShell 인코딩 문제 없이 인라인 전달 (create_pull_request 와 동일 패턴).
     """
-    repo_root = get_repo_root()
     tag_message = f"Release {tag_name}\n\n{release_notes}" if release_notes \
         else f"Release {tag_name}"
 
@@ -116,58 +116,44 @@ def create_bitbucket_tag(token, tag_name, commit_hash, release_notes):
         "type": "ANNOTATED",
     }
     url = f"{API_BASE}/tags"
+    # 단따옴표 이스케이프 (PowerShell 인라인 문자열 안전)
+    body_str = json.dumps(tag_data).replace("'", "''")
 
-    # JSON을 임시 파일로 저장 (한글 등 Unicode 안전 처리)
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", encoding="utf-8", delete=False
-    )
-    json.dump(tag_data, tmp, ensure_ascii=False)
-    tmp.close()
-
-    try:
-        if USE_POWERSHELL:
-            repo_root_win = repo_root.replace("/mnt/g", "G:")
-            # WSL /tmp → Windows \\wsl$\Ubuntu\tmp 경로 변환
-            json_path_win = tmp.name.replace("/tmp/", "\\\\wsl$\\Ubuntu\\tmp\\")
-            cmd = (
-                f'powershell.exe -Command "'
-                f"$body = [System.IO.File]::ReadAllText('{json_path_win}', "
-                f"[System.Text.Encoding]::UTF8); "
-                f"Invoke-RestMethod -Uri '{url}' "
-                f"-Method POST "
-                f"-ContentType 'application/json; charset=utf-8' "
-                f"-Headers @{{'Authorization'='Bearer {token}'}} "
-                f"-Body ([System.Text.Encoding]::UTF8.GetBytes($body))"
-                f'"'
-            )
-            result = run(cmd, check=False)
-            if result.returncode == 0:
-                print(f"  [TAG] {tag_name} 생성 완료")
-                return True
-            else:
-                print(f"  [ERROR] Tag 생성 실패:\n{result.stderr}", file=sys.stderr)
-                return False
+    if USE_POWERSHELL:
+        # shell=False + list 방식: 백틱/달러 등 특수문자가 sh에서 해석되지 않도록
+        ps_cmd = (
+            f"Invoke-RestMethod -Uri '{url}' "
+            f"-Method POST "
+            f"-ContentType 'application/json' "
+            f"-Headers @{{'Authorization'='Bearer {token}'}} "
+            f"-Body '{body_str}'"
+        )
+        result = run(['powershell.exe', '-Command', ps_cmd], shell=False, check=False)
+        if result.returncode == 0:
+            print(f"  [TAG] {tag_name} 생성 완료")
+            return True
         else:
-            data = json.dumps(tag_data, ensure_ascii=False).encode("utf-8")
-            req = urllib.request.Request(
-                url, data=data, method="POST",
-                headers={
-                    "Content-Type": "application/json; charset=utf-8",
-                    "Authorization": f"Bearer {token}",
-                },
-            )
-            try:
-                resp = urllib.request.urlopen(req, timeout=15)
-                tag_result = json.loads(resp.read())
-                print(f"  [TAG] {tag_name} 생성 완료: "
-                      f"{tag_result.get('displayId', tag_name)}")
-                return True
-            except urllib.error.HTTPError as e:
-                body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-                print(f"  [ERROR] Tag 생성 실패 ({e.code}): {body}", file=sys.stderr)
-                return False
-    finally:
-        os.unlink(tmp.name)
+            print(f"  [ERROR] Tag 생성 실패:\n{result.stderr}", file=sys.stderr)
+            return False
+    else:
+        data = json.dumps(tag_data, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=data, method="POST",
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "Authorization": f"Bearer {token}",
+            },
+        )
+        try:
+            resp = urllib.request.urlopen(req, timeout=15)
+            tag_result = json.loads(resp.read())
+            print(f"  [TAG] {tag_name} 생성 완료: "
+                  f"{tag_result.get('displayId', tag_name)}")
+            return True
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+            print(f"  [ERROR] Tag 생성 실패 ({e.code}): {body}", file=sys.stderr)
+            return False
 
 
 def generate_readme(repo_root):
