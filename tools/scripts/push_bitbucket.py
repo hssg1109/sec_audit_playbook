@@ -3,6 +3,7 @@
 Bitbucket Push Automation Script
 =================================
 정책(SCM-2026-001)에 따라 skills/와 tools/만 Bitbucket에 push한다.
+매 push마다 이전 커밋 위에 증분 커밋을 쌓아 히스토리를 보존한다.
 
 사용법:
   # 직접 main push (1인 운영 / 긴급 배포)
@@ -16,6 +17,9 @@ Bitbucket Push Automation Script
 
   # dry-run (push 없이 확인만)
   python push_bitbucket.py --token <TOKEN> --dry-run
+
+  # 히스토리 초기화 후 재시작 (force push)
+  python push_bitbucket.py --token <TOKEN> --reset-history
 
 환경변수:
   BITBUCKET_TOKEN  - HTTP Access Token (--token 대신 사용 가능)
@@ -45,6 +49,9 @@ INCLUDE_PATHS = ["skills", "tools"]
 
 # WSL2 환경에서는 powershell.exe를 통해 push (사내망 접근)
 USE_POWERSHELL = True
+
+# 로컬 repo에 이전 Bitbucket 커밋을 기억하는 ref (히스토리 보존용)
+BB_HISTORY_REF = "refs/bb-push/main"
 
 
 def run(cmd, capture=True, check=True, cwd=None):
@@ -85,21 +92,42 @@ def generate_readme(repo_root):
         )
 
 
-def create_orphan_commit(repo_root, message):
-    """별도 임시 디렉토리에서 orphan 커밋을 생성하여 원본 워크트리를 보호."""
+def create_incremental_commit(repo_root, message):
+    """이전 Bitbucket 커밋 위에 증분 커밋을 생성.
+
+    BB_HISTORY_REF 가 존재하면 그 커밋을 부모로 삼아 새 커밋을 쌓는다.
+    존재하지 않으면(첫 push 또는 --reset-history) orphan 커밋으로 시작한다.
+
+    Returns:
+        (tmpdir, commit_hash)  — 변경사항 없으면 commit_hash=None
+    """
     tmpdir = tempfile.mkdtemp(prefix="bb_push_")
     try:
-        # 1. 임시 디렉토리에 bare-style git init
-        print("[1/4] 임시 디렉토리에서 orphan 커밋 준비...")
+        # 이전 history ref 확인
+        result = run(f"git rev-parse {BB_HISTORY_REF}", cwd=repo_root, check=False)
+        has_history = result.returncode == 0
+        prev_hash = result.stdout.strip() if has_history else None
+
+        print(f"[1/4] {'이전 커밋 이어받기' if has_history else 'orphan 커밋 준비 (첫 push)'} ...")
         run("git init", cwd=tmpdir)
         run("git config user.email 'push_bitbucket@automation'", cwd=tmpdir)
         run("git config user.name 'push_bitbucket'", cwd=tmpdir)
 
-        # 2. 대상 파일 복사
+        if has_history:
+            # 이전 커밋을 tmpdir 로 가져와 체크아웃
+            run(
+                f"git fetch {repo_root} {BB_HISTORY_REF}:refs/heads/main",
+                cwd=tmpdir,
+            )
+            run("git checkout main", cwd=tmpdir)
+
+        # 2. 대상 파일 복사 (기존 내용 교체)
         print("[2/4] skills/, tools/ 복사...")
         for path in INCLUDE_PATHS:
-            src = os.path.join(repo_root, path)
             dst = os.path.join(tmpdir, path)
+            if os.path.exists(dst):
+                shutil.rmtree(dst)
+            src = os.path.join(repo_root, path)
             if os.path.isdir(src):
                 shutil.copytree(src, dst)
             else:
@@ -111,14 +139,19 @@ def create_orphan_commit(repo_root, message):
         with open(os.path.join(tmpdir, "README.md"), "w", encoding="utf-8") as f:
             f.write(readme_content)
 
-        # 4. 커밋
+        # 4. 변경 여부 확인 후 커밋
         print("[4/4] 커밋 생성...")
         run("git add -A", cwd=tmpdir)
-        run(f'git commit -m "{message}"', cwd=tmpdir)
+        status = run("git status --porcelain", cwd=tmpdir)
+        if not status.stdout.strip():
+            print("  [SKIP] 변경사항 없음 — 커밋 생략")
+            return tmpdir, None
 
+        run(f'git commit -m "{message}"', cwd=tmpdir)
         result = run("git rev-parse HEAD", cwd=tmpdir)
         commit_hash = result.stdout.strip()
-        print(f"  commit: {commit_hash[:8]}")
+        parent_info = f"parent: {prev_hash[:8]}" if prev_hash else "orphan"
+        print(f"  commit: {commit_hash[:8]} ({parent_info})")
 
         return tmpdir, commit_hash
     except Exception:
@@ -127,34 +160,14 @@ def create_orphan_commit(repo_root, message):
 
 
 def push_to_bitbucket(token, tmpdir, remote_branch, force=False):
-    """Push to Bitbucket. WSL2에서는 PowerShell 경유."""
+    """Push to Bitbucket. WSL2에서는 PowerShell 경유.
+
+    성공 시 BB_HISTORY_REF 를 새 커밋 해시로 업데이트한다.
+    """
     force_flag = "--force" if force else ""
-
-    # remote 설정
-    run(f"git remote add origin {REMOTE_HTTP}", cwd=tmpdir, check=False)
-
-    if USE_POWERSHELL:
-        # WSL2: tmpdir를 Windows 경로로 변환
-        # /tmp/... 는 WSL 내부 경로이므로 \\wsl$\ 경로 사용
-        win_tmpdir = tmpdir.replace("/tmp/", "\\\\wsl$\\Ubuntu\\tmp\\")
-        cmd = (
-            f'powershell.exe -Command "'
-            f"cd '{win_tmpdir}'; "
-            f"git -c http.extraHeader='Authorization: Bearer {token}' "
-            f"push origin HEAD:{remote_branch} {force_flag}"
-            f'"'
-        )
-    else:
-        cmd = (
-            f"git -c http.extraHeader='Authorization: Bearer {token}' "
-            f"push origin HEAD:{remote_branch} {force_flag}"
-        )
+    repo_root = get_repo_root()
 
     print(f"[PUSH] HEAD → {remote_branch} @ {REMOTE_HTTP}")
-
-    # WSL tmpdir는 powershell에서 접근 어려울 수 있으므로 직접 push도 시도
-    # 먼저 원본 repo에서 fetch하여 push하는 방식 사용
-    repo_root = get_repo_root()
 
     # 임시 디렉토리의 커밋을 원본 repo로 fetch
     run(f"git fetch {tmpdir} HEAD:refs/heads/__bb_push_ref__", cwd=repo_root)
@@ -175,6 +188,14 @@ def push_to_bitbucket(token, tmpdir, remote_branch, force=False):
         )
 
     result = run(cmd, check=False, cwd=repo_root)
+
+    # 성공 시 BB_HISTORY_REF 업데이트 (다음 push 때 부모로 사용)
+    if result.returncode == 0:
+        pushed_hash = run(
+            "git rev-parse refs/heads/__bb_push_ref__", cwd=repo_root
+        ).stdout.strip()
+        run(f"git update-ref {BB_HISTORY_REF} {pushed_hash}", cwd=repo_root)
+        print(f"  history ref 갱신: {BB_HISTORY_REF} → {pushed_hash[:8]}")
 
     # 임시 ref 정리
     run("git update-ref -d refs/heads/__bb_push_ref__", cwd=repo_root, check=False)
@@ -271,13 +292,20 @@ def show_diff_summary(repo_root):
         else:
             print(f"  {path}/ : [NOT FOUND]")
     print(f"  README.md : 정책보고서 기반 자동 생성")
+
+    # 이전 히스토리 ref 상태 표시
+    repo_root_abs = get_repo_root()
+    result = run(f"git rev-parse {BB_HISTORY_REF}", cwd=repo_root_abs, check=False)
+    if result.returncode == 0:
+        print(f"  이전 push: {result.stdout.strip()[:8]} ({BB_HISTORY_REF})")
+    else:
+        print(f"  이전 push: 없음 (첫 push — orphan 커밋)")
     print()
 
 
 def _walk_files(directory):
     """Walk directory yielding file paths."""
     for root, dirs, files in os.walk(directory):
-        # __pycache__ 등 제외
         dirs[:] = [d for d in dirs if d != '__pycache__']
         for f in files:
             yield os.path.join(root, f)
@@ -285,7 +313,7 @@ def _walk_files(directory):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Bitbucket push automation (skills/ + tools/ only)"
+        description="Bitbucket push automation (skills/ + tools/ only, incremental commits)"
     )
     parser.add_argument(
         "--token", "-t",
@@ -314,6 +342,10 @@ def main():
         "--no-powershell", action="store_true",
         help="PowerShell 우회 비활성화 (비-WSL2 환경)"
     )
+    parser.add_argument(
+        "--reset-history", action="store_true",
+        help="로컬 히스토리 ref 초기화 후 orphan 커밋으로 재시작 (force push)"
+    )
     args = parser.parse_args()
 
     if not args.token:
@@ -331,6 +363,11 @@ def main():
     if REMOTE_NAME not in result.stdout:
         run(f"git remote add {REMOTE_NAME} {REMOTE_HTTP}", cwd=repo_root)
 
+    # --reset-history: 이전 히스토리 ref 삭제 → orphan으로 재시작
+    if args.reset_history:
+        run(f"git update-ref -d {BB_HISTORY_REF}", cwd=repo_root, check=False)
+        print(f"[RESET] {BB_HISTORY_REF} 삭제 — orphan 커밋으로 재시작합니다.")
+
     # 대상 파일 확인
     show_diff_summary(repo_root)
 
@@ -345,13 +382,19 @@ def main():
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         message = f"update: skills/tools 동기화 ({timestamp})"
 
-    # 임시 디렉토리에서 orphan 커밋 생성 (원본 워크트리 보호)
-    tmpdir, commit_hash = create_orphan_commit(repo_root, message)
+    # 증분 커밋 생성
+    tmpdir, commit_hash = create_incremental_commit(repo_root, message)
 
     try:
+        if commit_hash is None:
+            print("\n[INFO] 변경사항 없음 — push를 건너뜁니다.")
+            return
+
+        force = args.reset_history  # reset 시에만 force push
+
         if args.pr:
             print("\n== PR 모드 ==")
-            ok = push_to_bitbucket(args.token, tmpdir, "develop", force=True)
+            ok = push_to_bitbucket(args.token, tmpdir, "develop", force=force)
             if ok:
                 create_pull_request(
                     args.token,
@@ -361,7 +404,7 @@ def main():
                 )
         else:
             print("\n== Direct Push 모드 ==")
-            ok = push_to_bitbucket(args.token, tmpdir, "main", force=True)
+            ok = push_to_bitbucket(args.token, tmpdir, "main", force=force)
 
         if ok:
             print(f"\n[DONE] Bitbucket push 완료!")
@@ -370,7 +413,6 @@ def main():
             print("\n[FAIL] Push 실패. 네트워크 및 토큰을 확인하세요.", file=sys.stderr)
             sys.exit(1)
     finally:
-        # 임시 디렉토리 정리
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
