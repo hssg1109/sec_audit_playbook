@@ -1,7 +1,7 @@
 {
   "version": "3.0",
   "prefix": "",
-  "next_test_number": 11,
+  "next_test_number": 12,
   "root_page": {
     "source": "README.md",
     "type": "doc"
@@ -105,6 +105,14 @@
           "entries": [
             {"source": "state/t5_pcona_api_scan.json",             "title": "테스트10 - API 인벤토리 결과",         "type": "api_inventory"},
             {"source": "state/pcona_console_v452_run1.json",       "title": "테스트10 - 인젝션 취약점 진단 결과",   "type": "finding"}
+          ]
+        },
+        {
+          "title": "테스트11 - event_resource 인젝션 진단 (통합: event + business)",
+          "entries": [
+            {"source": "state/event_resource_api_v2.json",         "title": "테스트11 - API 인벤토리 결과",         "type": "api_inventory"},
+            {"source": "state/event_resource_sqli_v2.json",        "title": "테스트11 - 인젝션 취약점 진단 결과",   "type": "finding"},
+            {"source": "state/event_resource_진단보고서.md",        "title": "테스트11 - event_resource 진단 보고서", "type": "doc"}
           ]
         }
       ]
