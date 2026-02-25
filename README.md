@@ -7,6 +7,10 @@
 웹 애플리케이션 소스 코드를 대상으로 **Controller → Service → Repository 호출 그래프 추적** 기반의 정적 보안 분석을 수행합니다.
 SQL Injection을 비롯한 주요 취약점을 자동 탐지하고, Confluence 보고서 게시까지 일관된 파이프라인을 제공합니다.
 
+> **현재 집중 영역: `skills/sec-audit-static` (SAST)**
+> DAST(`sec-audit-dast`) 및 외부 소프트웨어 분석(`external-software-analysis`) 스킬은 정의 완료 상태이며,
+> 현재는 정적 분석 스킬을 중점적으로 운영·고도화하고 있습니다.
+
 ### 핵심 원칙
 
 - **호출 그래프 기반 진단** — HTTP 파라미터에서 SQL 실행까지 taint 전파 경로를 추적
@@ -25,48 +29,100 @@ cp -r <project-source> testbed/<project-name>/
 # 2. 환경 변수 설정
 cp .env.example .env    # CONFLUENCE_TOKEN, BITBUCKET_TOKEN 등 입력
 
-# 3. API 인벤토리 추출
+# 3. 슬래시 명령으로 전체 워크플로 실행 (현재 운영 중)
+/sec-audit-static
+```
+
+또는 스크립트를 단계별로 직접 실행:
+
+```bash
+# API 인벤토리 추출
 python tools/scripts/scan_api.py --source testbed/<project-name>/
 
-# 4. SQL Injection 진단 (호출 그래프 추적)
+# SQL Injection 진단 (호출 그래프 추적)
 python tools/scripts/scan_injection_enhanced.py \
   --source testbed/<project-name>/ \
   --output state/<project>_sqli.json
 
-# 5. Confluence 게시
+# Confluence 게시
 python tools/scripts/publish_confluence.py
 
-# 6. Bitbucket 동기화 (skills/tools 팀 공유)
+# Bitbucket 동기화 (skills/tools 팀 공유)
 python tools/scripts/push_bitbucket.py --tag v4.5.2
-```
-
-또는 슬래시 명령으로 전체 워크플로 실행:
-
-```
-/sec-audit-static      정적 코드 분석 (SAST)
-/sec-audit-dast        동적 애플리케이션 테스트 (DAST)
-/external-software-analysis  외부 패키지·소프트웨어 분석
 ```
 
 ---
 
-## 워크플로 구조
+## 스킬 구성
+
+| 슬래시 명령 | 스킬 | 상태 |
+|------------|------|------|
+| `/sec-audit-static` | 정적 코드 분석 (SAST) | **운영 중** |
+| `/sec-audit-dast` | 동적 애플리케이션 테스트 (DAST) | 정의 완료 |
+| `/external-software-analysis` | 외부 패키지·소프트웨어 분석 | 정의 완료 |
+
+---
+
+## `sec-audit-static` 워크플로
+
+`/sec-audit-static` 실행 시 아래 4개 Phase를 순서대로 진행합니다.
 
 ```
 Phase 1: 자산 식별
   └── Task 1-1  자산 식별 (Excel → JSON)
 
 Phase 2: 정적 분석
-  └── Task 2-1  API 인벤토리 (선행 태스크)
-      └── 병렬 실행 ──┬── Task 2-2  인젝션 취약점 검토  ← scan_injection_enhanced.py
-                      ├── Task 2-3  XSS 취약점 검토
-                      ├── Task 2-4  파일 처리 검토
-                      └── Task 2-5  데이터 보호 검토
+  └── Task 2-1  API 인벤토리          ← scan_api.py (script-first)
+      └── 글로벌 필터·인터셉터 확인
+      └── 병렬 실행 ──┬── Task 2-2  인젝션 검토 (SQL / OS Command / SSI)
+                      │                ← scan_injection_enhanced.py → LLM 교차검증
+                      ├── Task 2-3  XSS 검토 (Persistent / Reflected / Redirect)
+                      ├── Task 2-4  파일 처리 검토 (Upload / Download / LFI)
+                      └── Task 2-5  데이터 보호 검토 (CORS / Secrets / JWT)
 
-Phase 3: 보고
+Phase 3: 교차검증 (Cross-Verification)
+  └── 자동 탐지 "취약" 판정 전체에 대해 수동 교차검증 수행
+      Controller → Service → Repository → SQL Builder 데이터 흐름 추적
+      사용자 입력 도달 가능성 / 타입 안전성 / 코드 활성화 여부 / 분기 경로 검증
+      오탐 재분류: diagnosis_method = "교차검증(수동)"
+
+Phase 4: 보고
+  └── merge_results.py          → final_report.json
   └── generate_finding_report.py → Markdown 보고서
-  └── publish_confluence.py      → Confluence 게시
-  └── push_bitbucket.py          → Bitbucket 팀 공유
+  └── publish_confluence.py     → Confluence 게시 (선택)
+```
+
+### `sec-audit-static` 내부 구조
+
+```
+skills/sec-audit-static/
+├── SKILL.md                          # 스킬 진입점 (워크플로 정의)
+├── agents/openai.yaml                # 에이전트 설정
+└── references/
+    ├── workflow.md                   # Phase/Task 실행 맵, 보안 정책
+    ├── injection_diagnosis_criteria.md  # SQL/OS/SSI 프레임워크별 진단 기준
+    │                                    # (MyBatis / JPA / JDBC / Kotlin / R2DBC)
+    ├── taint_tracking.md             # Source→Sink taint 추적 (Kotlin 포함)
+    ├── cross_verification.md         # 교차검증 절차
+    ├── global_filters.md             # 글로벌 필터·인터셉터 확인
+    ├── output_schemas.md             # JSON 출력 스키마
+    ├── severity_criteria.md          # 심각도 판정 기준
+    ├── static_scripts.md             # 사용 가능 자동화 스크립트 목록
+    ├── vuln_automation_principles.md # 발견/분석 분리 원칙
+    ├── secret_scanning.md            # Gitleaks 기반 시크릿 탐지
+    ├── poc_policy.md                 # PoC 생성 정책
+    ├── seed_usage.md                 # Semgrep/Joern 시드 규칙
+    ├── tooling.md                    # 코드 탐색 도구 (rg/ctags)
+    ├── task_prompts/                 # 태스크별 진단 프롬프트
+    │   ├── task_11_asset_identification.md
+    │   ├── task_21_api_inventory.md
+    │   ├── task_22_injection_review.md
+    │   ├── task_23_xss_review.md
+    │   ├── task_24_file_handling.md
+    │   └── task_25_data_protection.md
+    └── rules/                        # 탐지 룰
+        ├── semgrep/                  #   Semgrep YAML 룰 (7개)
+        └── joern/                    #   Joern taint 쿼리 (2개)
 ```
 
 ---
@@ -76,12 +132,9 @@ Phase 3: 보고
 ```
 playbook/
 ├── skills/                          # Self-Contained 스킬 정의
-│   ├── sec-audit-static/            #   정적 분석 (SAST) 스킬
-│   │   ├── SKILL.md                 #     스킬 진입점
-│   │   ├── agents/openai.yaml       #     에이전트 설정
-│   │   └── references/              #     진단 기준, 스키마, 룰, 프롬프트
-│   ├── sec-audit-dast/              #   동적 분석 (DAST) 스킬
-│   ├── external-software-analysis/  #   외부 소프트웨어 분석 스킬
+│   ├── sec-audit-static/            #   ★ 정적 분석 (SAST) — 현재 운영 중
+│   ├── sec-audit-dast/              #   동적 분석 (DAST) — 정의 완료
+│   ├── external-software-analysis/  #   외부 소프트웨어 분석 — 정의 완료
 │   ├── SEVERITY_CRITERIA_DETAIL.md  #   심각도 판정 기준 (공통)
 │   └── USAGE_EXAMPLES.md            #   사용 예시
 │
@@ -106,29 +159,13 @@ playbook/
 │       └── run_gitleaks.sh          #   시크릿 스캔 (Gitleaks)
 │
 ├── docs/                            # 절차서 문서
-│   ├── 00_overview.md
-│   ├── 10_asset_identification.md
-│   ├── 20_static_analysis.md
-│   ├── 21_api_inventory.md ~ 25_data_protection_review.md
-│   ├── PLAYBOOK_GUIDE.md
-│   └── 정책보고서.md
-│
 ├── schemas/                         # JSON 유효성 검증 스키마
-│   ├── finding_schema.json
-│   ├── task_output_schema.json
-│   └── reporting_summary_schema.json
-│
 ├── ai/                              # AI 거버넌스 정책
-│   ├── ai-manifest.yaml             #   세션 추적 매니페스트
-│   ├── AI_USAGE_POLICY.md
-│   ├── PROMPT_STYLE_GUIDE.md
-│   └── REDACTION_RULES.md
 │
 ├── RELEASENOTE.md                   # 버전 이력 (SemVer)
 ├── TODO.md                          # 작업 목록 (우선순위·상태·담당)
 ├── CLAUDE.md                        # Claude Code 프로젝트 지침
 ├── .env                             # 환경 변수 (gitignored)
-│
 ├── testbed/                         # 진단 대상 소스코드 (gitignored)
 └── state/                           # 진단 결과 JSON/MD (gitignored)
 ```
