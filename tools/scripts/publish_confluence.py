@@ -1269,6 +1269,207 @@ def _json_to_xhtml_enhanced_injection(data):
     return "\n".join(parts)
 
 
+def _json_to_xhtml_enhanced_xss(data):
+    """Convert scan_xss.py output (v1.1+) to developer-friendly XHTML.
+
+    Structure:
+      - 진단 요약 (per-type summary table)
+      - XSS 전역 필터 현황
+      - ✅ 양호 / 🚨 취약 / ⚠️ 정보 endpoint grouping
+      - 정보 항목 (필터 미설정 등)
+    """
+    parts = ["<h2>XSS 취약점 진단 결과</h2>"]
+
+    meta = data.get("scan_metadata", {})
+    if meta:
+        parts.append(
+            f"<p>"
+            f"<strong>소스:</strong> <code>{html_escape(str(meta.get('source_dir', '')))}</code>"
+            f" &nbsp;|&nbsp; "
+            f"<strong>분석 버전:</strong> <code>{html_escape(str(meta.get('script_version', '')))}</code>"
+            f"</p>"
+        )
+
+    # --- 진단 요약 ---
+    summary = data.get("summary", {})
+    total_ep = summary.get("total_endpoints", 0)
+    xss_counts = summary.get("xss", {})
+    per_type = summary.get("per_type", {})
+
+    parts.append("<h3>진단 요약</h3>")
+    sum_rows = [
+        ["총 분석 엔드포인트", f"<strong>{total_ep}</strong>건"],
+        [f'{_severity_badge("High").replace("High", "취약")} XSS 취약',
+         f"<strong>{xss_counts.get('취약', 0)}</strong>건"],
+        [f'{_severity_badge("Medium").replace("Medium", "정보")} 수동 검토 필요',
+         f"<strong>{xss_counts.get('정보', 0)}</strong>건"],
+        [f'{_severity_badge("Info").replace("Info", "양호")} 안전',
+         f"<strong>{xss_counts.get('양호', 0)}</strong>건"],
+    ]
+    parts.append(_table(["항목", "결과"], sum_rows))
+
+    # --- Per-type 분류 테이블 ---
+    if per_type:
+        parts.append("<h3>XSS 유형별 진단 결과</h3>")
+        _type_labels = {
+            "reflected_xss": "Reflected XSS",
+            "view_xss": "View XSS (JSP/Thymeleaf)",
+            "persistent_xss": "Persistent XSS",
+            "redirect_xss": "Redirect XSS",
+            "dom_xss": "DOM XSS",
+        }
+        pt_rows = []
+        for key, label in _type_labels.items():
+            val = per_type.get(key, {})
+            if isinstance(val, dict):
+                vuln = val.get("취약", 0)
+                safe = val.get("양호", 0)
+                na = val.get("해당없음", 0)
+                info = val.get("정보", 0)
+                if vuln > 0:
+                    badge = _severity_badge("High").replace("High", "취약")
+                    detail = f"취약 {vuln}건"
+                elif info > 0:
+                    badge = _severity_badge("Medium").replace("Medium", "정보")
+                    detail = f"정보 {info}건"
+                elif safe > 0:
+                    badge = _severity_badge("Info").replace("Info", "양호")
+                    detail = f"양호 {safe}건"
+                else:
+                    badge = "<em>해당없음</em>"
+                    detail = f"해당없음 {na}건"
+                pt_rows.append([label, badge, detail])
+            else:
+                # dom_xss can be a string summary
+                pt_rows.append([label, "<em>전역 스캔</em>",
+                                 html_escape(str(val)[:200])])
+        parts.append(_table(["XSS 유형", "결과", "상세"], pt_rows))
+
+    # --- 전역 XSS 필터 현황 ---
+    global_filter = meta.get("global_xss_filter", {})
+    if global_filter:
+        has_filter = global_filter.get("has_filter", False)
+        filter_type = html_escape(str(global_filter.get("filter_type", "없음")))
+        filter_detail = html_escape(str(global_filter.get("filter_detail", "")))
+        filter_badge = (_severity_badge("Info").replace("Info", "적용됨")
+                        if has_filter
+                        else _severity_badge("Medium").replace("Medium", "미설정"))
+        parts.append("<h3>XSS 전역 필터</h3>")
+        f_rows = [
+            ["필터 상태", filter_badge],
+            ["필터 유형", filter_type],
+        ]
+        if filter_detail:
+            f_rows.append(["상세", filter_detail])
+        # 세부 필터 목록
+        for fkey, flabel in [("has_lucy", "Lucy XSS Filter"),
+                              ("has_antisamy", "AntiSamy"),
+                              ("has_esapi", "ESAPI"),
+                              ("has_ss_xss", "Spring Security XSS"),
+                              ("has_jackson_xss", "Jackson XSS Deserializer")]:
+            if global_filter.get(fkey):
+                f_rows.append([flabel, "✓ 발견"])
+        parts.append(_table(["항목", "값"], f_rows))
+
+    # --- Endpoint 목록 (결과별 그룹) ---
+    diagnoses = data.get("endpoint_diagnoses", [])
+
+    def _render_xss_group(result_key, icon, title_ko):
+        eps = [ep for ep in diagnoses if ep.get("result") == result_key]
+        if not eps:
+            return ""
+        sec = [f"<h3>{icon} {html_escape(title_ko)} — {len(eps)}건</h3>"]
+        ep_rows = []
+        for ep in eps:
+            reflected = html_escape(str(ep.get("reflected_xss", "N/A")))
+            view = html_escape(str(ep.get("view_xss", "N/A")))
+            persistent = html_escape(str(ep.get("persistent_xss", "N/A")))
+            redirect = html_escape(str(ep.get("redirect_xss", "N/A")))
+            dom = html_escape(str(ep.get("dom_xss", "N/A")))
+            ep_rows.append([
+                f"<code>{html_escape(str(ep.get('http_method', '')))}</code>",
+                f"<code>{html_escape(str(ep.get('request_mapping', '')))}</code>",
+                html_escape(str(ep.get("controller_type", ""))),
+                reflected, view, persistent, redirect, dom,
+            ])
+        sec.append(_table(
+            ["Method", "API", "Controller 유형",
+             "Reflected", "View", "Persistent", "Redirect", "DOM"],
+            ep_rows))
+        # 취약 endpoint 상세
+        if result_key == "취약":
+            for ep in eps:
+                detail = html_escape(str(ep.get("diagnosis_detail", "")))
+                evidence = ep.get("evidence", [])
+                if detail or evidence:
+                    api = html_escape(str(ep.get("request_mapping", "")))
+                    method = html_escape(str(ep.get("http_method", "")))
+                    sec.append(f"<h4><code>{method} {api}</code> 취약 상세</h4>")
+                    if detail:
+                        sec.append(f"<p>{detail}</p>")
+                    for ev in evidence[:3]:
+                        if isinstance(ev, dict):
+                            efile = html_escape(str(ev.get("file", "")))
+                            eline = html_escape(str(ev.get("line", "")))
+                            snippet = ev.get("code_snippet", "")
+                            if efile:
+                                sec.append(f"<p><strong>위치:</strong> "
+                                           f"<code>{efile}:{eline}</code></p>")
+                            if snippet:
+                                sec.append(_confluence_code_block(snippet, "java"))
+        return "".join(sec)
+
+    parts.append(_render_xss_group("취약", "🚨", "취약 (Vulnerable)"))
+    parts.append(_render_xss_group("정보", "⚠️", "정보 — 수동 검토 필요 (Info)"))
+    parts.append(_render_xss_group("양호", "✅", "양호 (Safe)"))
+
+    # --- 정보 항목: XSS 전역 필터 미설정 ---
+    if global_filter and not global_filter.get("has_filter"):
+        parts.append("<h3>⚠️ 정보 항목 — XSS 전역 필터 미설정</h3>")
+        parts.append(
+            f'<ac:structured-macro ac:name="info">'
+            f'<ac:rich-text-body>'
+            f'<p><strong>현황:</strong> Lucy XSS Filter, AntiSamy, ESAPI, '
+            f'Jackson XSS Deserializer 등 전역 XSS 필터 미발견</p>'
+            f'<p><strong>현재 위험도:</strong> <strong>낮음</strong> — '
+            f'REST API JSON 응답 구조로 서버 레벨 XSS 발생 경로 없음</p>'
+            f'<p><strong>향후 위험:</strong> HTML View 추가 또는 외부 포털이 '
+            f'이 API 응답을 HTML에 직접 렌더링하는 경우 위험</p>'
+            f'<p><strong>권고:</strong> JSON Request Body용 Jackson XSS Deserializer '
+            f'또는 Spring Security 기반 필터 적용 검토</p>'
+            f'</ac:rich-text-body></ac:structured-macro>'
+        )
+        parts.append(_confluence_code_block(
+            "// 권고: Jackson ObjectMapper에 XSS Deserializer 전역 등록\n"
+            "mapper.registerModule(new SimpleModule()\n"
+            "    .addDeserializer(String.class, new XSSStringDeserializer()));",
+            "java"
+        ))
+
+    # --- DOM XSS 전역 스캔 결과 ---
+    dom_xss_scan = meta.get("dom_xss_scan", {})
+    if dom_xss_scan and isinstance(dom_xss_scan, dict):
+        dom_files = dom_xss_scan.get("total_files_scanned", 0)
+        dom_findings = dom_xss_scan.get("findings", [])
+        parts.append("<h3>DOM XSS 전역 스캔</h3>")
+        dom_rows = [
+            ["스캔 파일 수 (JS/TS/Vue)", str(dom_files)],
+            ["DOM XSS 패턴 발견", str(len(dom_findings))],
+        ]
+        parts.append(_table(["항목", "값"], dom_rows))
+        if dom_findings:
+            for f in dom_findings[:5]:
+                fname = html_escape(str(f.get("file", "")))
+                line = f.get("line", 0)
+                pattern = html_escape(str(f.get("pattern_name", "")))
+                snippet = f.get("code_snippet", "")
+                parts.append(f"<p><code>{fname}:{line}</code> — {pattern}</p>")
+                if snippet:
+                    parts.append(_confluence_code_block(snippet, "javascript"))
+
+    return "\n".join(parts)
+
+
 def _json_to_xhtml_final(data):
     """Convert final_report.json to XHTML."""
     parts = ["<h1>AI 보안 진단 최종 보고서</h1>"]
@@ -1378,6 +1579,10 @@ def json_to_xhtml(data, json_type, source_path=""):
     if json_type == "api_inventory" or "endpoints" in data:
         return _json_to_xhtml_api_inventory(data)
 
+    # scan_xss.py format auto-detection (endpoint_diagnoses + per_type in summary)
+    if "endpoint_diagnoses" in data and data.get("summary", {}).get("per_type"):
+        return _json_to_xhtml_enhanced_xss(data)
+
     # scan_injection_enhanced.py format auto-detection (endpoint_diagnoses key)
     if "endpoint_diagnoses" in data:
         return _json_to_xhtml_enhanced_injection(data)
@@ -1391,6 +1596,207 @@ def json_to_xhtml(data, json_type, source_path=""):
         return _json_to_xhtml_api(data)
     # task_22, task_23, task_24, task_25 all use vulnerability format
     return _json_to_xhtml_vuln(data)
+
+# ---------------------------------------------------------------------------
+# Main Report (통합 보고서) renderer
+# ---------------------------------------------------------------------------
+
+def _load_json_safe(rel_path: str, base_dir: str) -> dict:
+    """Load a JSON file relative to base_dir. Returns {} on any error."""
+    if not rel_path:
+        return {}
+    full = os.path.join(base_dir, rel_path)
+    if not os.path.isfile(full):
+        return {}
+    try:
+        with open(full, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _md_strip_detail_sections(md_content: str) -> str:
+    """진단보고서.md 에서 세부 Task 섹션(인젝션/XSS 상세)을 제거하고
+    개요·한계 부분만 반환한다.
+
+    제거 대상 패턴 (## 레벨 섹션):
+      ## 4.  Task 2-2 인젝션 ...
+      ## 5.  Task 2-3 XSS ...
+      ## 6.  정보 항목 ...
+
+    유지 대상:
+      ## 1.  진단 대상 개요
+      ## 2.  종합 결과 요약  ← 주석 처리(JSON 으로 대체)
+      ## 3.  API 인벤토리   ← 주석 처리(JSON 으로 대체)
+      ## 7.  전체 결과 요약 ← 주석 처리(JSON 으로 대체)
+      ## 8.  진단 한계 사항  ← 유지
+    """
+    # 유지할 최상위 섹션 번호: 1, 8 (개요 + 한계)
+    # 2,3,7 은 JSON 기반 동적 렌더링으로 대체
+    _KEEP_SECTION_NOS = {'1', '8'}
+    _SKIP_SECTION_NOS = {'2', '3', '4', '5', '6', '7'}
+
+    lines = md_content.splitlines()
+    result_lines = []
+    skip = False
+    for line in lines:
+        # 최상위 ## 섹션 헤딩 탐지
+        m = re.match(r'^##\s+(\d+)[\.\s]', line)
+        if m:
+            sec_no = m.group(1)
+            if sec_no in _SKIP_SECTION_NOS:
+                skip = True
+                continue
+            elif sec_no in _KEEP_SECTION_NOS:
+                skip = False
+        if not skip:
+            result_lines.append(line)
+    return '\n'.join(result_lines).strip()
+
+
+def _build_main_summary_table(injection_data: dict, xss_data: dict) -> str:
+    """JSON 데이터로부터 통합 결과 요약 표를 생성한다.
+    이 함수가 단일 데이터 소스이므로 세부 보고서와 수치가 항상 일치한다."""
+    rows = []
+
+    # SQL Injection
+    if injection_data:
+        sqli = injection_data.get("summary", {}).get("sqli", {})
+        vuln_n = sqli.get("취약", 0)
+        info_n = sqli.get("정보", 0)
+        result_str = "<strong>전체 양호</strong>" if vuln_n == 0 and info_n == 0 \
+            else f"<strong style='color:red'>취약 {vuln_n}건</strong>"
+        rows.append(["SQL Injection", result_str,
+                     f"{vuln_n}건", f"{info_n}건"])
+        os_cmd = injection_data.get("summary", {}).get("os_command", {})
+        os_total = os_cmd.get("total", 0)
+        rows.append(["OS Command Injection",
+                     "오탐 검토 필요" if os_total else "해당없음",
+                     "0건", "0건"])
+        rows.append(["SSI Injection", "해당없음", "0건", "0건"])
+    else:
+        rows.append(["SQL Injection", "—", "—", "—"])
+        rows.append(["OS Command Injection", "—", "—", "—"])
+        rows.append(["SSI Injection", "—", "—", "—"])
+
+    # XSS
+    if xss_data:
+        xss_sum = xss_data.get("summary", {}).get("xss", {})
+        xss_vuln = xss_sum.get("취약", 0)
+        xss_info = xss_sum.get("정보", 0)
+        xss_result = "<strong>전체 양호</strong>" \
+            if xss_vuln == 0 and xss_info == 0 \
+            else f"<strong style='color:red'>취약 {xss_vuln}건</strong>"
+        rows.append(["XSS (전체)", xss_result,
+                     f"{xss_vuln}건", f"{xss_info}건"])
+        per_type = xss_data.get("summary", {}).get("per_type", {})
+        _xss_labels = [
+            ("reflected_xss", "Reflected XSS"),
+            ("view_xss",      "View XSS"),
+            ("persistent_xss","Persistent XSS"),
+            ("redirect_xss",  "Redirect XSS"),
+            ("dom_xss",       "DOM XSS"),
+        ]
+        for key, label in _xss_labels:
+            td = per_type.get(key, {})
+            # per_type 값이 string 인 경우(dom_xss 전역 스캔 요약 문자열)는 해당없음 처리
+            if not isinstance(td, dict):
+                rows.append([f"&nbsp;&nbsp;— {label}", "해당없음 (전역 스캔)",
+                             "0건", "0건"])
+                continue
+            tv = td.get("취약", 0)
+            ti_n = td.get("정보", 0)
+            ts = td.get("양호", 0)
+            na = td.get("해당없음", 0)
+            if na and not tv and not ti_n and not ts:
+                sub_result = "해당없음"
+            elif tv == 0:
+                sub_result = f"양호 {ts}건"
+            else:
+                sub_result = f"취약 {tv}건"
+            rows.append([f"&nbsp;&nbsp;— {label}", sub_result,
+                         f"{tv}건", f"{ti_n}건"])
+    else:
+        rows.append(["XSS (전체)", "—", "—", "—"])
+
+    return _table(["진단 항목", "결과", "취약 건수", "정보 건수"], rows)
+
+
+def _build_main_api_inventory(api_data: dict) -> str:
+    """API 인벤토리 JSON 에서 엔드포인트 목록 표를 생성한다."""
+    endpoints = api_data.get("endpoints", [])
+    if not endpoints:
+        return "<p>API 인벤토리 데이터 없음</p>"
+    rows = []
+    for ep in endpoints:
+        # scan_api.py v3 포맷: method/api  vs  이전 포맷: http_method/request_mapping
+        method = ep.get("method", ep.get("http_method", ""))
+        path = ep.get("api", ep.get("request_mapping", ""))
+        handler = ep.get("handler", "")
+        ctrl = handler.split(".")[0] if "." in handler else handler
+        params = ep.get("parameters", [])
+        if params:
+            pnames = [p.get("name", str(p)) if isinstance(p, dict) else str(p)
+                      for p in params[:6]]
+            param_str = ", ".join(pnames)
+            if len(params) > 6:
+                param_str += f" … +{len(params)-6}개"
+        else:
+            param_str = "—"
+        rows.append([
+            f"<code>{html_escape(method)}</code>",
+            f"<code>{html_escape(path)}</code>",
+            html_escape(ctrl),
+            html_escape(param_str[:120]),
+        ])
+    return _table(["Method", "Endpoint", "Controller", "Parameters"], rows)
+
+
+def _json_to_xhtml_main_report(md_content: str, task_sources: dict,
+                                base_dir: str) -> str:
+    """통합 보고서 렌더러 (type=main_report).
+
+    역할:
+      - 진단 대상 개요 (md 파일의 섹션 1)
+      - 종합 결과 요약  (JSON 데이터 기반 — 세부 보고서와 동일 소스)
+      - API 인벤토리   (API JSON 기반)
+      - 진단 한계      (md 파일의 섹션 8)
+      ※ 인젝션/XSS 세부 내용은 포함하지 않음 (각 Task 보고서 페이지 참조)
+    """
+    api_data       = _load_json_safe(task_sources.get("api", ""), base_dir)
+    injection_data = _load_json_safe(task_sources.get("injection", ""), base_dir)
+    xss_data       = _load_json_safe(task_sources.get("xss", ""), base_dir)
+
+    parts = []
+
+    # 1. 개요·한계 섹션 (md 에서 추출)
+    overview_md = _md_strip_detail_sections(md_content)
+    if overview_md:
+        parts.append(md_to_xhtml(overview_md))
+
+    # 2. 종합 결과 요약 (JSON 기반 — 단일 소스)
+    parts.append("<h2>종합 진단 결과 요약</h2>")
+    parts.append("<p><em>아래 수치는 각 Task 세부 보고서 데이터와 동일한 소스에서 계산됩니다.</em></p>")
+    parts.append(_build_main_summary_table(injection_data, xss_data))
+
+    # 3. API 인벤토리
+    if api_data:
+        total_ep = len(api_data.get("endpoints", []))
+        parts.append(f"<h2>API 인벤토리 — 총 {total_ep}개 엔드포인트</h2>")
+        parts.append(_build_main_api_inventory(api_data))
+
+    # 4. Task 보고서 링크 안내
+    parts.append(
+        "<h2>세부 진단 결과</h2>"
+        "<p>인젝션·XSS 등 각 항목별 상세 내용(카테고리 분류, Call Graph, "
+        "코드 증적)은 하위 Task 보고서 페이지를 참조하십시오.</p>"
+        '<ac:structured-macro ac:name="children">'
+        '<ac:parameter ac:name="sort">title</ac:parameter>'
+        '</ac:structured-macro>'
+    )
+
+    return "\n".join(parts)
+
 
 # ---------------------------------------------------------------------------
 # Content resolver
@@ -1414,6 +1820,12 @@ def resolve_content(entry, base_dir):
         return None, f"Cannot read {full_path}: {exc}"
 
     entry_type = entry.get("type", "doc")
+
+    # main_report: 통합 보고서 (개요+요약만, 세부 내용은 Task 페이지에)
+    if entry_type == "main_report":
+        task_sources = entry.get("task_sources", {})
+        xhtml = _json_to_xhtml_main_report(raw, task_sources, base_dir)
+        return xhtml, None
 
     if entry_type == "doc":
         xhtml = md_to_xhtml(raw)

@@ -1,7 +1,7 @@
 {
   "version": "3.0",
   "prefix": "",
-  "next_test_number": 12,
+  "next_test_number": 15,
   "root_page": {
     "source": "README.md",
     "type": "doc"
@@ -113,6 +113,47 @@
             {"source": "state/event_resource_api_v2.json",         "title": "테스트11 - API 인벤토리 결과",         "type": "api_inventory"},
             {"source": "state/event_resource_sqli_v2.json",        "title": "테스트11 - 인젝션 취약점 진단 결과",   "type": "finding"},
             {"source": "state/event_resource_진단보고서.md",        "title": "테스트11 - event_resource 진단 보고서", "type": "doc"}
+          ]
+        },
+        {
+          "title": "테스트13 - okick-event-server 진단",
+          "entries": [
+            {
+              "source": "state/okick_event_진단보고서.md",
+              "title": "테스트13 - okick-event-server 통합 진단 보고서",
+              "type": "main_report",
+              "task_sources": {
+                "api":       "state/okick_event_api_inventory.json",
+                "injection": "state/okick_event_injection_v3.json",
+                "xss":       "state/okick_event_xss_v1.json"
+              }
+            },
+            {"source": "state/okick_event_injection_v3.json",     "title": "테스트13 - 인젝션 취약점 진단 결과",   "type": "finding"},
+            {"source": "state/okick_event_xss_v1.json",           "title": "테스트13 - XSS 취약점 진단 결과",     "type": "finding"}
+          ]
+        },
+        {
+          "title": "테스트14 - okick-reward-server 진단",
+          "entries": [
+            {
+              "source": "state/okick_reward_진단보고서.md",
+              "title": "테스트14 - okick-reward-server 통합 진단 보고서",
+              "type": "main_report",
+              "task_sources": {
+                "api":       "state/okick_reward_api_inventory.json",
+                "injection": "state/okick_reward_injection_v3.json",
+                "xss":       "state/okick_reward_xss_v1.json"
+              }
+            },
+            {"source": "state/okick_reward_injection_v3.json",    "title": "테스트14 - 인젝션 취약점 진단 결과",   "type": "finding"},
+            {"source": "state/okick_reward_xss_v1.json",          "title": "테스트14 - XSS 취약점 진단 결과",     "type": "finding"}
+          ]
+        },
+        {
+          "title": "테스트12 - OCB Community API XSS 진단",
+          "entries": [
+            {"source": "state/ocb_community_xss_v2.json",       "title": "테스트12 - XSS 취약점 진단 결과",   "type": "finding"},
+            {"source": "state/ocb_community_xss_보고서.md",     "title": "테스트12 - OCB Community XSS 진단 보고서", "type": "doc"}
           ]
         }
       ]

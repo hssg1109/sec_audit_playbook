@@ -48,17 +48,19 @@ JPA_SAFE_METHODS = {
 }
 
 # Spring Data JPA 메서드명 규칙 prefix (findBy*, countBy* 등 → 자동 생성, 안전)
+# findAllBy*: Spring Data JPA derived query (findBy* 와 동일, 전체 결과 반환 의미)
 JPA_CONVENTION_PREFIXES = (
-    'findBy', 'countBy', 'existsBy', 'deleteBy', 'removeBy',
+    'findBy', 'findAllBy', 'countBy', 'existsBy', 'deleteBy', 'removeBy',
     'readBy', 'getBy', 'queryBy', 'searchBy', 'streamBy',
     'findFirst', 'findTop', 'findDistinct',
 )
 
 # [Phase 12] Controller→Service 위임 추적 대상 컴포넌트 접미사
+# [Phase 17] 'Port' 추가: Hexagonal Architecture (Port & Adapter 패턴) 지원
 _TRACEABLE_COMPONENT_SUFFIXES = (
     'Service', 'UseCase', 'Handler', 'Adapter', 'Facade',
     'Provider', 'Helper', 'Processor', 'Manager', 'Delegate',
-    'Component', 'Coordinator',
+    'Component', 'Coordinator', 'Port',
 )
 
 # [Phase 24] Kotlin 예약어 집합 (taint 체크 시 식별자 후보에서 제외) — 모듈 상수
@@ -232,7 +234,7 @@ def extract_constructor_deps(content: str) -> list:
                      'Client', 'SqlMapClient', 'DataSource',
                      'UseCase', 'Handler', 'Adapter', 'Facade',
                      'Provider', 'Helper', 'Processor', 'Manager', 'Delegate',
-                     'Component', 'Coordinator')
+                     'Component', 'Coordinator', 'Port')  # [Phase 17] Hexagonal
     for m in re.finditer(
         r'(?:private|protected|internal)\s+(?:val|var)\s+(\w+)\s*:\s*(\w+)',
         content
@@ -307,6 +309,22 @@ def extract_method_body(content: str, method_name: str) -> str:
     if brace_pos == -1:
         return ""
 
+    # [Interface Method Guard] brace_pos 가 발견됐더라도 그 앞에 새 메서드 선언이
+    # 있으면 해당 { 는 이 메서드의 body 가 아닌 다음 메서드의 body 임.
+    # 예: Kotlin interface fun foo(): List<X>\n fun bar() { ... }
+    #      → foo 탐색 시 bar 의 { 를 잘못 흡수하는 오탐 방지
+    between = after_str[:brace_pos]
+    # 같은 줄(반환 타입 선언 줄)에 ; 가 있으면 Java interface abstract method
+    first_line_between = between.split('\n')[0]
+    if ';' in first_line_between:
+        return ""
+    # 다음 Kotlin fun 선언이 { 보다 앞에 있으면 이 함수는 body 없음
+    if re.search(r'\bfun\s+\w+\s*[(<]', between):
+        return ""
+    # 다음 Java method 선언(접근제한자 + 반환타입 + 메서드명)이 { 보다 앞에 있으면 body 없음
+    if re.search(r'(?:public|private|protected)\s+[\w<>\[\]]+\s+\w+\s*\(', between):
+        return ""
+
     brace_start = after_params + brace_pos
     depth = 0
     i = brace_start
@@ -374,10 +392,26 @@ def find_class_file(source_dir: Path, class_name: str,
     return None
 
 
-def build_class_index(source_dir: Path) -> dict:
-    """소스 디렉토리의 클래스 인덱스 구축 (클래스명 → 파일 경로)"""
+def build_class_index(source_dir: Path) -> tuple:
+    """소스 디렉토리의 클래스 인덱스 구축
+
+    Returns:
+        (class_index, impl_index)
+        class_index: {class_name → file_path}
+        impl_index:  {interface_name → [implementing_class_names]}
+    """
     index = {}
+    impl_index: dict = {}  # interface_name → [impl class names]
     exclude_dirs = {"node_modules", ".idea", "target", "build", ".git", "dist", "test"}
+
+    _JAVA_IMPL_RE = re.compile(
+        r'\bclass\s+(\w+)\b[^{]*\bimplements\s+([\w\s,<>?\[\]]+?)(?=\s*\{)',
+        re.DOTALL,
+    )
+    _KT_IMPL_RE = re.compile(
+        r'\bclass\s+(\w+)(?:\s*\([^)]*\))?\s*:\s*([\w\s,<>?()\[\]]+?)(?=\s*\{)',
+        re.DOTALL,
+    )
 
     for suffix in ('.kt', '.java'):
         for f in source_dir.rglob(f"*{suffix}"):
@@ -385,11 +419,19 @@ def build_class_index(source_dir: Path) -> dict:
                 continue
             try:
                 content = f.read_text(encoding="utf-8", errors="replace")
+                # 기존: class_name → file
                 for m in re.finditer(r'(?:class|interface|object)\s+(\w+)', content):
                     index[m.group(1)] = f
+                # 신규: interface → impl 매핑
+                pattern = _KT_IMPL_RE if suffix == '.kt' else _JAVA_IMPL_RE
+                for m in pattern.finditer(content):
+                    class_name = m.group(1)
+                    for iface in re.findall(r'\b([A-Z]\w+)\b', m.group(2)):
+                        if iface != class_name:
+                            impl_index.setdefault(iface, []).append(class_name)
             except (IOError, UnicodeDecodeError):
                 continue
-    return index
+    return index, impl_index
 
 
 def _collect_element_text(elem) -> str:
@@ -610,15 +652,23 @@ def _analyze_jpa_query(content: str, method_name: str) -> list:
     return ops
 
 
-def _resolve_impl_class(class_name: str, class_index: dict) -> Optional[Path]:
+def _resolve_impl_class(class_name: str, class_index: dict,
+                         impl_index: dict = None) -> Optional[Path]:
     """Interface → 구현체 클래스 파일 탐색
 
     탐색 순서:
-    1. {ClassName}Impl (Spring 관례)
+    0. impl_index 사전 빌드 조회 (O(1), 최우선)
+    1. {ClassName}Impl / Implementation (Spring 관례)
     2. I{Name} → {Name} (I-prefix 관례)
-    3. class_index 전체에서 implements 검색
+    3. class_index 전체에서 implements / Kotlin ':' 패턴 검색 (최후 수단)
     """
-    # 1. {ClassName}Impl
+    # 0. 사전 빌드된 impl_index 조회
+    if impl_index:
+        for impl_cls in impl_index.get(class_name, []):
+            if impl_cls in class_index:
+                return class_index[impl_cls]
+
+    # 1. {ClassName}Impl / Implementation
     for suffix in ('Impl', 'Implementation'):
         impl_name = class_name + suffix
         if impl_name in class_index:
@@ -630,13 +680,16 @@ def _resolve_impl_class(class_name: str, class_index: dict) -> Optional[Path]:
         if bare_name in class_index:
             return class_index[bare_name]
 
-    # 3. implements 검색 (비용이 높으므로 최후 수단)
+    # 3. implements / Kotlin ':' 검색 (비용이 높으므로 최후 수단)
     for cls_name, file_path in class_index.items():
         if cls_name == class_name:
             continue
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
             if re.search(rf'\bimplements\s+[^{{]*\b{re.escape(class_name)}\b', content):
+                return file_path
+            if re.search(
+                    rf'\bclass\s+\w+[^{{]*:\s*[^{{]*\b{re.escape(class_name)}\b', content):
                 return file_path
         except (IOError, UnicodeDecodeError):
             continue
@@ -648,7 +701,8 @@ def _trace_service_chain(svc_class: str, svc_method: str,
                           source_dir: Path, class_index: dict,
                           mybatis_index: dict,
                           depth: int = 1, max_depth: int = 3,
-                          visited: set = None) -> dict:
+                          visited: set = None,
+                          impl_index: dict = None) -> dict:
     """Service→Service 위임 재귀 추적 (depth-limited)
 
     Service A → Service B → DB 패턴을 재귀적으로 추적하여
@@ -675,7 +729,7 @@ def _trace_service_chain(svc_class: str, svc_method: str,
 
     # Interface → 구현체 탐색
     if re.search(r'\binterface\s+' + re.escape(svc_class) + r'\b', svc_content):
-        impl_file = _resolve_impl_class(svc_class, class_index)
+        impl_file = _resolve_impl_class(svc_class, class_index, impl_index)
         if impl_file:
             svc_content = read_file_safe(impl_file)
             svc_file = impl_file
@@ -736,6 +790,27 @@ def _trace_service_chain(svc_class: str, svc_method: str,
         db_ops = analyze_repository_method(repo_content, repo_method,
                                             repo_file, mybatis_index,
                                             source_dir=source_dir)
+
+        # [Phase 17] Domain Repository 인터페이스 → JPA 구현체 해석
+        _sc_none_only = bool(db_ops) and all(op.access_type == "none" for op in db_ops)
+        if (not db_ops or _sc_none_only) and repo_content:
+            is_dom_iface = re.search(
+                r'\binterface\s+' + re.escape(repo_class) + r'\b', repo_content)
+            if is_dom_iface:
+                jpa_impl_file = _resolve_impl_class(repo_class, class_index, impl_index)
+                if jpa_impl_file:
+                    jpa_impl_content = read_file_safe(jpa_impl_file)
+                    if jpa_impl_content:
+                        new_db_ops = analyze_repository_method(
+                            jpa_impl_content, repo_method,
+                            jpa_impl_file, mybatis_index, source_dir=source_dir)
+                        if new_db_ops and not all(
+                                op.access_type == "none" for op in new_db_ops):
+                            db_ops = new_db_ops
+                            result["repository_calls"][-1] = (
+                                f"{extract_class_name(jpa_impl_content) or repo_class}"
+                                f".{repo_method}() [via {repo_class}]")
+
         result["db_operations"].extend(db_ops)
 
     # DB 클라이언트 직접 사용
@@ -769,8 +844,42 @@ def _trace_service_chain(svc_class: str, svc_method: str,
         other_svc_fields = [(name, cls) for name, cls in svc_deps
                             if any(cls.endswith(s)
                                    for s in _TRACEABLE_COMPONENT_SUFFIXES)]
-        del_calls = extract_method_calls(svc_method_body,
-                                          [n for n, _ in other_svc_fields])
+        other_field_names = [n for n, _ in other_svc_fields]
+        del_calls = extract_method_calls(svc_method_body, other_field_names)
+
+        # [Phase 4b in _trace_service_chain] 직접 Port 호출 없으면 private 헬퍼 재귀 탐색
+        # _collect_helper_port_calls는 아직 정의 전이므로 inline 구현
+        # (이 함수는 _SKIP_INTERNAL_METHODS 정의 전에 있으므로 lazy 사용)
+        if not del_calls and svc_method_body:
+            _sc_int_names = _SAME_CLASS_CALL_RE.findall(svc_method_body)
+            _sc_visited: set = set()
+            for _ic in _sc_int_names[:20]:
+                if _ic in _sc_visited:
+                    continue
+                _sc_visited.add(_ic)
+                _ic_body = extract_method_body(svc_content, _ic)
+                if not _ic_body:
+                    continue
+                _ic_calls = extract_method_calls(_ic_body, other_field_names)
+                if _ic_calls:
+                    del_calls = _ic_calls
+                    break
+                # depth 2: 헬퍼 안의 헬퍼도 탐색
+                _sc2_names = _SAME_CLASS_CALL_RE.findall(_ic_body)
+                for _ic2 in _sc2_names[:10]:
+                    if _ic2 in _sc_visited:
+                        continue
+                    _sc_visited.add(_ic2)
+                    _ic2_body = extract_method_body(svc_content, _ic2)
+                    if not _ic2_body:
+                        continue
+                    _ic2_calls = extract_method_calls(_ic2_body, other_field_names)
+                    if _ic2_calls:
+                        del_calls = _ic2_calls
+                        break
+                if del_calls:
+                    break
+
         for del_field, del_method in del_calls[:5]:  # 상위 5개만
             del_class = None
             for fname, cls in other_svc_fields:
@@ -782,7 +891,8 @@ def _trace_service_chain(svc_class: str, svc_method: str,
 
             sub = _trace_service_chain(del_class, del_method,
                                         source_dir, class_index, mybatis_index,
-                                        depth + 1, max_depth, visited)
+                                        depth + 1, max_depth, visited,
+                                        impl_index=impl_index)
             if sub.get("db_operations"):
                 result["repository_calls"].extend(sub["repository_calls"])
                 result["db_operations"].extend(sub["db_operations"])
@@ -796,6 +906,8 @@ def _trace_service_chain(svc_class: str, svc_method: str,
 # ============================================================
 
 # 내부 위임 추적 시 무시할 제어흐름/유틸리티 메서드
+# Java/Kotlin 파라미터 객체의 getter (user(), event(), participateAt() 등)처럼
+# 오탐이 잦은 단어도 포함
 _SKIP_INTERNAL_METHODS = frozenset({
     'if', 'for', 'while', 'switch', 'catch',
     'return', 'throw', 'new', 'super', 'this',
@@ -809,7 +921,113 @@ _SKIP_INTERNAL_METHODS = frozenset({
     'let', 'run', 'apply', 'also', 'with',
     'checkNotNull', 'require', 'requireNotNull',
     'check', 'takeIf', 'takeUnless',
+    # Java DTO/record 액세서 (command.user() 등에서 오탐 방지)
+    'user', 'event', 'id', 'name', 'type', 'key', 'value',
+    'result', 'data', 'body', 'response', 'request',
+    'code', 'message', 'status', 'content', 'payload',
 })
+
+
+# ============================================================
+#  요구사항 3: 재귀 Private 헬퍼 메서드 Port 호출 탐색
+# ============================================================
+
+# [요구사항 3] _collect_helper_port_calls:
+# 동일 클래스의 private 헬퍼 메서드를 재귀적으로 확장하여
+# field.method() 직접 호출을 탐색하는 핵심 함수.
+#
+# 핵심 개선:
+#  - (?<![.\w]) 음수 후방탐색으로 "object.method()" 형식의 오탐 제거
+#    기존 패턴 "(?:this\s*\.\s*)?([a-z]\w+)\s*\(" 는 command.user() 에서
+#    user 를 잘못 캡처 → saveParticipation 이 [:10] 범위 밖으로 밀려나는 버그 수정
+#  - max_depth=3 재귀로 깊은 위임 체인 (A→B→C→port.call()) 추적
+_SAME_CLASS_CALL_RE = re.compile(r'(?<![.\w])([a-z]\w+)\s*\(')
+
+# [요구사항 1/3 보조] @Override public 메서드 우선 추출 패턴
+# extract_method_body 전역 변경 없이, Service/UseCase 구현체의 인터페이스 메서드를
+# 올바르게 추출하기 위한 전용 함수.
+# 배경: ExchangePointsService 처럼 private overload (exchangePoints(Integer))가
+# 앞에 있고 public @Override (exchangePoints(ExchangePointsCommand))가 뒤에 있으면
+# extract_method_body 가 private 을 먼저 반환 → Port 호출이 private 헬퍼에 있어도 누락됨.
+_OVERRIDE_METHOD_RE = re.compile(
+    r'@Override\s*(?:@\w+(?:\([^)]*\))?\s*)*(?:public|protected)\s+',
+    re.DOTALL,
+)
+
+
+def _extract_service_method_body(content: str, method_name: str) -> str:
+    """Service/UseCase 구현체용 메서드 본문 추출 — @Override public 우선.
+
+    같은 이름의 private overload 보다 @Override public 구현을 우선 반환.
+    일치하는 @Override 버전이 없으면 일반 extract_method_body 위임.
+    """
+    ov_pat = (rf'@Override\s*(?:@\w+(?:\([^)]*\))?\s*)*'
+              rf'(?:public|protected)\s+[\w.<>,\[\] ?]+\s+{re.escape(method_name)}\s*\(')
+    ov_match = re.search(ov_pat, content, re.DOTALL)
+    if ov_match:
+        # @Override 버전의 위치부터 본문 추출
+        # extract_method_body 에 직접 접근 불가하므로 마커를 임시 치환하여 추출
+        # → 더 안전하게: @Override 이후 content 슬라이스로 extract_method_body 재호출
+        sliced = content[ov_match.start():]
+        body = extract_method_body(sliced, method_name)
+        if body:
+            return body
+    return extract_method_body(content, method_name)
+
+
+def _collect_helper_port_calls(class_content: str, method_name: str,
+                                field_names: list,
+                                depth: int = 0, max_depth: int = 3,
+                                visited: set = None) -> list:
+    """동일 클래스 내 private 헬퍼 메서드를 재귀 확장하여 field.method() 호출 반환.
+
+    Args:
+        class_content: 분석 중인 클래스 전체 소스
+        method_name:   현재 탐색 메서드 이름
+        field_names:   탐색 대상 필드명 목록 (Port/Service 등)
+        depth:         현재 재귀 깊이
+        max_depth:     최대 재귀 깊이 (기본 3)
+        visited:       순환 참조 방지용 방문 집합
+
+    Returns:
+        [(field_name, method_name), ...] — 발견된 field.method() 호출 목록
+        비어 있으면 이 경로에서 Port 호출 없음.
+    """
+    if depth > max_depth:
+        return []
+    if visited is None:
+        visited = set()
+    if method_name in visited:
+        return []
+    visited.add(method_name)
+
+    # depth=0 (최초 진입): @Override public 우선 추출 (private overload 우선 반환 방지)
+    # depth>0 (헬퍼 재귀): 정확한 이름의 private 헬퍼를 추출해야 하므로 일반 추출 사용
+    if depth == 0:
+        method_body = _extract_service_method_body(class_content, method_name)
+    else:
+        method_body = extract_method_body(class_content, method_name)
+    if not method_body:
+        return []
+
+    # 1단계: 이 메서드에서 field.method() 직접 호출 탐색 — 모두 수집 (첫 발견에서 중단 안 함)
+    all_calls: list = list(extract_method_calls(method_body, field_names))
+
+    # 2단계: 동일 클래스 내 private 헬퍼 호출 수집 (음수 후방탐색으로 오탐 방지)
+    int_names = _SAME_CLASS_CALL_RE.findall(method_body)
+    for ic in int_names[:20]:  # 최대 20개 헬퍼 탐색 (넉넉한 범위)
+        if ic in _SKIP_INTERNAL_METHODS or ic in visited:
+            continue
+        sub_calls = _collect_helper_port_calls(
+            class_content, ic, field_names,
+            depth + 1, max_depth, visited)
+        for call in sub_calls:
+            if call not in all_calls:
+                all_calls.append(call)
+
+    return all_calls
+
+
 
 
 def _trace_internal_methods(svc_content: str, method_name: str,
@@ -877,7 +1095,8 @@ def _trace_internal_methods(svc_content: str, method_name: str,
         return [(repo_results, db_operations)]
 
     # 2. repo 호출 없으면 → 내부 메서드로 재귀
-    internal_calls = re.findall(r'(?:this\s*\.\s*)?(\w+)\s*\(', method_body)
+    # (?<![.\w]) 음수 후방탐색: object.method() 형식의 오탐 방지
+    internal_calls = _SAME_CLASS_CALL_RE.findall(method_body)
 
     for ic in internal_calls:
         if ic in _SKIP_INTERNAL_METHODS or ic in visited:
@@ -894,7 +1113,8 @@ def _trace_internal_methods(svc_content: str, method_name: str,
 
 
 def trace_endpoint(endpoint: dict, source_dir: Path,
-                   class_index: dict, mybatis_index: dict = None) -> dict:
+                   class_index: dict, mybatis_index: dict = None,
+                   impl_index: dict = None) -> dict:
     """단일 endpoint에 대해 Controller → Service → Repository 추적"""
     result = {
         "service_calls": [],
@@ -973,7 +1193,23 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
     initial_tainted: set = _extract_param_names(endpoint.get("parameters", []))
 
     svc_field_names = [name for name, _ in service_fields]
-    svc_calls = extract_method_calls(method_body, svc_field_names)
+    svc_calls = list(extract_method_calls(method_body, svc_field_names))
+
+    # [Phase 3b] Controller private 헬퍼에서 추가 UseCase/Service 호출 수집.
+    # 예: RewardReceiveController.receiveReward() 가 goldenEggRewardReceiveUseCase 를
+    # receiveGoldenEggReward() private 헬퍼를 통해 호출하는 패턴 탐지.
+    _ctrl_helper_names = _SAME_CLASS_CALL_RE.findall(method_body)
+    _ctrl_helper_visited: set = set()
+    for _ch in _ctrl_helper_names[:15]:
+        if _ch in _SKIP_INTERNAL_METHODS or _ch in _ctrl_helper_visited:
+            continue
+        _ctrl_helper_visited.add(_ch)
+        _ch_body = extract_method_body(ctrl_content, _ch)
+        if _ch_body:
+            _ch_calls = extract_method_calls(_ch_body, svc_field_names)
+            for _c in _ch_calls:
+                if _c not in svc_calls:
+                    svc_calls.append(_c)
 
     for field_name, svc_method in svc_calls:
         # field → class 매핑
@@ -1007,7 +1243,7 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
 
         # [Phase 3] Interface → 구현체 탐색
         if re.search(r'\binterface\s+' + re.escape(svc_class) + r'\b', svc_content):
-            impl_file = _resolve_impl_class(svc_class, class_index)
+            impl_file = _resolve_impl_class(svc_class, class_index, impl_index)
             if impl_file:
                 svc_content = read_file_safe(impl_file)
                 svc_file = impl_file
@@ -1059,13 +1295,22 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
                             and cls not in _non_db_classes]
 
         # [Phase 11] 비DB Service 필터: DB 의존성이 전혀 없는 서비스 → 스킵
-        if not repo_fields and not db_client_fields:
+        # Port/UseCase 등 위임 가능 의존성이 있으면 Phase 4(Service→Service)에서 처리
+        _port_like_fields = [
+            (n, c) for n, c in svc_deps
+            if any(c.endswith(s) for s in _TRACEABLE_COMPONENT_SUFFIXES)
+            and not any(c.endswith(s) for s in ('Repository', 'Mapper', 'Dao', 'DAO'))
+        ]
+        if not repo_fields and not db_client_fields and not _port_like_fields:
             # DriverManager.getConnection() 직접 사용 안전장치
             if not re.search(r'DriverManager\s*\.\s*getConnection', svc_content):
                 result["service_calls"][-1] = f"{svc_class}.{svc_method}() [non-DB]"
                 continue
+        # Port-heavy service: repo_fields 없어도 Phase 4 위임 추적으로 넘김 (continue 없음)
 
-        svc_method_body = extract_method_body(svc_content, svc_method)
+        # [요구사항 3 보조] Service/UseCase 구현체에서 @Override public 메서드 우선 추출.
+        # private overload (같은 메서드명, 다른 시그니처) 가 앞에 있어도 올바른 본문을 가져옴.
+        svc_method_body = _extract_service_method_body(svc_content, svc_method)
         if not svc_method_body:
             # [Phase 2 Fallback] 메서드 본문 추출 실패 → JPA repository 확인
             if repo_fields:
@@ -1135,6 +1380,85 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
                                                 repo_file, mybatis_index,
                                                 source_dir=source_dir,
                                                 tainted_names=tainted_arg)
+
+            # [Phase 17] Domain Repository 인터페이스 → JPA 구현체 해석
+            # ① db_ops 가 비어 있거나, ② 전부 access_type="none" (domain interface 분석
+            #   실패 or body 없는 interface → "DB 접근 없음" fallback) 인 경우 모두 트리거.
+            # 이전에는 not db_ops 만 조건으로 사용하여, none-only ops 가 있으면 Phase 17이
+            # 스킵되는 버그가 있었음 (findAllBy → none → Phase 17 미실행).
+            _phase17_none_only = bool(db_ops) and all(
+                op.access_type == "none" for op in db_ops)
+            if (not db_ops or _phase17_none_only) and repo_content:
+                is_domain_iface = re.search(
+                    r'\binterface\s+' + re.escape(repo_class) + r'\b',
+                    repo_content)
+                if is_domain_iface:
+                    jpa_impl_file = _resolve_impl_class(repo_class, class_index, impl_index)
+                    if jpa_impl_file:
+                        jpa_impl_content = read_file_safe(jpa_impl_file)
+                        if jpa_impl_content:
+                            impl_name = (extract_class_name(jpa_impl_content)
+                                         or repo_class)
+                            new_db_ops = analyze_repository_method(
+                                jpa_impl_content, repo_method,
+                                jpa_impl_file, mybatis_index,
+                                source_dir=source_dir,
+                                tainted_names=tainted_arg)
+
+                            # [Phase 17b] 해석된 impl 이 JPA Repository 가 아닌
+                            # PersistenceAdapter 인 경우: Adapter 가 내부적으로
+                            # JpaRepository 를 호출하는 패턴 1단계 추가 추적.
+                            # 예: ParticipantPersistenceAdapter.findAllBy()
+                            #       → participantJpaRepository.findAllBy() → jpa_builtin
+                            if (not new_db_ops or all(
+                                    op.access_type == "none" for op in new_db_ops)) \
+                                    and not _is_jpa_repository(jpa_impl_content):
+                                adapter_body = extract_method_body(
+                                    jpa_impl_content, repo_method)
+                                if adapter_body:
+                                    adapter_deps = extract_constructor_deps(
+                                        jpa_impl_content)
+                                    for dep_name, dep_cls in adapter_deps:
+                                        dep_file = class_index.get(dep_cls)
+                                        if not dep_file:
+                                            continue
+                                        dep_content = read_file_safe(dep_file)
+                                        if dep_content and _is_jpa_repository(
+                                                dep_content):
+                                            # Adapter 가 보유한 JpaRepository 발견
+                                            jpa_calls = extract_method_calls(
+                                                adapter_body, [dep_name])
+                                            for _, jpa_method in jpa_calls:
+                                                jpa_ops = analyze_repository_method(
+                                                    dep_content, jpa_method,
+                                                    dep_file, mybatis_index,
+                                                    source_dir=source_dir,
+                                                    tainted_names=tainted_arg)
+                                                if jpa_ops and not all(
+                                                        op.access_type == "none"
+                                                        for op in jpa_ops):
+                                                    new_db_ops = jpa_ops
+                                                    impl_name = dep_cls
+                                                    break
+                                            if new_db_ops and not all(
+                                                    op.access_type == "none"
+                                                    for op in new_db_ops):
+                                                break
+
+                            # none-only 인 경우 기존 결과보다 나은 결과만 교체
+                            if new_db_ops and not all(
+                                    op.access_type == "none" for op in new_db_ops):
+                                db_ops = new_db_ops
+                                result["repository_calls"][-1] = (
+                                    f"{impl_name}.{repo_method}()"
+                                    f" [via {repo_class}]")
+                            elif new_db_ops and not db_ops:
+                                # 기존 결과 없고 새 결과도 none 뿐 → 그래도 반영
+                                db_ops = new_db_ops
+                                result["repository_calls"][-1] = (
+                                    f"{impl_name}.{repo_method}()"
+                                    f" [via {repo_class}]")
+
             result["db_operations"].extend(db_ops)
 
         # DB 클라이언트 직접 사용 추적 (Service에서 직접 sqlMapClientTemplate 호출)
@@ -1186,8 +1510,18 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
             other_svc_fields = [(name, cls) for name, cls in svc_deps
                                 if any(cls.endswith(s)
                                        for s in _TRACEABLE_COMPONENT_SUFFIXES)]
+            port_field_names = [n for n, _ in other_svc_fields]
             del_calls = extract_method_calls(
-                svc_method_body, [n for n, _ in other_svc_fields])
+                svc_method_body, port_field_names)
+
+            # [Phase 4b] 요구사항 3: 재귀 private 헬퍼 메서드 탐색
+            # _collect_helper_port_calls 사용 — (?<![.\w]) 음수 후방탐색으로
+            # command.user() 등 파라미터 객체 getter 오탐 방지 + max_depth=3 재귀
+            if not del_calls and svc_method_body:
+                del_calls = _collect_helper_port_calls(
+                    svc_content, svc_method, port_field_names,
+                    depth=0, max_depth=3)
+
             for del_field, del_method in del_calls[:5]:
                 del_class = None
                 for fname, cls in other_svc_fields:
@@ -1200,7 +1534,8 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
                 sub = _trace_service_chain(
                     del_class, del_method,
                     source_dir, class_index, mybatis_index,
-                    depth=1, max_depth=3)
+                    depth=1, max_depth=3,
+                    impl_index=impl_index)
                 if sub.get("db_operations"):
                     result["service_calls"].append(
                         f"{del_class}.{del_method}() [위임]")
@@ -1219,6 +1554,17 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
                 and svc_method_body and not repo_calls):
             result["service_calls"][-1] = (
                 f"{svc_class}.{svc_method}() [non-DB method]")
+
+        # [Phase 20c] DB 의존성 없는 인프라 서비스 (Cache/Logging) 비DB 판정.
+        # Phase 11이 _port_like_fields(LoggingService 등)로 인해 스킵되었으나
+        # 실제 repo_fields/db_client_fields가 없고 Phase 4 추적 후에도 DB ops 없는 경우
+        # → non-DB 서비스로 최종 판정 (예: CacheAdapter.isConnected() via RedisCacheService)
+        # 주의: _port_like_fields가 있어 Phase 4가 Port 추적을 시도했지만 DB를 찾지 못한 경우도
+        # 포함될 수 있으므로, repo_fields AND db_client_fields 모두 없는 경우에만 적용.
+        if (not result["db_operations"]
+                and not repo_fields
+                and not db_client_fields):
+            result["service_calls"][-1] = f"{svc_class}.{svc_method}() [non-DB]"
 
     # [Phase 22] Controller → Mapper/DAO 직접 호출 추적
     # Service 레이어 없이 Controller에서 직접 Mapper를 호출하는 패턴 처리
@@ -1969,9 +2315,90 @@ def analyze_repository_method(content: str, method_name: str,
             ))
             return ops
 
+    # [Phase 17c] JPA Repository 위임 탐지:
+    # Adapter/Impl 의 메서드 본문이 JpaRepository 메서드를 직접 호출하는 패턴
+    # 예: return participantJpaRepository.findAllBy()
+    #      participantRepository.save(entity)
+    # 이 패턴은 "DB 접근 없음" 오탐을 방지하기 위해 먼저 검사함.
+    _jpa_delegation_re = re.compile(
+        r'\.\s*(' +
+        '|'.join(re.escape(m) for m in sorted(JPA_SAFE_METHODS, key=len, reverse=True)) +
+        r'|' +
+        '|'.join(re.escape(p) + r'[A-Za-z0-9]*' for p in JPA_CONVENTION_PREFIXES) +
+        r')\s*\(',
+        re.IGNORECASE,
+    )
+    if re.search(_jpa_delegation_re, method_body):
+        ops.append(DbOperation(
+            method=method_name,
+            access_type="jpa_builtin",
+            detail=f"양호: JPA Repository 위임 호출 ({method_name}) - PreparedStatement 자동 바인딩",
+            is_vulnerable=False,
+        ))
+        return ops
+
+    # [Phase 17d] JPA EntityManager 표준 API — persist/merge/remove/find/getReference
+    # entityManager.persist(entity) 등은 SQL 문자열 없이 PreparedStatement 불필요 → 안전
+    # 요구사항 4: Reflection(getDeclaredConstructor + newInstance)으로 엔티티를 동적 생성한 뒤
+    # entityManager.persist() 하는 패턴(ParticipantJpaRepository.save 등)도 안전 판정
+    _EM_SAFE_OPS_RE = re.compile(
+        r'\bentityManager\s*\.\s*(?:persist|merge|remove|find|getReference)\s*\(')
+    _EM_CREATEQUERY_RE = re.compile(
+        r'\bentityManager\s*\.\s*createQuery\s*\(')
+    if re.search(_EM_SAFE_OPS_RE, method_body) \
+            and not re.search(_EM_CREATEQUERY_RE, method_body):
+        ops.append(DbOperation(
+            method=method_name,
+            access_type="jpa_builtin",
+            detail="양호: JPA EntityManager 표준 API (persist/merge/remove) - 직접 SQL 없음",
+            is_vulnerable=False,
+        ))
+        return ops
+
+    # [Phase 17e] Java Reflection API — DB 접근과 무관한 동적 객체 생성 패턴
+    # getDeclaredConstructor, newInstance 등은 SQL Injection 경로 없음 → none 반환
+    # 단, entityManager 사용이 동반되면 Phase 17d에서 이미 처리되므로 여기 도달 시는 진짜 non-DB
+    _REFLECTION_ONLY_RE = re.compile(
+        r'\bgetDeclaredConstructor\s*\('
+        r'|\bgetDeclaredMethod\s*\('
+        r'|\bgetMethod\s*\('
+        r'|\bnewInstance\s*\(',
+    )
+    _DB_INDICATOR_RE = re.compile(
+        r'\b(?:SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\b'
+        r'|\.execute\s*\(|\.query\s*\(|entityManager\s*\.',
+        re.IGNORECASE,
+    )
+    if re.search(_REFLECTION_ONLY_RE, method_body) \
+            and not re.search(_DB_INDICATOR_RE, method_body):
+        ops.append(DbOperation(
+            method=method_name,
+            access_type="none",
+            detail="DB 접근 없음 (Reflection API 전용 메서드)",
+            is_vulnerable=False,
+        ))
+        return ops
+
     # DB 접근 없음
-    if not re.search(r'\.(?:execute|sql|select|insert|update|delete|query)\s*\(',
-                     method_body, re.IGNORECASE):
+    # [Phase 17 guard] QueryDSL JPAQueryFactory/JPAQuery 사용 중인 메서드는
+    # selectFrom()/fetch() 패턴 때문에 위 정규식에 걸리지 않으므로
+    # 조기 반환에서 제외하여 Phase 17 QueryDSL 탐지(아래)로 넘긴다.
+    # PathBuilder/BooleanBuilder/Q-type: jpaQueryFactory를 helper에 위임하는
+    # 메서드(예: ParticipantJpaRepository.findAllBy)도 QueryDSL 패턴으로 인식.
+    _QUERYDSL_HINT_RE = re.compile(
+        r'(?:queryFactory|jpaQueryFactory|JPAQueryFactory)\s*\.'
+        r'|JPAQuery\s*<'
+        r'|PathBuilder\s*<'                 # new PathBuilder<>(entityCls, ...)
+        r'|BooleanBuilder\s*\('
+        r'|\bQ[A-Z]\w+\.\w+'               # QEntity.field.eq(...) 정적 임포트
+        r'|\bq[A-Z]\w+\s*\.\s*\w+'         # [요구사항 4] qEntity.field.eq() 인스턴스 변수
+        r'|\bselectQuery\s*\('              # [요구사항 4] selectQuery() QueryDSL helper
+        r'|\bentityManager\s*\.',           # entityManager.persist/find 등
+    )
+    _has_querydsl_factory = bool(re.search(_QUERYDSL_HINT_RE, method_body))
+    if not _has_querydsl_factory and not re.search(
+            r'\.(?:execute|sql|select|insert|update|delete|query)\s*\(',
+            method_body, re.IGNORECASE):
         ops.append(DbOperation(
             method=method_name,
             access_type="none",
@@ -1987,6 +2414,32 @@ def analyze_repository_method(content: str, method_name: str,
                                               tainted_names=tainted_names)
         if kt_ops:
             return kt_ops
+
+    # [Phase 17] QueryDSL JPAQueryFactory — Criteria 기반 parameterized 쿼리
+    # .where(entity.field.eq(val)) 패턴은 PreparedStatement 자동 바인딩으로 안전
+    # PathBuilder/BooleanBuilder/Q-type 패턴도 QueryDSL 위임 helper 사용 케이스로 포함
+    if re.search(_QUERYDSL_HINT_RE, method_body):
+        if re.search(r'Expressions\s*\.\s*stringTemplate\s*\(', method_body):
+            # Expressions.stringTemplate() 은 raw 문자열 삽입 가능 → 취약
+            m_expr = re.search(r'Expressions\s*\.\s*stringTemplate\s*\(', method_body)
+            line_no, code = find_line(m_expr)
+            ops.append(DbOperation(
+                method=method_name,
+                access_type="raw_concat",
+                detail="취약: QueryDSL Expressions.stringTemplate() - 사용자 입력 직접 삽입 가능",
+                line=line_no,
+                code_snippet=code,
+                is_vulnerable=True,
+            ))
+        else:
+            ops.append(DbOperation(
+                method=method_name,
+                access_type="jpa_builtin",
+                detail="양호: QueryDSL JPAQueryFactory 기반 쿼리 - "
+                       "PreparedStatement 바인딩 (.eq/.in/.between 등)",
+                is_vulnerable=False,
+            ))
+        return ops
 
     # 판정 불가
     ops.append(DbOperation(
@@ -2288,9 +2741,11 @@ def judge_endpoint(trace_result: dict, endpoint: dict) -> dict:
                 }
 
             # [Phase 15] Handler 본문에 DB 관련 호출 패턴 없으면 → 양호 (stub)
+            # [Phase 17] Port/UseCase/Adapter 추가: Hexagonal Architecture 패턴 인식
             handler_body = trace_result.get("handler_method_body", "")
             if handler_body and not re.search(
-                    r'(?:Service|Repository|Mapper|Dao|DAO|Template)\s*[\.\(]',
+                    r'(?:Service|Repository|Mapper|Dao|DAO|Template'
+                    r'|Port|UseCase|Adapter)\s*[\.\(]',
                     handler_body, re.IGNORECASE):
                 return {
                     "result": "양호",
@@ -2724,7 +3179,7 @@ def run_diagnosis(source_dir: Path, inventory_path: Path,
 
     # 2. 클래스 인덱스 구축
     print("클래스 인덱스 구축 중...")
-    class_index = build_class_index(source_dir)
+    class_index, impl_index = build_class_index(source_dir)
     print(f"  → {len(class_index)}개 클래스 인덱싱 완료")
 
     # 2-1. MyBatis/iBatis XML mapper 인덱스 구축
@@ -2742,7 +3197,8 @@ def run_diagnosis(source_dir: Path, inventory_path: Path,
         no = f"1-{counter}"
 
         # 호출 흐름 추적
-        trace = trace_endpoint(ep, source_dir, class_index, mybatis_index)
+        trace = trace_endpoint(ep, source_dir, class_index, mybatis_index,
+                               impl_index=impl_index)
 
         # 판정
         judgment = judge_endpoint(trace, ep)
@@ -2799,7 +3255,7 @@ def run_diagnosis(source_dir: Path, inventory_path: Path,
             "total_classes_indexed": len(class_index),
             "total_mybatis_mappings": len(mybatis_index),
             "scanned_at": datetime.now().isoformat(),
-            "script_version": "4.5.2",
+            "script_version": "4.6.0",
         },
         "endpoint_diagnoses": [asdict(d) for d in diagnoses],
         "global_findings": global_findings,

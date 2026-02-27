@@ -8,7 +8,7 @@
 ---
 
 ### 컨텍스트
-Task 2-1에서 추출한 API 인벤토리를 기반으로 **Persistent XSS**, **Reflected XSS**, **Redirect XSS**, **View XSS** 취약점을 정적 분석합니다.
+Task 2-1에서 추출한 API 인벤토리를 기반으로 **Persistent XSS**, **Reflected XSS**, **Redirect XSS**, **View XSS**, **DOM XSS** 취약점을 정적 분석합니다.
 
 ---
 
@@ -26,7 +26,8 @@ Task 2-1에서 추출한 API 인벤토리를 기반으로 **Persistent XSS**, **
 API 목록 → Controller (@Controller/@RestController 판별)
               ├→ Service → DB 저장 로직 (Persistent XSS)
               ├→ View 파일 (JSP/Thymeleaf/React/Vue) (View XSS)
-              └→ Redirect 로직 (sendRedirect/forward) (Redirect XSS)
+              ├→ Redirect 로직 (sendRedirect/forward) (Redirect XSS)
+              └→ JS/TS/Vue 파일 전역 스캔 (DOM XSS)
 ```
 
 ---
@@ -127,7 +128,36 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 
 ---
 
-### 5. XSS 필터 충분성 검증
+### 5. DOM XSS (DOM 기반)
+
+클라이언트 JavaScript가 **DOM을 동적으로 조작**할 때 사용자 제어 데이터가 직접 삽입되는 경우.
+서버 응답에 스크립트가 반영되지 않아 서버측 로그에 미노출 — 탐지 난이도 높음.
+
+**취약 패턴 (JavaScript/TypeScript/Vue 파일 탐색):**
+
+| 패턴 | 설명 | 안전 대안 |
+|------|------|-----------|
+| `element.innerHTML = userInput` | HTML 직접 삽입 | `element.textContent =` |
+| `element.outerHTML = userInput` | HTML 직접 교체 | `textContent` |
+| `document.write(userInput)` | DOM에 직접 출력 | 사용 금지 권장 |
+| `eval(userInput)` | JS 코드 실행 | JSON.parse 등 대안 |
+| `insertAdjacentHTML(pos, userInput)` | HTML 삽입 | `insertAdjacentText()` |
+| `$(el).html(userInput)` | jQuery HTML 삽입 | `$(el).text(userInput)` |
+| `dangerouslySetInnerHTML={{ __html: val }}` | React HTML 삽입 | DOMPurify.sanitize() 적용 |
+| `v-html="userInput"` | Vue HTML 삽입 | DOMPurify 또는 v-text |
+| `[innerHTML]="userInput"` | Angular HTML 바인딩 | DomSanitizer 사용 |
+| `setTimeout(userInput)` | 동적 코드 실행 | function 레퍼런스 사용 |
+
+**판정:**
+- `innerHTML =` / `document.write()` + 사용자 입력 → **취약**
+- `dangerouslySetInnerHTML` / `v-html` + DOMPurify 미적용 → **정보(잠재)**
+- `dangerouslySetInnerHTML` / `v-html` + DOMPurify.sanitize() 적용 → **양호**
+
+**자동 탐지:** `scan_xss.py` Phase 6 — JS/TS/Vue 파일 전역 스캔 결과 `scan_metadata.dom_xss_scan` 참조
+
+---
+
+### 6. XSS 필터 충분성 검증
 
 **필수 필터 문자 (8개):**
 
@@ -160,10 +190,10 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 | 심각도 | 조건 |
 |---|---|
 | **Critical** | 인증 없는 API + Persistent XSS + 필터 없음 |
-| **High** | Persistent XSS 필터 없음, 또는 @Controller HTML 반환 + 필터 없음 |
-| **Medium** | 부분 필터 적용 (필수 4문자 중 일부 누락), Redirect 검증 미흡 |
+| **High** | Persistent XSS 필터 없음, 또는 @Controller HTML 반환 + 필터 없음, DOM XSS 사용자 입력 직접 삽입 |
+| **Medium** | 부분 필터 적용 (필수 4문자 중 일부 누락), Redirect 검증 미흡, DOM XSS 잠재 패턴 + sanitize 미확인 |
 | **Low** | @RestController JSON 반환이나 Gson disableHtmlEscaping 사용 |
-| **Info** | 필터 개선 권고 (8개 중 보조 4문자 누락) |
+| **Info** | 필터 개선 권고 (8개 중 보조 4문자 누락), dangerouslySetInnerHTML / v-html + sanitize 적용 확인 권고 |
 
 ---
 
