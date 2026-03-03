@@ -55,7 +55,7 @@ REMOTE_HTTP = f"{BITBUCKET_URL}/scm/{PROJECT_KEY}/{REPO_SLUG}.git"
 API_BASE = f"{BITBUCKET_URL}/rest/api/1.0/projects/{PROJECT_KEY}/repos/{REPO_SLUG}"
 
 # Bitbucket에 포함할 디렉토리
-INCLUDE_PATHS = ["skills", "tools"]
+INCLUDE_PATHS = ["skills", "tools", "docs"]
 
 # Bitbucket에 포함할 루트 단일 파일
 INCLUDE_FILES = ["RELEASENOTE.md", "TODO.md"]
