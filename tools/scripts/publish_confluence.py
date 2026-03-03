@@ -1269,14 +1269,112 @@ def _json_to_xhtml_enhanced_injection(data):
     return "\n".join(parts)
 
 
+def _simplify_xss_category(ep: dict) -> str:
+    """Map XSS diagnosis to developer-friendly subcategory name.
+
+    취약:
+      Persistent XSS   — persistent_xss == "취약"
+      Reflected XSS    — reflected_xss == "취약" / text/html 강제
+      View XSS         — view_xss == "취약" (JSP/Thymeleaf)
+      Open Redirect    — redirect_xss == "취약"
+    양호:
+      GET 전용 엔드포인트
+      비문자열/파라미터 없음
+      흐름 검증으로 안전
+      DB 미접근 엔드포인트
+      REST JSON 응답
+    정보:
+      수동 확인 필요
+    """
+    result   = ep.get("result", "정보")
+    xss_type = ep.get("xss_type", "")
+    ctrl     = ep.get("controller_type_detected", ep.get("controller_type", ""))
+    diag     = ep.get("diagnosis_detail", "")
+
+    if result == "취약":
+        if ep.get("persistent_xss") == "취약" or "Persistent" in xss_type:
+            return "Persistent XSS"
+        if ep.get("reflected_xss") == "취약" or "Reflected" in xss_type:
+            return "Reflected XSS"
+        if ep.get("view_xss") == "취약" or "View" in xss_type:
+            return "View XSS"
+        if ep.get("redirect_xss") == "취약" or "Redirect" in xss_type or "Open Redirect" in xss_type:
+            return "Open Redirect"
+        return "XSS (기타)"
+
+    if result == "양호":
+        if "GET 전용" in diag:
+            return "GET 전용 엔드포인트"
+        if ("자유 텍스트" in diag or "비문자열" in diag
+                or "파라미터 없음" in diag or "입력 파라미터 없음" in diag):
+            return "비문자열/파라미터 없음"
+        if "WHERE" in diag or "안전" in diag and "필터" not in diag:
+            return "흐름 검증으로 안전"
+        if "DB" in diag and ("미접근" in diag or "미호출" in diag or "없음" in diag):
+            return "DB 미접근 엔드포인트"
+        if "REST" in ctrl or "json" in ctrl.lower():
+            return "REST JSON 응답"
+        return "안전 확인"
+
+    # 정보
+    return "수동 확인 필요"
+
+
+def _render_xss_ep_detail(ep: dict) -> str:
+    """Render detailed info table for a representative XSS endpoint."""
+    method  = html_escape(str(ep.get("http_method", "")))
+    path    = html_escape(str(ep.get("request_mapping", "")))
+    handler = html_escape(str(ep.get("handler", "")))
+    pfile   = html_escape(str(ep.get("process_file", "")))
+    params  = html_escape(str(ep.get("parameters", ""))[:300])
+    diag    = html_escape(str(ep.get("diagnosis_detail", "")))
+    xss_t   = html_escape(str(ep.get("xss_type", "")))
+    ctrl    = html_escape(str(ep.get("controller_type_detected",
+                                     ep.get("controller_type", ""))))
+
+    rows = [
+        ["API",      f"<code>{method} {path}</code>"],
+        ["핸들러",   f"<code>{handler}</code>"],
+    ]
+    if pfile:
+        rows.append(["소스 파일", f"<code>{pfile}</code>"])
+    if params:
+        rows.append(["파라미터", f"<code>{params}</code>"])
+    if xss_t:
+        rows.append(["XSS 유형", xss_t])
+    if ctrl:
+        rows.append(["컨트롤러 유형", ctrl])
+    if diag:
+        rows.append(["판정 근거", diag])
+
+    parts = [_table(["항목", "내용"], rows)]
+
+    # 취약 evidence (코드 스니펫)
+    for ev in ep.get("evidence", [])[:2]:
+        if isinstance(ev, dict):
+            efile   = html_escape(str(ev.get("file", "")))
+            eline   = html_escape(str(ev.get("line", "")))
+            snippet = ev.get("code_snippet", "")
+            if efile:
+                parts.append(
+                    f"<p><strong>위치:</strong> <code>{efile}:{eline}</code></p>"
+                )
+            if snippet:
+                parts.append(_confluence_code_block(snippet, "java"))
+
+    return "".join(parts)
+
+
 def _json_to_xhtml_enhanced_xss(data):
     """Convert scan_xss.py output (v1.1+) to developer-friendly XHTML.
 
-    Structure:
-      - 진단 요약 (per-type summary table)
-      - XSS 전역 필터 현황
-      - ✅ 양호 / 🚨 취약 / ⚠️ 정보 endpoint grouping
-      - 정보 항목 (필터 미설정 등)
+    Structure (인젝션 보고서와 동일 포맷):
+      - 진단 요약
+      - 🚨 취약 (Vulnerable) — XSS 유형 소분류, 대표 사례 상세 + expand
+      - ⚠️ 정보 (Info)        — 소분류, 대표 사례 상세 + expand
+      - ✅ 양호 (Safe)         — 소분류, 대표 사례 상세 + expand
+      - ⚠️ 정보 항목 — XSS 전역 필터 현황 (info/warning 매크로 박스)
+      - 🔍 전역 취약점 — DOM XSS (분리)
     """
     parts = ["<h2>XSS 취약점 진단 결과</h2>"]
 
@@ -1286,186 +1384,197 @@ def _json_to_xhtml_enhanced_xss(data):
             f"<p>"
             f"<strong>소스:</strong> <code>{html_escape(str(meta.get('source_dir', '')))}</code>"
             f" &nbsp;|&nbsp; "
-            f"<strong>분석 버전:</strong> <code>{html_escape(str(meta.get('script_version', '')))}</code>"
+            f"<strong>분석 버전:</strong>"
+            f" <code>{html_escape(str(meta.get('script_version', '')))}</code>"
             f"</p>"
         )
 
     # --- 진단 요약 ---
-    summary = data.get("summary", {})
-    total_ep = summary.get("total_endpoints", 0)
+    summary    = data.get("summary", {})
+    total_ep   = summary.get("total_endpoints", 0)
     xss_counts = summary.get("xss", {})
-    per_type = summary.get("per_type", {})
 
     parts.append("<h3>진단 요약</h3>")
     sum_rows = [
         ["총 분석 엔드포인트", f"<strong>{total_ep}</strong>건"],
-        [f'{_severity_badge("High").replace("High", "취약")} XSS 취약',
-         f"<strong>{xss_counts.get('취약', 0)}</strong>건"],
-        [f'{_severity_badge("Medium").replace("Medium", "정보")} 수동 검토 필요',
-         f"<strong>{xss_counts.get('정보', 0)}</strong>건"],
-        [f'{_severity_badge("Info").replace("Info", "양호")} 안전',
-         f"<strong>{xss_counts.get('양호', 0)}</strong>건"],
+        [
+            f'{_severity_badge("High").replace("High", "취약")} XSS 취약',
+            f"<strong>{xss_counts.get('취약', 0)}</strong>건",
+        ],
+        [
+            f'{_severity_badge("Medium").replace("Medium", "정보")} 수동 검토 필요',
+            f"<strong>{xss_counts.get('정보', 0)}</strong>건",
+        ],
+        [
+            f'{_severity_badge("Info").replace("Info", "양호")} 안전',
+            f"<strong>{xss_counts.get('양호', 0)}</strong>건",
+        ],
     ]
     parts.append(_table(["항목", "결과"], sum_rows))
 
-    # --- Per-type 분류 테이블 ---
-    if per_type:
-        parts.append("<h3>XSS 유형별 진단 결과</h3>")
-        _type_labels = {
-            "reflected_xss": "Reflected XSS",
-            "view_xss": "View XSS (JSP/Thymeleaf)",
-            "persistent_xss": "Persistent XSS",
-            "redirect_xss": "Redirect XSS",
-            "dom_xss": "DOM XSS",
-        }
-        pt_rows = []
-        for key, label in _type_labels.items():
-            val = per_type.get(key, {})
-            if isinstance(val, dict):
-                vuln = val.get("취약", 0)
-                safe = val.get("양호", 0)
-                na = val.get("해당없음", 0)
-                info = val.get("정보", 0)
-                if vuln > 0:
-                    badge = _severity_badge("High").replace("High", "취약")
-                    detail = f"취약 {vuln}건"
-                elif info > 0:
-                    badge = _severity_badge("Medium").replace("Medium", "정보")
-                    detail = f"정보 {info}건"
-                elif safe > 0:
-                    badge = _severity_badge("Info").replace("Info", "양호")
-                    detail = f"양호 {safe}건"
-                else:
-                    badge = "<em>해당없음</em>"
-                    detail = f"해당없음 {na}건"
-                pt_rows.append([label, badge, detail])
-            else:
-                # dom_xss can be a string summary
-                pt_rows.append([label, "<em>전역 스캔</em>",
-                                 html_escape(str(val)[:200])])
-        parts.append(_table(["XSS 유형", "결과", "상세"], pt_rows))
-
-    # --- 전역 XSS 필터 현황 ---
-    global_filter = meta.get("global_xss_filter", {})
-    if global_filter:
-        has_filter = global_filter.get("has_filter", False)
-        filter_type = html_escape(str(global_filter.get("filter_type", "없음")))
-        filter_detail = html_escape(str(global_filter.get("filter_detail", "")))
-        filter_badge = (_severity_badge("Info").replace("Info", "적용됨")
-                        if has_filter
-                        else _severity_badge("Medium").replace("Medium", "미설정"))
-        parts.append("<h3>XSS 전역 필터</h3>")
-        f_rows = [
-            ["필터 상태", filter_badge],
-            ["필터 유형", filter_type],
-        ]
-        if filter_detail:
-            f_rows.append(["상세", filter_detail])
-        # 세부 필터 목록
-        for fkey, flabel in [("has_lucy", "Lucy XSS Filter"),
-                              ("has_antisamy", "AntiSamy"),
-                              ("has_esapi", "ESAPI"),
-                              ("has_ss_xss", "Spring Security XSS"),
-                              ("has_jackson_xss", "Jackson XSS Deserializer")]:
-            if global_filter.get(fkey):
-                f_rows.append([flabel, "✓ 발견"])
-        parts.append(_table(["항목", "값"], f_rows))
-
-    # --- Endpoint 목록 (결과별 그룹) ---
+    # --- Endpoint 결과별 그룹 ---
     diagnoses = data.get("endpoint_diagnoses", [])
+    result_groups: dict = {}
+    for ep in diagnoses:
+        result_groups.setdefault(ep.get("result", "정보"), []).append(ep)
 
-    def _render_xss_group(result_key, icon, title_ko):
-        eps = [ep for ep in diagnoses if ep.get("result") == result_key]
+    def _render_xss_result_section(result_key: str, icon: str, title_ko: str) -> str:
+        eps = result_groups.get(result_key, [])
         if not eps:
             return ""
+
         sec = [f"<h3>{icon} {html_escape(title_ko)} — {len(eps)}건</h3>"]
-        ep_rows = []
+
+        # 소분류별 그룹
+        cat_groups: dict = {}
         for ep in eps:
-            reflected = html_escape(str(ep.get("reflected_xss", "N/A")))
-            view = html_escape(str(ep.get("view_xss", "N/A")))
-            persistent = html_escape(str(ep.get("persistent_xss", "N/A")))
-            redirect = html_escape(str(ep.get("redirect_xss", "N/A")))
-            dom = html_escape(str(ep.get("dom_xss", "N/A")))
-            ep_rows.append([
-                f"<code>{html_escape(str(ep.get('http_method', '')))}</code>",
-                f"<code>{html_escape(str(ep.get('request_mapping', '')))}</code>",
-                html_escape(str(ep.get("controller_type", ""))),
-                reflected, view, persistent, redirect, dom,
-            ])
-        sec.append(_table(
-            ["Method", "API", "Controller 유형",
-             "Reflected", "View", "Persistent", "Redirect", "DOM"],
-            ep_rows))
-        # 취약 endpoint 상세
-        if result_key == "취약":
-            for ep in eps:
-                detail = html_escape(str(ep.get("diagnosis_detail", "")))
-                evidence = ep.get("evidence", [])
-                if detail or evidence:
-                    api = html_escape(str(ep.get("request_mapping", "")))
-                    method = html_escape(str(ep.get("http_method", "")))
-                    sec.append(f"<h4><code>{method} {api}</code> 취약 상세</h4>")
-                    if detail:
-                        sec.append(f"<p>{detail}</p>")
-                    for ev in evidence[:3]:
-                        if isinstance(ev, dict):
-                            efile = html_escape(str(ev.get("file", "")))
-                            eline = html_escape(str(ev.get("line", "")))
-                            snippet = ev.get("code_snippet", "")
-                            if efile:
-                                sec.append(f"<p><strong>위치:</strong> "
-                                           f"<code>{efile}:{eline}</code></p>")
-                            if snippet:
-                                sec.append(_confluence_code_block(snippet, "java"))
+            cat_groups.setdefault(_simplify_xss_category(ep), []).append(ep)
+
+        # 소분류 요약 테이블
+        cat_rows = [
+            [html_escape(cat), f"{len(ce)}건"]
+            for cat, ce in sorted(cat_groups.items(), key=lambda x: -len(x[1]))
+        ]
+        sec.append(_table(["원인 카테고리", "건수"], cat_rows))
+
+        # 소분류별 상세
+        for cat, cat_eps in sorted(cat_groups.items(), key=lambda x: -len(x[1])):
+            representative = cat_eps[0]
+            rest           = cat_eps[1:]
+
+            sec.append(f"<h4>{html_escape(cat)} ({len(cat_eps)}건)</h4>")
+            sec.append("<p><em>대표 사례 상세:</em></p>")
+            sec.append(_render_xss_ep_detail(representative))
+
+            if rest:
+                rest_rows = []
+                for idx, ep in enumerate(rest, 2):
+                    xss_t = html_escape(str(ep.get("xss_type", "")))
+                    diag  = html_escape(str(ep.get("diagnosis_detail", ""))[:80])
+                    rest_rows.append([
+                        str(idx),
+                        f"<code>{html_escape(str(ep.get('http_method', '')))}</code>",
+                        f"<code>{html_escape(str(ep.get('request_mapping', '')))}</code>",
+                        f"<code>{html_escape(str(ep.get('handler', '')))}</code>",
+                        xss_t or diag,
+                    ])
+                sec.append(_confluence_expand(
+                    f"나머지 {len(rest)}개 API 목록 펼치기 ▶",
+                    _table(["#", "Method", "API", "핸들러", "판정 요약"], rest_rows),
+                ))
+
         return "".join(sec)
 
-    parts.append(_render_xss_group("취약", "🚨", "취약 (Vulnerable)"))
-    parts.append(_render_xss_group("정보", "⚠️", "정보 — 수동 검토 필요 (Info)"))
-    parts.append(_render_xss_group("양호", "✅", "양호 (Safe)"))
+    parts.append(_render_xss_result_section("취약", "🚨", "취약 (Vulnerable)"))
+    parts.append(_render_xss_result_section("정보", "⚠️", "정보 — 수동 검토 필요 (Info)"))
+    parts.append(_render_xss_result_section("양호", "✅", "양호 (Safe)"))
 
-    # --- 정보 항목: XSS 전역 필터 미설정 ---
-    if global_filter and not global_filter.get("has_filter"):
-        parts.append("<h3>⚠️ 정보 항목 — XSS 전역 필터 미설정</h3>")
-        parts.append(
-            f'<ac:structured-macro ac:name="info">'
-            f'<ac:rich-text-body>'
-            f'<p><strong>현황:</strong> Lucy XSS Filter, AntiSamy, ESAPI, '
-            f'Jackson XSS Deserializer 등 전역 XSS 필터 미발견</p>'
-            f'<p><strong>현재 위험도:</strong> <strong>낮음</strong> — '
-            f'REST API JSON 응답 구조로 서버 레벨 XSS 발생 경로 없음</p>'
-            f'<p><strong>향후 위험:</strong> HTML View 추가 또는 외부 포털이 '
-            f'이 API 응답을 HTML에 직접 렌더링하는 경우 위험</p>'
-            f'<p><strong>권고:</strong> JSON Request Body용 Jackson XSS Deserializer '
-            f'또는 Spring Security 기반 필터 적용 검토</p>'
-            f'</ac:rich-text-body></ac:structured-macro>'
+    # --- ⚠️ 정보 항목 — XSS 전역 필터 현황 (박스 처리) ---
+    global_filter = meta.get("global_xss_filter", {})
+    if global_filter:
+        has_filter   = global_filter.get("has_filter", False)
+        filter_type  = html_escape(str(global_filter.get("filter_type", "없음")))
+        filter_detail= html_escape(str(global_filter.get("filter_detail", "")))
+        filter_badge = (
+            _severity_badge("Info").replace("Info", "적용됨")
+            if has_filter
+            else _severity_badge("Medium").replace("Medium", "미설정")
         )
-        parts.append(_confluence_code_block(
-            "// 권고: Jackson ObjectMapper에 XSS Deserializer 전역 등록\n"
-            "mapper.registerModule(new SimpleModule()\n"
-            "    .addDeserializer(String.class, new XSSStringDeserializer()));",
-            "java"
-        ))
+        parts.append("<h3>⚠️ 정보 항목 — XSS 전역 필터 현황</h3>")
+        if has_filter:
+            body = (
+                f"<p><strong>필터 상태:</strong> {filter_badge} — {filter_type}</p>"
+            )
+            if filter_detail:
+                body += f"<p><strong>상세:</strong> {filter_detail}</p>"
+            # 적용된 필터 세부 목록
+            for fkey, flabel in [
+                ("has_lucy",       "Lucy XSS Filter"),
+                ("has_antisamy",   "AntiSamy"),
+                ("has_esapi",      "ESAPI"),
+                ("has_ss_xss",     "Spring Security XSS"),
+                ("has_jackson_xss","Jackson XSS Deserializer"),
+            ]:
+                if global_filter.get(fkey):
+                    body += f"<p>✓ {flabel} 발견</p>"
+            parts.append(
+                f'<ac:structured-macro ac:name="info">'
+                f'<ac:rich-text-body>{body}</ac:rich-text-body>'
+                f'</ac:structured-macro>'
+            )
+        else:
+            parts.append(
+                f'<ac:structured-macro ac:name="warning">'
+                f'<ac:rich-text-body>'
+                f'<p><strong>현황:</strong> {filter_badge} — '
+                f'Lucy XSS Filter, AntiSamy, ESAPI, '
+                f'Jackson XSS Deserializer 등 전역 XSS 필터 미발견</p>'
+                f'<p><strong>현재 위험도:</strong> <strong>낮음</strong> — '
+                f'REST API JSON 응답 구조로 서버 레벨 XSS 발생 경로 없음</p>'
+                f'<p><strong>향후 위험:</strong> HTML View 추가 또는 외부 포털이 '
+                f'이 API 응답을 HTML에 직접 렌더링하는 경우 위험</p>'
+                f'<p><strong>권고:</strong> JSON Request Body용 Jackson XSS Deserializer '
+                f'또는 Spring Security 기반 필터 적용 검토</p>'
+                f'</ac:rich-text-body></ac:structured-macro>'
+            )
+            parts.append(_confluence_code_block(
+                "// 권고: Jackson ObjectMapper에 XSS Deserializer 전역 등록\n"
+                "mapper.registerModule(new SimpleModule()\n"
+                "    .addDeserializer(String.class, new XSSStringDeserializer()));",
+                "java",
+            ))
 
-    # --- DOM XSS 전역 스캔 결과 ---
+    # --- 🔍 전역 취약점 — DOM XSS (개별 API 종속 아님, 최하단 분리) ---
     dom_xss_scan = meta.get("dom_xss_scan", {})
     if dom_xss_scan and isinstance(dom_xss_scan, dict):
-        dom_files = dom_xss_scan.get("total_files_scanned", 0)
+        dom_files    = dom_xss_scan.get("total_files_scanned", 0)
         dom_findings = dom_xss_scan.get("findings", [])
-        parts.append("<h3>DOM XSS 전역 스캔</h3>")
-        dom_rows = [
-            ["스캔 파일 수 (JS/TS/Vue)", str(dom_files)],
-            ["DOM XSS 패턴 발견", str(len(dom_findings))],
-        ]
-        parts.append(_table(["항목", "값"], dom_rows))
+        total_dom    = len(dom_findings)
+
+        parts.append(
+            f"<h3>🔍 전역 취약점 — DOM XSS ({total_dom}건)</h3>"
+        )
+        parts.append(
+            "<p><em>아래 패턴은 전체 소스코드(JS/TS/Vue) 수준에서 감지된 항목입니다. "
+            "사용자 입력 소스 여부를 수동으로 확인하세요.</em></p>"
+        )
+        parts.append(_table(
+            ["항목", "값"],
+            [
+                ["스캔 파일 수 (JS/TS/Vue)", str(dom_files)],
+                ["DOM XSS 패턴 발견",        str(total_dom)],
+            ],
+        ))
+
         if dom_findings:
-            for f in dom_findings[:5]:
-                fname = html_escape(str(f.get("file", "")))
-                line = f.get("line", 0)
+            def _render_dom_finding(f: dict, idx: int) -> str:
+                fname   = html_escape(str(f.get("file", "")))
+                line    = f.get("line", 0)
                 pattern = html_escape(str(f.get("pattern_name", "")))
                 snippet = f.get("code_snippet", "")
-                parts.append(f"<p><code>{fname}:{line}</code> — {pattern}</p>")
+                fp = [f"<h5>{idx}. {pattern}</h5>"]
+                fp.append(_table(
+                    ["항목", "내용"],
+                    [
+                        ["파일",  f"<code>{fname}:{line}</code>"],
+                        ["패턴",  pattern],
+                    ],
+                ))
                 if snippet:
-                    parts.append(_confluence_code_block(snippet, "javascript"))
+                    fp.append("<p><strong>코드 스니펫</strong></p>")
+                    fp.append(_confluence_code_block(snippet, "javascript"))
+                return "".join(fp)
+
+            parts.append(_render_dom_finding(dom_findings[0], 1))
+            if len(dom_findings) > 1:
+                rest_content = "".join(
+                    _render_dom_finding(f, i)
+                    for i, f in enumerate(dom_findings[1:], 2)
+                )
+                parts.append(_confluence_expand(
+                    f"나머지 {len(dom_findings) - 1}건 더 보기 ▶",
+                    rest_content,
+                ))
 
     return "\n".join(parts)
 

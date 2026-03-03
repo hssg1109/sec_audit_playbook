@@ -8,6 +8,133 @@
 
 ---
 
+## [v4.6.3] - 2026-02-28
+
+### Fixed — scan_injection_enhanced.py: Call Graph 완성 (5종 버그 수정)
+- **Fix A**: `_collect_helper_port_calls` — "첫 발견 즉시 반환" → "모든 헬퍼에서 전체 수집" (all_calls 누적)
+- **Fix B**: `_extract_service_method_body(content, method_name)` 신규 함수
+  - `@Override public/protected` 우선 탐색 → private overload 우선 반환 문제 해결
+  - 예: `ExchangePointsService.private exchangePoints(Integer)` vs `@Override public exchangePoints(Command)` → 후자 정확 반환
+- **Fix C**: Phase 3b — Controller private 헬퍼에서 추가 UseCase 호출 수집
+  - `_SAME_CLASS_CALL_RE` 기반 헬퍼명 추출 → svc_calls 보강
+  - 예: `RewardReceiveController.receiveReward()` → `receiveGoldenEggReward()` → `goldenEggRewardReceiveUseCase`
+- **Fix D**: Phase 20c — DB 의존성 없는 인프라 서비스 non-DB 판정
+  - `not repo_fields AND not db_client_fields AND not db_operations` → `[non-DB]` 마킹
+- **Fix E**: `_SAME_CLASS_CALL_RE` 음수 후방탐색 `(?<![.\w])` → DTO getter 오탐 방지
+
+### Verified
+- okick-event (19 ep): 양호 19 / 취약 0 / 정보 0 — SHA-256 PASS
+- okick-reward (10 ep): 양호 10 / 취약 0 / 정보 0 — SHA-256 PASS
+
+---
+
+## [v4.6.2] - 2026-02-27
+
+### Fixed — scan_injection_enhanced.py: Call Graph Disconnection
+- `build_class_index` → `(class_index, impl_index)` 튜플 반환 (구현체 O(1) 조회)
+- `_resolve_impl_class(name, class_index, impl_index)` — impl_index 우선 조회
+- Phase 17: domain Repository 인터페이스 → JPA 구현체 해석 블록 추가
+- Phase 11: `_port_like_fields` 있으면 `[non-DB]` continue 스킵
+- Phase 4b: trace_endpoint — Controller private 헬퍼 내 Port 호출 추적
+- Phase 17d: `entityManager.persist/merge/remove` → `jpa_builtin` 판정
+- Phase 17e: Reflection API + DB indicator 없음 → `none` 판정
+
+---
+
+## [v4.6.1] - 2026-02-26
+
+### Fixed — scan_injection_enhanced.py: `findAllBy` → "DB 미접근" 오분류
+- **근본 원인 3가지**:
+  1. `findAllBy`가 `JPA_CONVENTION_PREFIXES` 미등록
+  2. Phase 17 트리거 조건 `if not db_ops` → domain interface가 `none` op 반환 시 Phase 17 스킵
+  3. `extract_method_body`가 Kotlin interface 메서드(body 없음) 이후 메서드를 잘못 흡수
+- `JPA_CONVENTION_PREFIXES`에 `findAllBy` 추가
+- `extract_method_body`: interface 메서드 guard 추가 (`;` 또는 body 없는 선언 감지)
+- Phase 17 트리거: `not db_ops OR all-none` 으로 확장
+- Phase 17b: Adapter → 내부 Repository 1단계 추가 추적
+- Phase 17c: `analyze_repository_method`에 JPA 위임 호출 패턴 탐지 추가
+- `_QUERYDSL_HINT_RE` 확장: `PathBuilder<`, `BooleanBuilder(`, `Q[A-Z]\w+.\w+` 추가
+
+### Added — publish_confluence.py: main_report 타입 신규
+- `_json_to_xhtml_main_report()`: 섹션 1(개요)/8(한계)만 추출, JSON 기반 종합 요약 계산
+- `_build_main_summary_table()`: injection/xss JSON에서 수치 계산 (단일 소스)
+- `_build_main_api_inventory()`: method/api 또는 http_method/request_mapping 자동 감지
+- `confluence_page_map.json`: 테스트13/14 → `"type": "main_report"` + `"task_sources"` 구조
+
+---
+
+## [v4.6.0] - 2026-02-25
+
+### Added — Phase 17: Hexagonal Architecture (Port & Adapter 패턴) 지원
+- `_TRACEABLE_COMPONENT_SUFFIXES`에 `Port` 추가 (13종)
+- `extract_constructor_deps`: bean_suffixes에 `Port` 추가
+- `analyze_repository_method`: QueryDSL JPAQueryFactory 안전 탐지
+  - `queryFactory.` / `JPAQueryFactory.` → `.where().eq()` → PreparedStatement 바인딩 → 양호
+  - `Expressions.stringTemplate()` → 취약 판정
+- `trace_endpoint`: Domain Repository 인터페이스 → JPA 구현체 해석
+- Phase 15 stub regex에 Port/UseCase/Adapter 패턴 추가 (오탐 방지)
+
+---
+
+## [scan_xss.py v2.3.2] - 2026-03-04
+
+### Fixed — DTO 필드 1레벨 검사 (`_inspect_dto_fields` 신규)
+- `@RequestBody` Java record 타입 balanced-parenthesis 파싱
+  - 기존 `[^)]+` regex → `@Min(1)` 중첩 괄호에서 파싱 실패 수정
+- API inventory `type: "body"` 필드 감지 추가 (`"@RequestBody" in ann` 보완)
+- 결과: `ExchangePointsRequestDto`(`Integer goldenEggsCnt` 단일 필드) → 양호 정확 판정
+
+### Verified
+- okick-reward: 양호 7 / 취약 3 / 정보 0 — SHA-256 PASS (양호+1 개선)
+- okick-event: 양호 14 / 취약 5 / 정보 0 — SHA-256 PASS (회귀 없음)
+
+---
+
+## [scan_xss.py v2.3.1] - 2026-03-03
+
+### Added — publish_confluence.py XSS 보고서 렌더링 전면 개편
+- `_simplify_xss_category(ep)`: 카테고리 분류 (Persistent/Reflected/View XSS, Open Redirect 등)
+- `_render_xss_ep_detail(ep)`: 엔드포인트 상세 정보 테이블 + 코드 증거
+- `_json_to_xhtml_enhanced_xss()` 전면 재작성:
+  - 카테고리별 그룹핑 + 대표 케이스 + Expand 매크로
+  - DOM XSS 하단 분리
+  - XSS 전역 필터 상태 → info/warning 매크로 박스
+
+---
+
+## [scan_xss.py v2.3.0] - 2026-03-03
+
+### Added — SET/WHERE 절 구분 + 헥사고날 아키텍처 구현체 해석
+- `_resolve_svc_impl_body()`: UseCase → Service, Port → Adapter 구현체 해석
+- `_has_param_in_direct_call()`: repo 호출 인수의 HTTP param standalone 전달 확인
+- `_check_repo_param_context()`: SET/WHERE 절 구조 판정 (변수명 무관, 패턴 기반)
+  - QueryDSL `.set(col, val)`, JPA `entity.setXxx(val)`, Builder `.field(val)` → "set"
+  - `.where(...)` 단독 → "where"
+- `_trace_persistent_xss_taint()` 수정: svc_body 폴백 + repo 루프 전면 교체
+
+### Fixed
+- `/api/internal/rewards/failure/retry` → 취약(FP) → 양호 정확 판정
+
+---
+
+## [scan_xss.py v2.2.0] - 2026-03-03
+
+### Fixed — 판정 Regression 수정
+- `check_persistent_xss` "잠재" 반환 2곳 → "취약" 변경
+- `judge_xss_endpoint` "잠재" 핸들러 → worst-case 강제 (≥ 연산)
+
+---
+
+## [scan_xss.py v2.1.0] - 2026-03-03
+
+### Fixed — FP 제거 3종
+- `_sqli_has_db_write`: jpa_builtin/querydsl_safe → detail에 save/insert/update 키워드 확인
+  (기존: access_type만으로 판정 → SELECT QueryDSL도 write 오인 → FP)
+- `_check_enum_validation` + `_P5_SANITIZE_PATTERNS`: Enum.from()/Integer.parseInt()/UUID.fromString() taint 해제
+- `_has_freetext_params`: Integer/Boolean/UUID/날짜 타입만 있으면 즉시 양호
+
+---
+
 ## [v4.5.2] - 2026-02-24
 
 ### Fixed

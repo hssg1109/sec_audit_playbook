@@ -30,7 +30,7 @@
 
 | # | 항목 | 우선순위 | 복잡도 | 상태 | 관련 컴포넌트 | 시작일 | 완료일 | 참고/링크 |
 |---|------|---------|--------|------|--------------|--------|--------|-----------|
-| T-07 | **Task 2-3~2-5 진단 자동화 고도화**<br>XSS / 파일처리 / 데이터보호 진단을<br>SQL Injection 수준의 자동화로 끌어올림<br>• `scan_xss.py`: Controller → View taint 추적, 필터 설정 자동 탐지<br>• `scan_file_handling.py`: 업로드 확장자/경로 검증 자동 탐지<br>• `scan_data_protection.py`: CORS/하드코딩 시크릿/JWT 자동 탐지 | 🔴 | L | 🔄 진행중 | `tools/scripts/`<br>`skills/sec-audit-static/references/task_prompts/` | 2026-02-25 | - | task_23~25_review.md 기반 |
+| T-07 | **Task 2-3~2-5 진단 자동화 고도화**<br>XSS / 파일처리 / 데이터보호 진단을<br>SQL Injection 수준의 자동화로 끌어올림<br>• `scan_xss.py` v2.3.2: ✅ Controller→View/Persistent/DOM taint 추적, 필터 설정 탐지 완성<br>• `scan_file_handling.py`: 업로드 확장자/경로 검증 자동 탐지 (미착수)<br>• `scan_data_protection.py`: CORS/하드코딩 시크릿/JWT 자동 탐지 (미착수) | 🔴 | L | 🔄 진행중 | `tools/scripts/`<br>`skills/sec-audit-static/references/task_prompts/` | 2026-02-25 | - | task_23~25_review.md 기반 |
 | T-01 | 보고서 상단에 서비스 설명 및 자산 구조 명시<br>(URL, IP, Repo, 담당자) | 🔴 | M | ⬜ 대기 | `publish_confluence.py`<br>`generate_finding_report.py` | - | - | - |
 | T-02 | 보안진단 완료 후 PoC/테스트 코드 자동 생성<br>(JUnit / Fuzz / ZAP 활용, 검증용) | 🔴 | XL | ⬜ 대기 | `scan_injection_enhanced.py`<br>`skills/sec-audit-static/` | - | - | - |
 | T-03 | 검증 절차 자동화<br>1차: AI 진단 → 보고서 자동 생성<br>2차: 인력 검토 → Confirm<br>오탐/과탐 체크 워크플로우 | 🔴 | L | ⬜ 대기 | 전체 파이프라인 | - | - | - |
@@ -53,6 +53,13 @@
 | ✅ | Bitbucket push 증분 커밋 히스토리 보존 | 2026-02-25 | - | `BB_HISTORY_REF` 방식 도입 |
 | ✅ | `.gitignore` 고객사 파일 누락 항목 보완 | 2026-02-25 | - | `보고서예시/`, Office 문서 등 |
 | ✅ | `scan_xss.py` v1.1.0 XSS 진단 고도화 | 2026-02-26 | v1.1.0 | per-type 판정(Reflected/View/Persistent/Redirect/DOM) 5종, Phase 6 DOM XSS 전역 스캔, task_23 DOM XSS 기준 추가 |
+| ✅ | `scan_injection_enhanced.py` v4.6.0 Hexagonal Architecture 지원 | 2026-02-25 | v4.6.0 | Phase 17: Port/Adapter suffix 치환, QueryDSL JPAQueryFactory 안전 탐지 |
+| ✅ | `scan_injection_enhanced.py` v4.6.1 findAllBy 오분류 + main_report 타입 | 2026-02-26 | v4.6.1 | interface body guard, Phase 17b/17c, `_QUERYDSL_HINT_RE` 확장, publish_confluence main_report |
+| ✅ | `scan_injection_enhanced.py` v4.6.2 Call Graph Disconnection 수정 | 2026-02-27 | v4.6.2 | impl_index 구축, _resolve_impl_class, Phase 17 JPA 해석 블록 |
+| ✅ | `scan_injection_enhanced.py` v4.6.3 Call Graph 완성 (Fix A~E) | 2026-02-28 | v4.6.3 | okick-event/reward 전량 양호 달성 |
+| ✅ | `scan_xss.py` v2.1.0~v2.3.2 FP 제거 + SET/WHERE 구분 + DTO 필드 검사 | 2026-03-03~04 | v2.3.2 | 3종 FP 수정, Hexagonal 구현체 해석, DTO record balanced-paren 파싱 |
+| ✅ | `publish_confluence.py` XSS 보고서 렌더링 전면 개편 | 2026-03-03 | v2.3.1 | 카테고리 그룹핑 + Expand 매크로 + DOM XSS 분리 + 필터 info/warning 박스 |
+| ✅ | `docs/ANALYSIS_REPORT_INJECTION_XSS.md` 설계 분석 보고서 작성 | 2026-03-04 | - | Hexagonal 추적, SET/WHERE 구분, FN 방어, 폴백/교차검증 기술 문서화 |
 
 ---
 

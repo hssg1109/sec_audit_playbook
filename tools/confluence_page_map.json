@@ -125,11 +125,11 @@
               "task_sources": {
                 "api":       "state/okick_event_api_inventory.json",
                 "injection": "state/okick_event_injection_v3.json",
-                "xss":       "state/okick_event_xss_v1.json"
+                "xss":       "state/okick_event_xss_v3.json"
               }
             },
             {"source": "state/okick_event_injection_v3.json",     "title": "테스트13 - 인젝션 취약점 진단 결과",   "type": "finding"},
-            {"source": "state/okick_event_xss_v1.json",           "title": "테스트13 - XSS 취약점 진단 결과",     "type": "finding"}
+            {"source": "state/okick_event_xss_v3.json",           "title": "테스트13 - XSS 취약점 진단 결과",     "type": "finding"}
           ]
         },
         {
@@ -142,11 +142,11 @@
               "task_sources": {
                 "api":       "state/okick_reward_api_inventory.json",
                 "injection": "state/okick_reward_injection_v3.json",
-                "xss":       "state/okick_reward_xss_v1.json"
+                "xss":       "state/okick_reward_xss_v3.json"
               }
             },
             {"source": "state/okick_reward_injection_v3.json",    "title": "테스트14 - 인젝션 취약점 진단 결과",   "type": "finding"},
-            {"source": "state/okick_reward_xss_v1.json",          "title": "테스트14 - XSS 취약점 진단 결과",     "type": "finding"}
+            {"source": "state/okick_reward_xss_v3.json",          "title": "테스트14 - XSS 취약점 진단 결과",     "type": "finding"}
           ]
         },
         {

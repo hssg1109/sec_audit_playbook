@@ -1,32 +1,71 @@
 #!/usr/bin/env python3
 """
-XSS 취약점 자동 진단 스크립트 v1.1.0
+XSS 취약점 자동 진단 스크립트 v2.0.0
 
 scan_api.py 결과를 기반으로 각 API endpoint에 대해
 6가지 Phase로 XSS 취약 여부를 자동 판정합니다.
 
   Phase 1: Controller 분류 및 Content-Type 기반 방어 판정
-            @RestController / @ResponseBody / ResponseEntity → JSON API (양호)
+            @RestController / @ResponseBody / ResponseEntity → JSON API
+            produces=text/html 또는 오류 응답 leak → 🚨 취약 판정
             @Controller + String/ModelAndView 반환 → HTML View (Phase 2 진입)
   Phase 2: View 렌더링 추적 (Outbound Escaping)
             JSP: ${value} vs <c:out> / fn:escapeXml()
             Thymeleaf: th:utext (취약) vs th:text (안전)
+            Handlebars: {{{variable}}} (취약) vs {{variable}} (안전)
   Phase 3: 전역 XSS 필터 탐지 (Inbound Sanitizing)
             Lucy XSS Filter / AntiSamy / ESAPI
             Jackson ObjectMapper XSS Deserializer
+            Lucy 존재 시 MultipartFilter 순서 검증 (Bypass 위험 확인)
   Phase 4: Redirect / Open Redirect 취약 패턴 탐색
-            sendRedirect(userInput) / return "redirect:" + var
-  Phase 5: Persistent XSS 위험 지표
-            POST/PUT + DB write 경로 + 필터 미적용 → Info(잠재)
-  Phase 6: DOM XSS 전역 스캔 (NEW v1.1.0)
+            서버사이드: sendRedirect(userInput) / return "redirect:" + var
+            클라이언트사이드: location.href= / window.location=
+  Phase 5: Persistent XSS Taint Tracking (v2.0.0 전면 강화)
+            Controller HTTP param → Service → Repository write(save/insert/update)
+            전역 필터 미적용 + taint 확정 → 🚨 [취약-잠재적위협]
+  Phase 6: DOM XSS 전역 스캔
             innerHTML= / document.write() / eval() / dangerouslySetInnerHTML
             insertAdjacentHTML() / jQuery .html() / Vue v-html
 
+출력 카테고리:
+  🚨 취약 — [실제위협] Reflected/View XSS, [잠재적위협] Persistent/Encoding 누락
+  ⚠️ 정보 — 전역 필터 미설정/우회 가능성, 특수 엔드포인트 수동 확인
+  ✅ 양호 — 입력 파라미터 없음, DB 저장 없는 단순 조회, 명시적 escaping 확인
+
 변경 이력:
   v1.0.0 - 초기 구현 (Phase 1~5)
-  v1.1.0 - per-type 판정 필드 추가 (reflected_xss, view_xss, persistent_xss,
-            redirect_xss, dom_xss), Phase 6 DOM XSS 전역 스캔 추가,
-            summary per-type 통계 추가
+  v1.1.0 - per-type 판정 필드, Phase 6 DOM XSS, summary per-type 통계
+  v1.1.1 - 커스텀 @RestController 메타 어노테이션 탐지
+  v2.0.0 - Phase 5 Taint Tracking (Controller→Service→Repo write),
+            Phase 3 Lucy multipart bypass 검증,
+            Phase 1 REST text/html 취약 판정,
+            Phase 4 클라이언트 리다이렉트 패턴 추가,
+            xss_category 필드 + 출력 카테고리 재편
+  v2.1.0 - Fix 1: sqli DB write 정확도 향상 (jpa_builtin READ → write 키워드 있을 때만 write 간주)
+            Fix 2: Enum/Type Casting Taint 해제 (Event.from(), parseInt() 등 → 양호)
+                   @AuthenticationPrincipal param taint 추적 제외
+                   1레벨 Command/DTO 클래스 내 Enum 검증 탐지
+            Fix 3: 자유 텍스트 파라미터 없으면 조기 양호 반환
+  v2.2.0 - Fix 1/2/3 통과 후 잔여 Persistent XSS → 무조건 "취약" 승급 (Regression 수정)
+            check_persistent_xss: "잠재" 리스크 → "취약" 리스크로 변경
+            judge_xss_endpoint: Worst-case 강제 — "잠재"/"취약" 모두 취약 승급
+            severity: taint 경로 자동 확인 시 "High", DB write 경로 불명 시 "Medium"
+  v2.3.0 - SET/WHERE 절 구분 + 헥사고날 아키텍처 구현체 해석 (FP 수정)
+  v2.3.1 - Worst-case 원칙 강화 + persist(new ...) 탐지 + interface 메서드 휴리스틱
+            _P5_PERSIST_NEW_RE: persist(new Entity(...)) → SET 컨텍스트 탐지
+            _check_repo_param_context: interface 메서드 empty body → read 접두사 → "where"
+            _trace_persistent_xss_taint: svc_has_any_write 가드 추가
+              - repo_calls 내 write 메서드 존재 시 WHERE-only sanitize 절대 금지
+              - 엔티티 래핑(_has_param_in_direct_call=False) write 경로 FN 방지
+            _resolve_svc_impl_body(): UseCase/Port 인터페이스 → Service/Adapter 구현체 해석
+            _has_param_in_direct_call(): HTTP 파라미터 standalone 직접 전달 확인
+            _check_repo_param_context(): repo 메서드 본문에서 SET vs WHERE 절 구조 판정
+            _trace_persistent_xss_taint(): svc_body 빈 경우 구현체 해석 폴백 + repo 루프 교체
+            결과: /api/internal/rewards/failure/retry FP 제거 (취약→양호)
+  v2.3.2 - DTO 필드 1레벨 검사 (_inspect_dto_fields 신규):
+            @RequestBody DtoClass → 모든 필드가 Integer/Boolean/UUID/날짜 등 비-자유텍스트이면 양호
+            FP 제거: ExchangePointsRequestDto(Integer goldenEggsCnt) → 양호
+            _has_freetext_params: class_index/source_dir 선택적 수신, DTO 필드 검사 폴백 적용
 
 사용법:
     python scan_xss.py <source_dir> --api-inventory <json>
@@ -52,6 +91,8 @@ from scan_injection_enhanced import (
     extract_class_name,
     extract_method_body,
     build_class_index,
+    extract_constructor_deps,
+    extract_method_calls,
 )
 
 
@@ -59,7 +100,7 @@ from scan_injection_enhanced import (
 #  0. 상수 / 컴파일된 패턴
 # ============================================================
 
-_SCRIPT_VERSION = "1.1.1"
+_SCRIPT_VERSION = "2.3.2"
 
 # View 파일 확장자
 _JSP_EXTS       = frozenset({".jsp", ".jspf", ".jspx"})
@@ -91,6 +132,21 @@ _P1_PRODUCES_HTML = re.compile(
 )
 # Gson disableHtmlEscaping
 _P1_GSON_UNSAFE = re.compile(r'\.disableHtmlEscaping\s*\(\s*\)', re.IGNORECASE)
+# REST 메서드에서 명시적 text/html 반환 (취약)
+# 대상: setContentType("text/html"), MediaType.TEXT_HTML, header.add/set("Content-Type", "text/html")
+_P1_REST_HTML_CT = re.compile(
+    r'MediaType\.TEXT_HTML'
+    r'|setContentType\s*\([^)]*text/html'
+    r'|(?:header|headers|response)\s*[\.\[].*["\'](?:Content-Type|content-type)["\']'
+    r'\s*[,\]]\s*["\']text/html["\']'
+    r'|["\']text/html["\']',
+    re.IGNORECASE,
+)
+# 오류/예외 핸들러에서 입력값 직접 반영 패턴
+_P1_ERROR_REFLECT = re.compile(
+    r'@ExceptionHandler|getMessage\s*\(\s*\)|getLocalizedMessage\s*\(\s*\)',
+    re.IGNORECASE,
+)
 
 # Phase 2: JSP 출력 패턴 --------------------------------------------
 
@@ -120,6 +176,11 @@ _P2_TH_UTEXT = re.compile(r'\bth:utext\s*=\s*["\']?\$\{', re.MULTILINE)
 # th:text → 자동 escape (안전)
 _P2_TH_TEXT  = re.compile(r'\bth:text\s*=\s*["\']?\$\{', re.MULTILINE)
 
+# Phase 2: Handlebars 취약 패턴 (Triple-stache → HTML escape 없음)
+_P2_HANDLEBARS_UNSAFE = re.compile(r'\{\{\{[^}]+\}\}\}', re.MULTILINE)
+# Handlebars 안전 패턴 (Double-stache → 자동 escape)
+_P2_HANDLEBARS_SAFE = re.compile(r'\{\{[^{][^}]+\}\}', re.MULTILINE)
+
 # Phase 3: 전역 XSS 필터 패턴 ----------------------------------------
 
 _P3_LUCY       = re.compile(
@@ -135,6 +196,16 @@ _P3_JACK_DESER = re.compile(
 )
 _P3_JACK_MOD   = re.compile(
     r'addDeserializer\s*\([^)]*,\s*new\s+\w*[Xx][Ss][Ss]\w*',
+    re.IGNORECASE,
+)
+# Phase 3: MultipartFilter 관련 패턴 (Lucy Bypass 검증용)
+_P3_MULTIPART_RE = re.compile(
+    r'MultipartFilter|CommonsMultipartResolver|StandardServletMultipartResolver'
+    r'|MultipartConfigElement',
+    re.IGNORECASE,
+)
+_P3_LUCY_FILTER_BEAN = re.compile(
+    r'LucyXss(?:Servlet)?Filter|XssEscapeServletFilter',
     re.IGNORECASE,
 )
 
@@ -175,9 +246,107 @@ _P4_REDIRECT_PATTERNS = [
     ),
 ]
 
+# Phase 4: 클라이언트 사이드 리다이렉트 패턴 (JS/JSP 인라인 스크립트)
+_P4_CLIENT_REDIRECT_PATTERNS = [
+    (
+        re.compile(r'location\.href\s*=\s*(?!["\'])', re.MULTILINE),
+        "location.href = variable — 클라이언트 사이드 오픈 리다이렉트",
+    ),
+    (
+        re.compile(r'window\.location(?:\.href)?\s*=\s*(?!["\'])', re.MULTILINE),
+        "window.location = variable — 클라이언트 사이드 오픈 리다이렉트",
+    ),
+    (
+        re.compile(r'window\.location\.replace\s*\(\s*(?!["\'])', re.MULTILINE),
+        "window.location.replace(variable) — 클라이언트 사이드 리다이렉트",
+    ),
+]
+
 # @RequestParam / getParameter 근거 패턴 (Redirect confidence 향상용)
 _P4_USER_PARAM_CTX = re.compile(
     r'@RequestParam|getParameter\s*\(|@PathVariable|HttpServletRequest',
+)
+
+# Phase 5: Repository write 메서드명 패턴 (Persistent XSS Taint용) ----
+_P5_WRITE_METHOD_RE = re.compile(
+    r'^(?:save|insert|update|store|persist|create|add|put|merge|upsert'
+    r'|register|write|bulk|batch|modify|edit|upload|post)\w*$',
+    re.IGNORECASE,
+)
+# Service/UseCase/Repository 계층 suffix
+_P5_SVC_SUFFIXES  = ("Service", "UseCase", "Facade", "Manager", "Handler")
+_P5_REPO_SUFFIXES = ("Repository", "Dao", "Mapper", "Store", "Port", "Adapter")
+
+# Phase 5: Fix 1 — sqli result에서 DB write 키워드 확인용
+_P5_WRITE_DETAIL_RE = re.compile(
+    r'\b(?:save|saveAll|saveAndFlush|insert|update|persist|merge|upsert'
+    r'|store|create|add|modify|delete|remove|deleteAll|bulkInsert|bulk_insert)\b',
+    re.IGNORECASE,
+)
+
+# Phase 5: Fix 2 — Enum/Type Casting Taint 해제 패턴 (변수명 캡처그룹 1)
+_P5_SANITIZE_PATTERNS = [
+    # SomeEnum.from(var) / SomeEnum.valueOf(var) / SomeEnum.of(var)
+    re.compile(r'[A-Z]\w*\.(?:from|fromString|valueOf|of)\s*\(\s*(\w+)\s*\)'),
+    # Integer/Long/Double 등 parse: Integer.parseInt(var)
+    re.compile(
+        r'(?:Integer|Long|Double|Float|Short|Byte|BigDecimal|BigInteger)\.parse\w*\s*\(\s*(\w+)\s*\)',
+        re.IGNORECASE,
+    ),
+    # UUID.fromString(var)
+    re.compile(r'UUID\.fromString\s*\(\s*(\w+)\s*\)', re.IGNORECASE),
+    # Boolean.parseBoolean(var) / Boolean.valueOf(var)
+    re.compile(r'Boolean\.(?:parseBoolean|valueOf)\s*\(\s*(\w+)\s*\)', re.IGNORECASE),
+    # Kotlin: var.toInt() / var.toLong() / var.toDouble() 등
+    re.compile(r'(\w+)\.to(?:Int|Long|Double|Float|Boolean)\s*\(\s*\)'),
+]
+
+# Phase 5: Fix 2 — Command/DTO factory 메서드 패턴 (1레벨 Enum 검증 추적용)
+_P5_CMD_FACTORY_RE  = re.compile(r'([A-Z]\w+)\.(?:of|from|create|build)\s*\(')
+_P5_CMD_SUFFIXES    = ("Command", "Request", "Dto", "DTO", "Param", "Form", "Input", "Payload")
+
+# Phase 5: Fix 3 — 자유 텍스트 아닌 파라미터 타입 (Enum/Numeric/Boolean/날짜 등)
+_P5_NON_FREETEXT_TYPES: frozenset = frozenset({
+    "int", "long", "double", "float", "boolean", "byte", "short",
+    "Integer", "Long", "Double", "Float", "Boolean", "Byte", "Short",
+    "UUID", "LocalDate", "LocalDateTime", "ZonedDateTime", "OffsetDateTime",
+    "Date", "BigDecimal", "BigInteger", "Number",
+})
+
+# Phase 5: v2.3.0 — 읽기 전용 메서드 명칭 패턴 (Controller-level Port read 확인용)
+_P5_READ_METHOD_RE = re.compile(
+    r'^(?:find|get|list|fetch|count|exists|search|load|retrieve|select|query)\w*$',
+    re.IGNORECASE,
+)
+
+# Phase 5: v2.3.0 — UseCase/Port 인터페이스 → 구현체 suffix 매핑
+_P5_IFACE_TO_IMPL_SUFFIX: tuple = (
+    ("UseCase", "Service"),
+    ("Port",    "Adapter"),
+)
+
+# QueryDSL SET 절 패턴: .set(Q.field, var) → 저장 컨텍스트
+_P5_QDSL_SET_RE = re.compile(
+    r'\.set\s*\(\s*[\w.]+\s*,\s*\w+',
+    re.IGNORECASE,
+)
+
+# JPA entity setter: entity.setXxx(var) → 저장 컨텍스트
+_P5_ENTITY_SETTER_RE = re.compile(
+    r'\.set[A-Z]\w*\s*\(\s*\w+\s*\)',
+)
+
+# Builder pattern: .builder()...field(var) → 저장 컨텍스트
+_P5_BUILDER_SET_RE = re.compile(
+    r'\.builder\s*\(\s*\)(?:[.\w\s()\n]*?)\.([a-z]\w*)\s*\(\s*\w+\s*\)',
+    re.DOTALL,
+)
+
+# JPA entityManager.persist(new Entity(...)) — 엔티티 생성자 래핑 = SET 컨텍스트
+# Entity 생성자에 파라미터가 직접 들어가는 패턴 탐지 (entity.setXxx 없이 INSERT 수행)
+_P5_PERSIST_NEW_RE = re.compile(
+    r'\bpersist\s*\(\s*new\s+\w+\s*\(',
+    re.IGNORECASE,
 )
 
 # Phase 6: DOM XSS 취약 패턴 (JavaScript / HTML / Vue) ---------------
@@ -234,6 +403,10 @@ _P6_DOM_VULN_PATTERNS = [
         re.compile(r'\bsetInterval\s*\(\s*(?!["\'])', re.MULTILINE),
         "setInterval(variable) — 동적 코드 실행 가능성 (Code Injection)",
     ),
+    (
+        re.compile(r'\{\{\{[^}]+\}\}\}', re.MULTILINE),
+        "Handlebars {{{variable}}} — Triple-stache HTML escape 없음",
+    ),
 ]
 
 # DOM XSS 안전 패턴 (DOMPurify 등 — 바로 뒤에 sanitize 적용 시 FP 감소)
@@ -246,9 +419,8 @@ _P6_DOM_SAFE_CTX = re.compile(
 _JS_SCAN_EXTS = frozenset({".js", ".jsx", ".ts", ".tsx", ".vue"})
 
 # 커스텀 @RestController 메타 어노테이션 탐지 패턴
-# ex) @RestControllerWithStatusOk 가 @RestController 를 포함하는 경우 탐지
-_P1_META_REST = re.compile(r'@RestController\b')  # 어노테이션 정의 파일 내에서 메타 어노테이션 확인
-_P1_ANN_DECL  = re.compile(r'@interface\s+(\w+)')  # 어노테이션 이름 추출
+_P1_META_REST = re.compile(r'@RestController\b')
+_P1_ANN_DECL  = re.compile(r'@interface\s+(\w+)')
 
 
 # ============================================================
@@ -273,6 +445,12 @@ class XssEndpointResult:
     severity: str         = "N/A"
     xss_type: str         = ""       # 취약/정보 유형 요약
     diagnosis_detail: str = ""
+
+    # v2.0.0: 출력 카테고리
+    # 취약: 실제위협 / 잠재적위협 / 인코딩누락
+    # 정보: 수동확인필요 / 우회가능성
+    # 양호: 입력없음 / DB저장없음 / escaping확인
+    xss_category: str     = ""
 
     # ── 유형별 개별 판정 (v1.1.0 NEW) ──────────────────────
     # 값: 양호 / 취약 / 정보 / 해당없음
@@ -366,7 +544,6 @@ def _resolve_view_file(view_name: str,
 
     # 2. stem 정확 매칭
     stem = view_name.lstrip("/").split("/")[-1].lower()
-    # 확장자 제거
     for ext in _ALL_VIEW_EXTS:
         if stem.endswith(ext):
             stem = stem[: -len(ext)]
@@ -388,7 +565,7 @@ def _resolve_view_file(view_name: str,
 
 def _extract_method_region(content: str, method_name: str,
                             pre_window: int = 800) -> str:
-    """메서드 선언 전 어노테이션 포함 영역 추출 (접근제한자 + 반환타입 + 메서드명)"""
+    """메서드 선언 전 어노테이션 포함 영역 추출"""
     m = re.search(
         rf'(?:(?:public|protected|private|static|final|synchronized)\s+){{0,4}}'
         rf'[\w<>\[\],?\s]+\s+{re.escape(method_name)}\s*\(',
@@ -412,15 +589,12 @@ def _extract_return_type(content: str, method_name: str) -> str:
     if not m:
         return ""
     raw = m.group(1).strip()
-    # 제네릭 제거: ResponseEntity<Foo> → ResponseEntity
     return raw.split("<")[0].strip()
 
 
 def build_custom_rest_annotations(source_dir: Path) -> frozenset:
     """소스코드 전역에서 @RestController를 메타 어노테이션으로 포함하는
     커스텀 어노테이션 이름 집합을 반환합니다.
-
-    예: @RestControllerWithStatusOk { @RestController ... } → {"RestControllerWithStatusOk"}
     """
     custom: set = set()
     for fp in source_dir.rglob("*.java"):
@@ -429,7 +603,6 @@ def build_custom_rest_annotations(source_dir: Path) -> frozenset:
         content = read_file_safe(fp)
         if not content:
             continue
-        # 파일 내에 @interface 선언과 @RestController 메타 어노테이션이 동시에 있는 경우
         if _P1_ANN_DECL.search(content) and _P1_META_REST.search(content):
             m = _P1_ANN_DECL.search(content)
             if m:
@@ -442,20 +615,19 @@ def classify_controller(ctrl_content: str, handler_method: str,
     """Phase 1: Controller/메서드 분류 및 Content-Type 기반 방어 판정
 
     controller_type:
-      REST_JSON  — JSON 응답, 브라우저 HTML 해석 불가 → Reflected XSS 기본 양호
-      HTML_VIEW  — @Controller + View name 반환 → Phase 2 (View 분석) 필요
-      unknown    — 판정 불가
-
-    extra_rest_annotations: 프로젝트 고유 커스텀 @RestController 메타 어노테이션 이름 집합
+      REST_JSON       — JSON 응답, 브라우저 HTML 해석 불가 → Reflected XSS 기본 양호
+      REST_HTML_RISK  — @RestController이나 text/html 강제 또는 오류 반영 취약
+      HTML_VIEW       — @Controller + View name 반환 → Phase 2 (View 분석) 필요
+      unknown         — 판정 불가
     """
     is_rest_class   = bool(_P1_REST_CLASS.search(ctrl_content))
-    # 커스텀 @RestController 메타 어노테이션 탐지 (예: @RestControllerWithStatusOk)
     if not is_rest_class and extra_rest_annotations:
         for ann in extra_rest_annotations:
             if re.search(rf'@{re.escape(ann)}\b', ctrl_content):
                 is_rest_class = True
                 break
     method_region   = _extract_method_region(ctrl_content, handler_method)
+    method_body     = extract_method_body(ctrl_content, handler_method) or ""
     return_type     = _extract_return_type(ctrl_content, handler_method)
 
     has_response_body = bool(_P1_RESPONSE_BODY.search(method_region))
@@ -463,26 +635,28 @@ def classify_controller(ctrl_content: str, handler_method: str,
     produces_html     = bool(_P1_PRODUCES_HTML.search(method_region))
     gson_unsafe       = bool(_P1_GSON_UNSAFE.search(ctrl_content))
 
-    returns_re    = return_type.startswith("ResponseEntity")
-    base_rt       = return_type  # ResponseEntity, String, ModelAndView, ...
+    # text/html 강제 설정 (메서드 본문 내)
+    rest_html_ct  = bool(_P1_REST_HTML_CT.search(method_body)) if method_body else False
+    error_reflect = bool(_P1_ERROR_REFLECT.search(method_region))
+
+    returns_re = return_type.startswith("ResponseEntity")
+    base_rt    = return_type
 
     # ---- 분류 결정 ----
-    if is_rest_class:
-        ct = "REST_JSON"
-    elif has_response_body or produces_json:
-        ct = "REST_JSON"
+    if is_rest_class or has_response_body or produces_json:
+        if produces_html or rest_html_ct:
+            ct = "REST_HTML_RISK"
+        else:
+            ct = "REST_JSON"
     elif returns_re:
-        # ResponseEntity는 기본 JSON 직렬화
         ct = "HTML_VIEW" if produces_html else "REST_JSON"
     elif base_rt in ("String", "ModelAndView", "View") or produces_html:
         ct = "HTML_VIEW"
     elif base_rt == "void":
-        # void + @Controller → View 렌더링 가능성 (보수적)
         ct = "HTML_VIEW" if not is_rest_class else "REST_JSON"
     elif not base_rt:
         ct = "unknown"
     else:
-        # 기타 반환 타입(@Controller 클래스): 보수적으로 HTML_VIEW
         ct = "HTML_VIEW"
 
     return {
@@ -492,6 +666,8 @@ def classify_controller(ctrl_content: str, handler_method: str,
         "produces_html":     produces_html,
         "return_type":       base_rt or "unknown",
         "gson_unsafe":       gson_unsafe,
+        "rest_html_ct":      rest_html_ct,
+        "error_reflect":     error_reflect,
         "controller_type":   ct,
     }
 
@@ -502,18 +678,15 @@ def classify_controller(ctrl_content: str, handler_method: str,
 
 def _extract_view_name(method_body: str) -> Optional[str]:
     """Controller 메서드 본문에서 반환 View 이름 추출"""
-    # return "viewName";
     m = re.search(r'return\s+"([^"]+)"', method_body)
     if m:
         name = m.group(1)
         if name.startswith(("redirect:", "forward:")):
             return None
         return name
-    # return new ModelAndView("viewName")
     m = re.search(r'new\s+ModelAndView\s*\(\s*"([^"]+)"', method_body)
     if m:
         return m.group(1)
-    # setViewName("viewName")
     m = re.search(r'setViewName\s*\(\s*"([^"]+)"', method_body)
     if m:
         return m.group(1)
@@ -535,34 +708,27 @@ def _analyze_jsp(content: str, model_attrs: set) -> dict:
     has_scriptlet   = bool(_P2_JSP_SCRIPTLET_PARAM.search(content))
     vulnerable_lines: list = []
 
-    # <c:out escapeXml="false"> 위치 수집
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
         if _P2_JSP_COUT_UNSAFE.search(stripped):
             vulnerable_lines.append((i, stripped[:120]))
 
-    # ${value} 직접 출력 탐지 (line별)
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
         el_hits = re.findall(r'\$\{([^}]+)\}', stripped)
         if not el_hits:
             continue
-        # <c:out value="${...}"> 컨텍스트면 안전 → 건너뜀
         if re.search(r'<c:out\b[^>]*value\s*=\s*"[^"]*\$\{', stripped, re.IGNORECASE):
             continue
-        # fn:escapeXml(${...}) 컨텍스트면 안전 → 건너뜀
         if re.search(r'fn:escapeXml\s*\(\s*\$\{', stripped):
             continue
-        # JSTL 조건/반복 태그 속성 컨텍스트 (비출력)
         if re.search(r'<c:(?:if|when|forEach|choose)\b[^>]*\$\{', stripped, re.IGNORECASE):
             continue
-        # th:text, th:value 등 Thymeleaf safe attributes
         if re.search(r'\bth:(?:text|value|href|src|action)\s*=\s*["\'][^"\']*\$\{', stripped):
             continue
         has_direct_el = True
         vulnerable_lines.append((i, stripped[:120]))
 
-    # 스크립틀릿 직접 출력 위치 수집
     if has_scriptlet:
         for i, line in enumerate(lines, 1):
             if _P2_JSP_SCRIPTLET_PARAM.search(line):
@@ -591,11 +757,19 @@ def _analyze_thymeleaf(content: str) -> dict:
             has_utext = True
             vulnerable_lines.append((i, line.strip()[:120]))
 
+    # Handlebars {{{...}}} 패턴도 확인
+    has_handlebars_unsafe = bool(_P2_HANDLEBARS_UNSAFE.search(content))
+    if has_handlebars_unsafe:
+        for i, line in enumerate(lines, 1):
+            if _P2_HANDLEBARS_UNSAFE.search(line):
+                vulnerable_lines.append((i, line.strip()[:120]))
+
     return {
-        "view_type":       "Thymeleaf",
-        "has_utext":       has_utext,
-        "has_text":        has_text,
-        "vulnerable_lines": vulnerable_lines[:10],
+        "view_type":              "Thymeleaf",
+        "has_utext":              has_utext,
+        "has_text":               has_text,
+        "has_handlebars_unsafe":  has_handlebars_unsafe,
+        "vulnerable_lines":       vulnerable_lines[:10],
     }
 
 
@@ -620,14 +794,116 @@ def analyze_view_file(view_file: Path, model_attrs: set) -> dict:
 #  5. Phase 3: 전역 XSS 필터 탐지 (Inbound Sanitizing)
 # ============================================================
 
+def _check_lucy_multipart_order(source_dir: Path) -> dict:
+    """Lucy XSS Filter 존재 시 MultipartFilter 체인 순서 검증
+
+    MultipartFilter가 LucyXssFilter 앞에 오면 Lucy 우회 가능.
+    web.xml 또는 Spring Java Config에서 필터 등록 순서를 파싱.
+
+    Returns:
+      {"bypass_risk": True/False/None, "detail": str}
+      True  = MultipartFilter가 Lucy보다 앞에 등록됨 (bypass 가능)
+      False = Lucy가 MultipartFilter보다 앞에 등록됨 (정상)
+      None  = 판단 불가 (설정 파일 미탐지)
+    """
+    # web.xml 탐색
+    for webxml in source_dir.rglob("web.xml"):
+        if any(ex in webxml.parts for ex in _EXCLUDE_DIRS):
+            continue
+        content = read_file_safe(webxml)
+        if not content:
+            continue
+
+        # <filter-mapping> 순서로 Lucy vs Multipart 위치 비교
+        lucy_pos     = -1
+        multipart_pos = -1
+        for i, line in enumerate(content.splitlines()):
+            if _P3_LUCY_FILTER_BEAN.search(line):
+                if lucy_pos == -1:
+                    lucy_pos = i
+            if _P3_MULTIPART_RE.search(line):
+                if multipart_pos == -1:
+                    multipart_pos = i
+
+        if lucy_pos != -1 and multipart_pos != -1:
+            if multipart_pos < lucy_pos:
+                return {
+                    "bypass_risk": True,
+                    "detail": (
+                        f"web.xml: MultipartFilter(line {multipart_pos+1})가 "
+                        f"LucyXssFilter(line {lucy_pos+1}) 앞에 등록됨 — "
+                        "multipart/form-data 요청 파라미터가 Lucy 필터를 우회할 수 있음"
+                    ),
+                }
+            else:
+                return {
+                    "bypass_risk": False,
+                    "detail": (
+                        f"web.xml: LucyXssFilter(line {lucy_pos+1})가 "
+                        f"MultipartFilter(line {multipart_pos+1}) 앞에 등록됨 — 정상"
+                    ),
+                }
+        elif lucy_pos != -1:
+            return {
+                "bypass_risk": None,
+                "detail": "web.xml: LucyXssFilter 발견되나 MultipartFilter 미탐지 — 수동 확인 필요",
+            }
+
+    # Java Config에서 AbstractAnnotationConfigDispatcherServletInitializer 탐색
+    for fp in source_dir.rglob("*.java"):
+        if any(ex in fp.parts for ex in _EXCLUDE_DIRS):
+            continue
+        content = read_file_safe(fp)
+        if not content:
+            continue
+        if not (_P3_LUCY_FILTER_BEAN.search(content) or _P3_MULTIPART_RE.search(content)):
+            continue
+
+        has_lucy      = bool(_P3_LUCY_FILTER_BEAN.search(content))
+        has_multipart = bool(_P3_MULTIPART_RE.search(content))
+        if has_lucy and has_multipart:
+            # 라인 순서 기반 간이 판단
+            lines = content.splitlines()
+            lp, mp = -1, -1
+            for i, line in enumerate(lines):
+                if _P3_LUCY_FILTER_BEAN.search(line) and lp == -1:
+                    lp = i
+                if _P3_MULTIPART_RE.search(line) and mp == -1:
+                    mp = i
+            if lp != -1 and mp != -1:
+                try:
+                    rel = str(fp.relative_to(source_dir))
+                except ValueError:
+                    rel = str(fp)
+                if mp < lp:
+                    return {
+                        "bypass_risk": True,
+                        "detail": (
+                            f"{rel}: MultipartFilter 등록(line {mp+1})이 "
+                            f"LucyXssFilter(line {lp+1}) 앞에 위치 — 우회 가능성 있음"
+                        ),
+                    }
+                else:
+                    return {
+                        "bypass_risk": False,
+                        "detail": f"{rel}: LucyXssFilter → MultipartFilter 순서 — 정상",
+                    }
+
+    return {
+        "bypass_risk": None,
+        "detail": "MultipartFilter 설정 위치 확인 불가 — 수동 검토 필요",
+    }
+
+
 def build_global_filter_status(source_dir: Path) -> dict:
     """Phase 3: web.xml / *Config.java / *Filter.java / *XSS*.java 에서
     전역 XSS 필터 탐지 후 종합 판정
 
     filter_level:
-      none        — XSS 필터 미발견
-      header_only — X-XSS-Protection 헤더만 (불충분)
-      inbound     — Lucy/AntiSamy/ESAPI/Jackson 입력 새니타이징
+      none                   — XSS 필터 미발견
+      header_only            — X-XSS-Protection 헤더만 (불충분)
+      inbound                — Lucy/AntiSamy/ESAPI/Jackson 입력 새니타이징
+      inbound_multipart_risk — Lucy 존재하나 multipart 우회 가능성
     """
     found_lucy    = False
     found_antisamy = False
@@ -636,7 +912,6 @@ def build_global_filter_status(source_dir: Path) -> dict:
     found_jack    = False
     filter_files: list = []
 
-    # 탐색 대상 패턴 목록
     glob_patterns = [
         "web.xml", "*Config*.java", "*Filter*.java",
         "*XSS*.java", "*Xss*.java", "*xss*.java",
@@ -674,14 +949,36 @@ def build_global_filter_status(source_dir: Path) -> dict:
                 except ValueError:
                     filter_files.append(str(fp))
 
+    # Lucy multipart bypass 검증
+    lucy_multipart = None
+    if found_lucy:
+        lucy_multipart = _check_lucy_multipart_order(source_dir)
+
     # 종합 판정
     if found_lucy:
-        filter_type  = "Lucy XSS Filter"
-        filter_detail = (
-            "Lucy XSS Servlet Filter 적용 중. "
-            "multipart/form-data 요청에 대한 MultipartFilter 체인 포함 여부 추가 확인 필요."
-        )
-        filter_level = "inbound"
+        bypass_risk = lucy_multipart.get("bypass_risk") if lucy_multipart else None
+        if bypass_risk is True:
+            filter_type   = "Lucy XSS Filter (Multipart 우회 위험)"
+            filter_detail = (
+                "Lucy XSS Servlet Filter 적용 중이나, MultipartFilter가 앞단에 배치되어 "
+                "multipart/form-data 요청 파라미터가 Lucy 필터를 우회할 수 있습니다. "
+                f"상세: {lucy_multipart['detail']}"
+            )
+            filter_level = "inbound_multipart_risk"
+        elif bypass_risk is None:
+            filter_type   = "Lucy XSS Filter (Multipart 체인 불명확)"
+            filter_detail = (
+                "Lucy XSS Servlet Filter 적용 중. "
+                f"multipart/form-data 우회 가능성: {lucy_multipart['detail'] if lucy_multipart else '확인 불가'}"
+            )
+            filter_level = "inbound_multipart_risk"
+        else:
+            filter_type   = "Lucy XSS Filter"
+            filter_detail = (
+                "Lucy XSS Servlet Filter 적용 중. "
+                f"MultipartFilter 순서 정상 확인: {lucy_multipart['detail'] if lucy_multipart else 'N/A'}"
+            )
+            filter_level = "inbound"
     elif found_antisamy:
         filter_type  = "AntiSamy"
         filter_detail = "OWASP AntiSamy HTML sanitizer 적용 중."
@@ -706,17 +1003,21 @@ def build_global_filter_status(source_dir: Path) -> dict:
         filter_detail = "XSS 전역 필터 미발견 — 취약 가능"
         filter_level = "none"
 
+    is_inbound = filter_level in ("inbound", "inbound_multipart_risk")
+
     return {
-        "has_filter":    filter_level != "none",
-        "filter_type":   filter_type,
-        "filter_detail": filter_detail,
-        "filter_level":  filter_level,   # none / header_only / inbound
-        "has_lucy":      found_lucy,
-        "has_antisamy":  found_antisamy,
-        "has_esapi":     found_esapi,
-        "has_ss_xss":    found_ss_xss,
-        "has_jackson_xss": found_jack,
-        "filter_files":  filter_files,
+        "has_filter":        is_inbound or filter_level == "header_only",
+        "has_inbound_filter": is_inbound,
+        "filter_type":       filter_type,
+        "filter_detail":     filter_detail,
+        "filter_level":      filter_level,
+        "has_lucy":          found_lucy,
+        "has_antisamy":      found_antisamy,
+        "has_esapi":         found_esapi,
+        "has_ss_xss":        found_ss_xss,
+        "has_jackson_xss":   found_jack,
+        "lucy_multipart":    lucy_multipart,
+        "filter_files":      filter_files,
     }
 
 
@@ -725,7 +1026,7 @@ def build_global_filter_status(source_dir: Path) -> dict:
 # ============================================================
 
 def analyze_redirect_patterns(method_body: str) -> dict:
-    """Phase 4: 메서드 본문에서 서버사이드 Redirect 취약 패턴 탐색
+    """Phase 4: 메서드 본문에서 서버사이드 + 클라이언트사이드 Redirect 취약 패턴 탐색
 
     confidence:
       high   — @RequestParam / getParameter 등 사용자 입력 컨텍스트 확인
@@ -734,23 +1035,39 @@ def analyze_redirect_patterns(method_body: str) -> dict:
     findings: list = []
     lines = method_body.splitlines()
 
-    # 사용자 입력 컨텍스트 (전체 메서드 본문 기준)
     has_user_ctx = bool(_P4_USER_PARAM_CTX.search(method_body))
 
+    # 서버사이드 패턴
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
         for pattern, desc in _P4_REDIRECT_PATTERNS:
             if pattern.search(stripped):
-                # 화이트리스트 고정 URL 패턴 (리터럴 문자열로만 구성) → 제외
                 if re.search(r'sendRedirect\s*\(\s*"[^"]*"\s*\)', stripped):
                     continue
                 findings.append({
                     "type":       desc,
+                    "side":       "server",
                     "line":       i,
                     "snippet":    stripped[:120],
                     "confidence": "high" if has_user_ctx else "medium",
                 })
-                break  # 한 줄에서 첫 번째 패턴만
+                break
+
+    # 클라이언트사이드 패턴 (JSP 인라인 JS / 메서드 본문 내 스크립트 블록)
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            continue
+        for pattern, desc in _P4_CLIENT_REDIRECT_PATTERNS:
+            if pattern.search(stripped):
+                findings.append({
+                    "type":       desc,
+                    "side":       "client",
+                    "line":       i,
+                    "snippet":    stripped[:120],
+                    "confidence": "medium",
+                })
+                break
 
     return {
         "has_redirect_risk": bool(findings),
@@ -759,18 +1076,572 @@ def analyze_redirect_patterns(method_body: str) -> dict:
 
 
 # ============================================================
-#  7. Phase 5: Persistent XSS 위험 지표
+#  7. Phase 5: Persistent XSS — Taint Tracking (v2.0.0 전면 강화)
 # ============================================================
+
+# ── Fix 1: sqli_result DB write 정확도 향상 ──────────────────
+
+def _sqli_has_db_write(sqli_result: dict, ep_api: str) -> tuple:
+    """sqli_result에서 DB write 경로 확인 (write 키워드 기반 정밀 판별).
+
+    jpa_builtin / querydsl_safe 등은 READ 경로도 포함하므로,
+    detail 또는 method_name에 write 키워드가 있을 때만 write로 간주.
+
+    Returns: (has_write: bool, detail_snippet: str)
+    """
+    for diag in sqli_result.get("endpoint_diagnoses", []):
+        if diag.get("request_mapping", "") != ep_api:
+            continue
+        for op in diag.get("db_operations", []):
+            access_type = op.get("access_type", "")
+            if access_type in ("none", "unknown", "non-DB", ""):
+                continue
+            detail      = op.get("detail", "")
+            method_name = op.get("method_name", op.get("method", ""))
+            # 모호한 access_type → detail / method_name에서 write 키워드 확인
+            if access_type in ("jpa_builtin", "querydsl_safe", "mybatis_safe"):
+                if (_P5_WRITE_DETAIL_RE.search(detail)
+                        or _P5_WRITE_DETAIL_RE.search(method_name)):
+                    return True, detail[:80]
+                continue  # write 키워드 없음 → READ 경로 → skip
+            # 명시적 취약/불명확 access_type → 보수적으로 write 간주
+            return True, detail[:80]
+        break
+    return False, ""
+
+
+# ── Fix 2: Enum/Type Casting Taint 해제 ─────────────────────
+
+def _check_enum_validation(code: str, param_names: set) -> set:
+    """코드에서 Enum/Type 화이트리스트 검증 패턴 탐지.
+
+    _P5_SANITIZE_PATTERNS 목록으로 Enum.from(var), Integer.parseInt(var) 등
+    단일 인수 type-safe 변환 패턴을 탐지하여 검증된 파라미터 이름 집합을 반환.
+
+    Returns: sanitized param names (param_names 교차 결과)
+    """
+    sanitized: set = set()
+    for pattern in _P5_SANITIZE_PATTERNS:
+        for m in pattern.finditer(code):
+            var = m.group(1)
+            if var in param_names:
+                sanitized.add(var)
+    return sanitized
+
+
+# ── Fix 3: 보수적 폴백 완화 (자유 텍스트 파라미터 없으면 양호) ──
+
+def _inspect_dto_fields(dto_type: str,
+                        class_index: dict,
+                        source_dir: Path) -> Optional[bool]:
+    """@RequestBody DTO/Record 클래스 필드를 1레벨 검사 — 모두 비-자유텍스트인지 확인.
+
+    Returns:
+      True  → 전체 필드가 비-자유텍스트(Integer/Boolean/UUID/날짜 등) → XSS 불가
+      False → 자유텍스트(String 등) 필드 존재
+      None  → 판정 불가 (파일 미탐색 또는 필드 미추출)
+    """
+    dto_file = class_index.get(dto_type) if class_index else None
+    if not dto_file and source_dir:
+        hits = (list(source_dir.rglob(f"{dto_type}.java"))
+                + list(source_dir.rglob(f"{dto_type}.kt")))
+        if hits:
+            dto_file = hits[0]
+    if not dto_file:
+        return None
+
+    content = read_file_safe(dto_file)
+    if not content:
+        return None
+
+    # Java record: record Foo(@Min(1) Integer name1, Type2 name2, ...)
+    # [^)]+ 대신 균형 괄호 탐색: @Min(1) 같은 중첩 괄호 어노테이션 처리
+    record_start = re.search(r'\brecord\s+\w+\s*\(', content)
+    if record_start:
+        pos = record_start.end() - 1  # 첫 '(' 위치
+        depth = 0
+        end = pos
+        for i in range(pos, len(content)):
+            ch = content[i]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        inner = content[pos + 1:end]
+        # inner를 쉼표로 분할하되 괄호 내부 쉼표는 무시
+        components: list = []
+        cur: list = []
+        d = 0
+        for ch in inner:
+            if ch == '(':
+                d += 1
+                cur.append(ch)
+            elif ch == ')':
+                d -= 1
+                cur.append(ch)
+            elif ch == ',' and d == 0:
+                components.append(''.join(cur))
+                cur = []
+            else:
+                cur.append(ch)
+        if cur:
+            components.append(''.join(cur))
+
+        types = []
+        for comp in components:
+            comp = comp.strip()
+            if not comp:
+                continue
+            # 어노테이션 제거: @Min(1) Integer name → Integer name
+            comp = re.sub(r'@\w+(?:\s*\([^)]*\))?\s*', '', comp)
+            # 줄바꿈/탭 등 공백 정규화
+            comp = re.sub(r'\s+', ' ', comp).strip()
+            parts = comp.split()
+            if parts:
+                base = parts[0].split("<")[0].split(".")[-1]
+                types.append(base)
+        if types:
+            return all(t in _P5_NON_FREETEXT_TYPES for t in types)
+
+    # 일반 클래스 필드: private/public/protected [final] Type name
+    field_re = re.compile(
+        r'(?:private|protected|public)\s+(?:final\s+)?(\w+(?:<[^>]+>)?)\s+\w+\s*[=;,\)]'
+    )
+    found = []
+    for m in field_re.finditer(content):
+        base = m.group(1).split("<")[0].split(".")[-1]
+        if base in ("Logger", "ObjectMapper", "serialVersionUID"):
+            continue
+        found.append(base)
+    if not found:
+        return None
+    return all(t in _P5_NON_FREETEXT_TYPES for t in found)
+
+
+def _has_freetext_params(endpoint: dict,
+                         class_index: Optional[dict] = None,
+                         source_dir: Optional[Path] = None) -> bool:
+    """HTTP 파라미터 중 자유 텍스트(String) 입력이 존재하는지 확인.
+
+    Returns:
+      True  → String/Object 입력 가능 → Persistent XSS 추적 필요
+      False → 모든 파라미터가 비-자유텍스트(Integer/Enum/인증객체 등) → XSS 불가
+    """
+    params = endpoint.get("parameters", [])
+    if not params:
+        return False  # 파라미터 없음 → 사용자 자유 입력 없음
+
+    for p in params:
+        ann   = p.get("annotation", "").strip()
+        dtype = p.get("data_type", p.get("type", "")).strip()
+        base  = dtype.split("<")[0].split(".")[-1].strip()
+
+        # 인증 객체 (@AuthenticationPrincipal, @SessionAttribute) → 자유 입력 아님
+        if "@AuthenticationPrincipal" in ann or "@SessionAttribute" in ann:
+            continue
+        if base in ("User", "Principal", "Authentication", "UserDetails",
+                    "CustomUserDetails"):
+            continue
+
+        # 명시적 비-자유텍스트 원시/값 타입
+        if base in _P5_NON_FREETEXT_TYPES:
+            continue
+
+        # @RequestBody → DTO 필드 1레벨 검사 (v2.3.2)
+        # annotation 필드 또는 type 필드("body")로 @RequestBody 감지
+        is_request_body = "@RequestBody" in ann or p.get("type", "") == "body"
+        if is_request_body:
+            if base and class_index is not None and source_dir is not None:
+                all_nonfree = _inspect_dto_fields(base, class_index, source_dir)
+                if all_nonfree is True:
+                    continue  # 모든 필드 비-자유텍스트 → 이 파라미터는 freetext 아님
+            return True
+
+        # 타입 미상 또는 String → freetext
+        if not dtype or dtype in ("String", "string", "Object", "Any", "object"):
+            return True
+
+        # @PathVariable/@RequestParam + 대문자 비-String 타입 → Enum 추정 → non-freetext
+        # (실제 Enum 검증 여부는 Fix 2에서 별도 확인)
+        if base and base[0].isupper() and base not in _P5_NON_FREETEXT_TYPES:
+            if "@PathVariable" in ann or "@RequestParam" in ann:
+                continue
+
+        # 기타 → 보수적으로 freetext 가정
+        return True
+
+    return False  # 모든 파라미터가 non-freetext
+
+
+def _resolve_svc_impl_body(svc_type: str, svc_method: str,
+                            class_index: dict, source_dir: Path) -> tuple:
+    """UseCase/Port 인터페이스 → Service/Adapter 구현체 이름 변환 후 메서드 본문 반환.
+
+    1. class_index 직접 조회  2. source_dir glob 폴백 (.java / .kt)
+    Returns: (method_body: str, impl_content: str) — 실패 시 ("", "")
+    """
+    for iface_suf, impl_suf in _P5_IFACE_TO_IMPL_SUFFIX:
+        if not svc_type.endswith(iface_suf):
+            continue
+        impl_name = svc_type[: -len(iface_suf)] + impl_suf
+        impl_file = class_index.get(impl_name)
+        if not impl_file:
+            hits = (list(source_dir.rglob(f"{impl_name}.java"))
+                    + list(source_dir.rglob(f"{impl_name}.kt")))
+            if hits:
+                impl_file = hits[0]
+        if not impl_file:
+            continue
+        impl_content = read_file_safe(impl_file)
+        if not impl_content:
+            continue
+        body = extract_method_body(impl_content, svc_method) or ""
+        if body:
+            return body, impl_content
+    return "", ""
+
+
+def _has_param_in_direct_call(svc_body: str, repo_field: str,
+                               repo_method: str, param_names: set) -> bool:
+    """Repository 호출 인수에 HTTP 파라미터가 standalone 변수로 직접 전달되는지 확인.
+
+    'log.dto().id()' → id는 method chain → 제외 (DTO 래핑에서도 entity 자체만 보임).
+    패턴: (?<![.\\w])varName(?!\\s*\\() — 앞에 '.' 없고 뒤에 '(' 없는 식별자.
+    """
+    call_re = re.compile(
+        rf'(?<![.\w]){re.escape(repo_field)}\.{re.escape(repo_method)}\s*\(([^)]*)\)',
+    )
+    standalone_re = re.compile(r'(?<![.\w])(\w+)(?!\s*\()')
+    for m in call_re.finditer(svc_body):
+        args_str = m.group(1)
+        for vm in standalone_re.finditer(args_str):
+            if vm.group(1) in param_names:
+                return True
+    return False
+
+
+def _check_repo_param_context(repo_content: str, repo_method: str,
+                               param_names: set) -> str:
+    """Repository 메서드 본문에서 SET(저장) vs WHERE(필터) 구조 판정.
+
+    변수명 매칭 없이 구조적 패턴으로 판정 (repo 내부 param명이 다를 수 있으므로).
+
+    Returns:
+      "set"     → SET 절 패턴 발견 → taint 확인
+      "where"   → WHERE 절만, SET/UPDATE/INSERT 없음 → taint 해제
+      "unknown" → 판정 불가 → 보수적 폴백
+    """
+    repo_body = extract_method_body(repo_content, repo_method) or ""
+    if not repo_body:
+        # 인터페이스/추상 메서드 — 메서드 명칭 휴리스틱으로 판정
+        # read 접두사(find/get/list/...) → 읽기 전용 관례 → "where"
+        # write 접두사는 호출 측에서 _P5_WRITE_METHOD_RE로 별도 처리
+        if _P5_READ_METHOD_RE.match(repo_method):
+            return "where"
+        return "unknown"
+
+    # SET 절 지시자 우선 확인
+    if _P5_QDSL_SET_RE.search(repo_body):          # QueryDSL .set(col, val)
+        return "set"
+    if _P5_ENTITY_SETTER_RE.search(repo_body):      # JPA entity.setXxx(val)
+        return "set"
+    if _P5_BUILDER_SET_RE.search(repo_body):        # Builder .builder().field(val)
+        return "set"
+    if _P5_PERSIST_NEW_RE.search(repo_body):        # persist(new Entity(...)) — 엔티티 생성자 INSERT
+        return "set"
+
+    # WHERE 절 지시자 (SELECT/WHERE only → 안전)
+    has_where = bool(
+        re.search(r'\.where\s*\(', repo_body, re.IGNORECASE)
+        or re.search(r'\bWHERE\b', repo_body)
+    )
+    has_update_insert = bool(
+        re.search(r'\bUPDATE\b|\bINSERT\b|\bpersist\b|\bmerge\b',
+                  repo_body, re.IGNORECASE)
+    )
+    if has_where and not has_update_insert:
+        return "where"
+
+    return "unknown"
+
+
+def _trace_persistent_xss_taint(endpoint: dict,
+                                  ctrl_content: str,
+                                  handler_method: str,
+                                  source_dir: Path,
+                                  class_index: dict) -> dict:
+    """Controller HTTP 파라미터 → Service → Repository write 메서드 Taint Tracking
+
+    Returns:
+      {
+        "taint_confirmed": Optional[bool],
+        "call_chain": list,           # [ctrl_method, svc.method, repo.method]
+        "write_method": str,          # 마지막 write 메서드명
+        "reason": str,
+      }
+      taint_confirmed = True  → HTTP 입력이 DB write 경로로 흐름 확정
+      taint_confirmed = False → Repository write 경로 미확인
+      taint_confirmed = None  → 추적 불가 (Controller 본문 없음, Service 탐지 실패 등)
+    """
+    # HTTP 파라미터 이름 추출 (인증 객체 제외 — 사용자 자유 입력만 추적)
+    params = endpoint.get("parameters", [])
+    param_names: set = set()
+    for _p in params:
+        _name = _p.get("name", "")
+        if not _name:
+            continue
+        _ann   = _p.get("annotation", "")
+        _dtype = _p.get("data_type", _p.get("type", "")).split("<")[0].split(".")[-1].strip()
+        # @AuthenticationPrincipal / 인증 객체 타입 → 자유 입력 아님 → taint 제외
+        if "@AuthenticationPrincipal" in _ann or "@SessionAttribute" in _ann:
+            continue
+        if _dtype in ("User", "Principal", "Authentication", "UserDetails",
+                      "CustomUserDetails"):
+            continue
+        param_names.add(_name)
+
+    if not param_names:
+        if params:
+            # 파라미터는 있지만 모두 인증 객체 → 자유 텍스트 입력 없음
+            return {
+                "taint_confirmed": False,
+                "sanitized":       True,
+                "reason":          "모든 HTTP 파라미터가 인증 객체 — 사용자 자유 텍스트 입력 없음",
+            }
+        return {"taint_confirmed": None, "reason": "HTTP 파라미터 정보 없음 — 추적 불가"}
+
+    # Step 1: Controller 메서드 본문
+    ctrl_body = extract_method_body(ctrl_content, handler_method) or ""
+    if not ctrl_body:
+        return {"taint_confirmed": None, "reason": "Controller 메서드 본문 추출 실패"}
+
+    # Step 1.5: Fix 2 — Enum/Type 화이트리스트 검증 탐지 (taint 해제)
+    _sanitized = _check_enum_validation(ctrl_body, param_names)
+    # 1레벨: Command/DTO factory method → 해당 클래스 body에서도 검증 패턴 탐지
+    for _m in _P5_CMD_FACTORY_RE.finditer(ctrl_body):
+        _cls = _m.group(1)
+        if _cls.endswith(_P5_CMD_SUFFIXES):
+            _fp = class_index.get(_cls) if class_index else None
+            if not _fp:
+                # Java record / inner class 등 class_index 누락 대비 glob 폴백
+                _hits = list(source_dir.rglob(f"{_cls}.java"))
+                if _hits:
+                    _fp = _hits[0]
+            if _fp:
+                _cnt = read_file_safe(_fp)
+                if _cnt:
+                    _sanitized |= _check_enum_validation(_cnt, param_names)
+    if _sanitized:
+        _remaining = param_names - _sanitized
+        if not _remaining:
+            # 모든 추적 대상 파라미터가 Enum/Type 검증으로 taint 해제됨
+            return {
+                "taint_confirmed":  False,
+                "sanitized":        True,
+                "sanitized_params": sorted(_sanitized),
+                "reason": (
+                    f"HTTP 파라미터 {sorted(_sanitized)} 가 Enum/Type 화이트리스트 검증으로 "
+                    "taint 해제 — Persistent XSS 불가"
+                ),
+            }
+        param_names = _remaining  # 잔여 파라미터만 taint 추적 계속
+
+    # Step 2: Controller → Service 의존성 파악
+    ctrl_deps = extract_constructor_deps(ctrl_content)
+    svc_fields = [
+        (name, typ) for name, typ in ctrl_deps
+        if any(typ.endswith(s) for s in _P5_SVC_SUFFIXES)
+    ]
+
+    if not svc_fields:
+        return {"taint_confirmed": None, "reason": "Service 계층 의존성 탐지 실패"}
+
+    # Step 3: Controller 본문에서 Service 메서드 호출 추출
+    svc_field_names = [name for name, _ in svc_fields]
+    svc_calls = extract_method_calls(ctrl_body, svc_field_names)
+
+    if not svc_calls:
+        return {"taint_confirmed": None, "reason": "Controller 본문 내 Service 호출 없음"}
+
+    # Step 4: 각 Service 메서드 본문에서 Repository write 호출 탐색
+    for svc_field, svc_method in svc_calls:
+        svc_type = next((typ for name, typ in svc_fields if name == svc_field), None)
+        if not svc_type:
+            continue
+
+        svc_file = class_index.get(svc_type)
+        if not svc_file:
+            # 구현체 이름으로 폴백 (e.g., FooServiceImpl)
+            svc_file = class_index.get(svc_type + "Impl")
+        if not svc_file:
+            continue
+
+        svc_content = read_file_safe(svc_file)
+        if not svc_content:
+            continue
+
+        svc_body = extract_method_body(svc_content, svc_method) or ""
+        if not svc_body:
+            # v2.3.0: UseCase/Port 인터페이스 → Service/Adapter 구현체 해석
+            svc_body, svc_content = _resolve_svc_impl_body(
+                svc_type, svc_method, class_index, source_dir
+            )
+            if not svc_body:
+                continue
+
+        # Repository/DAO 의존성 파악
+        svc_deps = extract_constructor_deps(svc_content)
+        repo_fields = [
+            (name, typ) for name, typ in svc_deps
+            if any(typ.endswith(s) for s in _P5_REPO_SUFFIXES)
+        ]
+        if not repo_fields:
+            continue
+
+        repo_field_names = [name for name, _ in repo_fields]
+        repo_calls = extract_method_calls(svc_body, repo_field_names)
+
+        # v2.3.0: WHERE 절 확인 기반 안전성 판정 (모든 repo 메서드 순회)
+        where_confirmed_params: set = set()
+
+        for repo_field, repo_method in repo_calls:
+            # HTTP param이 이 repo 메서드 인수에 standalone으로 직접 전달되는지 확인
+            if not _has_param_in_direct_call(svc_body, repo_field, repo_method, param_names):
+                # DTO 래핑 등으로 직접 전달 안 됨 → 추적 계속 (sanitized 처리 안 함)
+                continue
+
+            # param이 직접 전달됨 → repo 메서드 본문에서 SET vs WHERE 판정
+            repo_type = next(
+                (typ for name, typ in repo_fields if name == repo_field), None
+            )
+            repo_file = class_index.get(repo_type) if repo_type else None
+            if not repo_file and repo_type:
+                hits = (list(source_dir.rglob(f"{repo_type}.java"))
+                        + list(source_dir.rglob(f"{repo_type}.kt")))
+                if hits:
+                    repo_file = hits[0]
+
+            if repo_file:
+                repo_content_data = read_file_safe(repo_file)
+                if repo_content_data:
+                    ctx = _check_repo_param_context(
+                        repo_content_data, repo_method, param_names
+                    )
+                    if ctx == "where":
+                        # WHERE 절만 사용 확인 → 이 파라미터들은 안전
+                        where_confirmed_params |= param_names
+                        continue
+                    elif ctx == "set":
+                        # SET 절 사용 확인 → DB 저장 → taint 확인
+                        return {
+                            "taint_confirmed": True,
+                            "call_chain": [
+                                handler_method,
+                                f"{svc_field}.{svc_method}()",
+                                f"{repo_field}.{repo_method}()",
+                            ],
+                            "write_method": f"{repo_field}.{repo_method}",
+                            "reason": (
+                                f"HTTP 파라미터 → {svc_field}.{svc_method}() → "
+                                f"{repo_field}.{repo_method}() SET 절 DB 저장 경로 확인"
+                            ),
+                        }
+                    # ctx == "unknown" → fall through
+
+            # repo 파일 못 찾거나 unknown context → write 메서드이면 보수적 taint 확인
+            if _P5_WRITE_METHOD_RE.match(repo_method):
+                return {
+                    "taint_confirmed": True,
+                    "call_chain": [
+                        handler_method,
+                        f"{svc_field}.{svc_method}()",
+                        f"{repo_field}.{repo_method}()",
+                    ],
+                    "write_method": f"{repo_field}.{repo_method}",
+                    "reason": (
+                        f"HTTP 파라미터 → {svc_field}.{svc_method}() → "
+                        f"{repo_field}.{repo_method}() DB 저장 경로 확인"
+                    ),
+                }
+
+        # WHERE 절로 확인된 파라미터가 모든 추적 대상을 포함하면 → 안전 후보
+        # ★ Worst-case 원칙: 서비스 메서드 내 write 접두사 메서드가 하나라도 존재하면
+        #   _has_param_in_direct_call=False로 스킵된 엔티티 래핑 write 경로가 있을 수 있으므로
+        #   WHERE-only 판정을 절대 적용하지 않는다.
+        svc_has_any_write = any(
+            _P5_WRITE_METHOD_RE.match(rm) for _, rm in repo_calls
+        )
+        if (where_confirmed_params and where_confirmed_params >= param_names
+                and not svc_has_any_write):
+            return {
+                "taint_confirmed": False,
+                "sanitized":       True,
+                "reason": (
+                    f"HTTP 파라미터 {sorted(param_names)} 가 WHERE 절 조건에만 사용 확인 "
+                    "(SET 절 미사용, 서비스 내 write 메서드 없음) — Persistent XSS 불가"
+                ),
+            }
+
+    # Step 5 (v2.3.0): Controller 레벨 직접 Port/Repo 호출 안전성 체크
+    # 헥사고날 아키텍처: Controller → FindPort(읽기 WHERE) + Controller → UseCase(도메인 객체 전달)
+    # HTTP param이 Controller 레벨 읽기 Port에만 standalone 전달되고 Service 호출 인수에 없으면 → 안전
+    ctrl_repo_fields = [
+        (name, typ) for name, typ in ctrl_deps
+        if any(typ.endswith(s) for s in _P5_REPO_SUFFIXES)
+    ]
+    if ctrl_repo_fields and param_names:
+        ctrl_repo_calls = extract_method_calls(ctrl_body, [n for n, _ in ctrl_repo_fields])
+        ctrl_where_found = False
+        ctrl_write_found = False
+        for repo_field, repo_method in ctrl_repo_calls:
+            if not _has_param_in_direct_call(ctrl_body, repo_field, repo_method, param_names):
+                continue
+            # param이 standalone으로 직접 전달됨 → 메서드 명칭으로 read/write 판정
+            if _P5_READ_METHOD_RE.match(repo_method):
+                ctrl_where_found = True
+            elif _P5_WRITE_METHOD_RE.match(repo_method):
+                ctrl_write_found = True
+                break  # 즉시 write 확인 → 추가 체크 불필요
+        if ctrl_where_found and not ctrl_write_found:
+            # HTTP param이 Service/UseCase 호출 인수에 standalone으로 전달되는지 확인
+            param_in_svc = any(
+                _has_param_in_direct_call(ctrl_body, sf, sm, param_names)
+                for sf, sm in svc_calls
+            )
+            if not param_in_svc:
+                return {
+                    "taint_confirmed": False,
+                    "sanitized":       True,
+                    "reason": (
+                        f"HTTP 파라미터 {sorted(param_names)} 가 Controller 레벨 "
+                        "읽기(read) Port 호출 조건에만 사용 확인 "
+                        "(Service/UseCase 호출에 미전달) — Persistent XSS 불가"
+                    ),
+                }
+
+    return {"taint_confirmed": False, "reason": "Repository write 메서드 호출 경로 미확인"}
+
 
 def check_persistent_xss(endpoint: dict,
                           sqli_result: Optional[dict],
-                          filter_status: dict) -> dict:
-    """Phase 5: POST/PUT + DB write 경로 + XSS 필터 미적용 조합 판정
+                          filter_status: dict,
+                          ctrl_content: str = "",
+                          handler_method: str = "",
+                          source_dir: Optional[Path] = None,
+                          class_index: Optional[dict] = None) -> dict:
+    """Phase 5: POST/PUT + DB write + XSS 필터 미적용 조합 판정
 
     risk level:
-      없음    — GET endpoint 또는 DB write 경로 미확인
-      낮음    — Inbound XSS 필터 적용 중 (입력 새니타이징)
-      잠재    — POST/PUT + DB write + 필터 없음 → Info 레벨 플래그
+      없음          — GET endpoint / DB write 경로 명확히 없음 (Fix 1/2/3 통과)
+      낮음          — Inbound XSS 필터 적용 중 (입력 새니타이징 확인)
+      lucy_bypass   — Lucy 필터 있으나 Multipart 우회 가능성 → 정보
+      취약          — (a) Taint 확정 + 필터 없음  (b) sqli write 확인 + 필터 없음
+                      (c) POST/PUT + 자유텍스트 파라미터 + 필터 없음 (DB write 경로 불명 → 보수적 취약)
+      ※ v2.2.0: Fix 1/2/3을 통과한 잠재 케이스 모두 "취약"으로 승급.
+                 "없음"만이 양호를 의미한다.
     """
     http_method = endpoint.get("method", "GET").upper()
     is_write    = http_method in ("POST", "PUT", "PATCH")
@@ -778,61 +1649,129 @@ def check_persistent_xss(endpoint: dict,
     if not is_write:
         return {"risk": "없음", "reason": "GET 전용 endpoint — Persistent XSS 경로 없음"}
 
-    # DB write 경로 확인 (sqli_result 제공 시)
-    has_db_write    = False
-    db_write_detail = ""
+    # Fix 3: 자유 텍스트(String) HTTP 파라미터가 없으면 조기 양호 반환 (v2.3.2: DTO 필드 검사 포함)
+    if not _has_freetext_params(endpoint, class_index=class_index, source_dir=source_dir):
+        return {
+            "risk":   "없음",
+            "reason": "자유 텍스트(String) HTTP 입력 파라미터 없음 — Persistent XSS 입력 경로 없음",
+        }
 
-    if sqli_result:
-        ep_api = endpoint.get("api", "")
-        for diag in sqli_result.get("endpoint_diagnoses", []):
-            if diag.get("request_mapping", "") == ep_api:
-                for op in diag.get("db_operations", []):
-                    if op.get("access_type", "") not in ("none", "unknown"):
-                        has_db_write    = True
-                        db_write_detail = op.get("detail", "")[:80]
-                        break
-                break
-        if not has_db_write:
+    # Taint Tracking (Phase 5 강화 - v2.0.0)
+    taint_result = None
+    if ctrl_content and handler_method and source_dir and class_index:
+        taint_result = _trace_persistent_xss_taint(
+            endpoint, ctrl_content, handler_method, source_dir, class_index
+        )
+
+    taint_confirmed = taint_result.get("taint_confirmed") if taint_result else None
+    taint_sanitized = taint_result.get("sanitized", False) if taint_result else False
+    call_chain      = taint_result.get("call_chain", []) if taint_result else []
+    write_method    = taint_result.get("write_method", "") if taint_result else ""
+
+    # Fix 2: Enum/Type sanitization으로 taint 해제 확정 → 즉시 양호 반환
+    if taint_sanitized:
+        return {
+            "risk":         "없음",
+            "reason":       taint_result.get("reason", "Enum/Type 화이트리스트 검증으로 XSS 불가"),
+            "taint_result": taint_result,
+        }
+
+    # Fix 1: sqli_result 기반 DB write 확인 (write 키워드 기반 정밀 판별)
+    has_db_write_from_sqli, db_write_detail_sqli = (
+        _sqli_has_db_write(sqli_result, endpoint.get("api", ""))
+        if sqli_result else (False, "")
+    )
+
+    # Taint 미확정이면 sqli_result 폴백
+    if taint_confirmed is None:
+        if not has_db_write_from_sqli and sqli_result:
             return {"risk": "없음", "reason": "SQL Injection 결과 내 DB write 경로 미확인"}
-    else:
-        # sqli_result 없음 → HTTP write method 자체를 잠재 위험으로 간주
-        has_db_write    = True
-        db_write_detail = "SQL Injection 결과 없음 — DB 저장 경로 자동 추정"
+        elif not sqli_result:
+            # sqli_result 없는 경우 — HTTP write method 자체를 잠재로 간주
+            has_db_write_from_sqli = True
+            db_write_detail_sqli   = "SQL Injection 결과 없음 — DB 저장 경로 추정"
 
-    # 전역 Inbound 필터 적용 중이면 위험도 낮춤
-    if filter_status.get("filter_level") == "inbound":
+    # 전역 Inbound 필터 (진짜 inbound만, multipart_risk 제외)
+    filter_level = filter_status.get("filter_level", "none")
+    if filter_level == "inbound":
         return {
             "risk":   "낮음",
             "reason": (
                 f"전역 {filter_status['filter_type']} 입력 새니타이징 적용 중. "
-                "필터 커버리지(multipart 요청 등) 추가 검토 권장."
+                "필터 커버리지 추가 검토 권장."
             ),
+            "taint_result": taint_result,
         }
 
+    if filter_level == "inbound_multipart_risk":
+        lucy_detail = ""
+        if filter_status.get("lucy_multipart"):
+            lucy_detail = filter_status["lucy_multipart"].get("detail", "")
+        return {
+            "risk":   "lucy_bypass",
+            "reason": (
+                f"Lucy XSS Filter 존재하나 multipart/form-data 우회 가능성: {lucy_detail}"
+            ),
+            "taint_result": taint_result,
+        }
+
+    # 필터 없음 — taint 확정 여부로 위험도 분기
+    if taint_confirmed is True:
+        chain_str = " → ".join(call_chain) if call_chain else write_method
+        return {
+            "risk":            "취약",
+            "reason":          (
+                f"[Taint 확정] HTTP 입력 → {chain_str} → DB 저장 경로 추적 완료. "
+                "XSS 전역 필터 미적용 상태에서 저장된 스크립트가 타 컨텍스트(어드민 웹 등)에서 "
+                "렌더링될 경우 Stored XSS 실현 가능."
+            ),
+            "taint_result":    taint_result,
+            "call_chain":      call_chain,
+        }
+    elif has_db_write_from_sqli:
+        # sqli 결과로 DB write 경로 확인 → 보수적 판정: 취약 (잠재적 위협)
+        # (Taint 경로 자동 추적 실패했더라도 구조적 위험으로 간주)
+        taint_note = taint_result.get("reason", "미수행") if taint_result else "미수행"
+        return {
+            "risk":            "취약",
+            "reason":          (
+                f"[DB write 확인] POST/PUT endpoint + SQL 분석 기반 DB 저장 경로 확인 "
+                f"({db_write_detail_sqli}) + XSS 전역 필터 미적용. "
+                "저장된 스크립트가 타 컨텍스트에서 렌더링될 경우 Stored XSS 실현 가능. "
+                f"(Taint 자동 추적: {taint_note})"
+            ),
+            "taint_result":    taint_result,
+        }
+    elif taint_confirmed is False:
+        # Fix 1/2/3을 모두 통과한 POST/PUT — DB write 경로 자동 추적 실패여도 보수적 "취약" 판정
+        # (사용자 자유 텍스트 입력 + 전역 필터 없음 = Stored XSS 잠재적 위협)
+        return {
+            "risk":            "취약",
+            "reason":          (
+                "[DB write 확인] 자유 텍스트 입력값이 전역 필터 없이 DB에 저장됨. "
+                "타 컨텍스트 렌더링 시 Stored XSS 실현 가능. "
+                "(DB write 경로 자동 추적 불가 — 수동 검토 권장)"
+            ),
+            "taint_result":    taint_result,
+        }
+
+    # 모든 조건 미해당 — Fix 1/2/3 통과 POST/PUT + 전역 필터 없음 → 보수적 취약 판정
     return {
-        "risk":            "잠재",
-        "reason":          (
-            f"POST/PUT endpoint + DB 저장 경로({db_write_detail}) + "
-            "XSS 전역 필터 미적용 — 저장된 스크립트가 View에서 렌더링될 경우 취약."
+        "risk":         "취약",
+        "reason":       (
+            "[DB write 확인] 자유 텍스트 입력값이 전역 필터 없이 DB에 저장됨. "
+            "타 컨텍스트 렌더링 시 Stored XSS 실현 가능."
         ),
-        "db_write_detail": db_write_detail,
+        "taint_result": taint_result,
     }
 
 
 # ============================================================
-#  8. Phase 6: DOM XSS 전역 스캔 (NEW v1.1.0)
+#  8. Phase 6: DOM XSS 전역 스캔
 # ============================================================
 
 def scan_dom_xss_global(source_dir: Path) -> dict:
-    """Phase 6: JS/TS/Vue 파일에서 DOM XSS 취약 패턴 전역 스캔
-
-    endpoint별 분석이 아닌 프로젝트 전체 JS 파일 스캔.
-    결과는 scan_metadata.dom_xss_scan에 저장됨.
-
-    risk:
-      없음    — DOM XSS 패턴 미발견
-      잠재    — DOM XSS 취약 패턴 발견 (DOMPurify 등 sanitize 적용 여부 수동 확인 필요)
-    """
+    """Phase 6: JS/TS/Vue 파일에서 DOM XSS 취약 패턴 전역 스캔"""
     findings: list = []
     files_scanned: int = 0
     safe_ctx_files: list = []
@@ -847,7 +1786,6 @@ def scan_dom_xss_global(source_dir: Path) -> dict:
                 continue
             files_scanned += 1
 
-            # DOMPurify 등 sanitize 적용 파일 → 별도 추적 (FP 감소)
             has_safe_ctx = bool(_P6_DOM_SAFE_CTX.search(content))
             if has_safe_ctx:
                 try:
@@ -874,9 +1812,8 @@ def scan_dom_xss_global(source_dir: Path) -> dict:
                             "type":    desc,
                             "has_safe_ctx": has_safe_ctx,
                         })
-                        break  # 한 줄에서 첫 번째 패턴만
+                        break
 
-    # findings 최대 30건 (파일당 중복 제거)
     seen_types: set = set()
     deduped: list = []
     for f in findings:
@@ -895,7 +1832,7 @@ def scan_dom_xss_global(source_dir: Path) -> dict:
         "vuln_files":        vuln_files[:10],
         "findings":          deduped[:30],
         "risk":              risk,
-        "summary":           (
+        "summary": (
             f"JS/TS/Vue {files_scanned}개 파일 스캔 — "
             f"DOM XSS 잠재 패턴 {len(deduped)}건 발견 "
             f"(sanitize 컨텍스트 파일 {len(safe_ctx_files)}개 포함)"
@@ -919,6 +1856,35 @@ def _worst_verdict(*verdicts: str) -> str:
     return max(verdicts, key=lambda v: _VERDICT_RANK.get(v, 0))
 
 
+def _assign_xss_category(result: str, xss_type: str, persistent_risk: str = "") -> str:
+    """xss_category 값 결정
+
+    취약:
+      실제위협     — Reflected XSS, View XSS (직접 렌더링)
+      잠재적위협   — Persistent XSS (저장소 오염), Redirect XSS
+      인코딩누락   — 인코딩 처리 불명확
+    정보:
+      수동확인필요 — 판정 불가, Lucy 우회 가능성
+    양호:
+      안전확인     — 명시적 escaping, 입력 없음, DB 접근 없음
+    """
+    if result == "취약":
+        if "View" in xss_type or "Reflected" in xss_type:
+            return "실제위협"
+        if "Persistent" in xss_type or persistent_risk in ("취약", "잠재"):
+            return "잠재적위협"
+        if "Redirect" in xss_type:
+            return "잠재적위협"
+        return "실제위협"
+    if result == "정보":
+        if "Persistent" in xss_type or persistent_risk in ("잠재", "lucy_bypass"):
+            return "잠재적위협"
+        return "수동확인필요"
+    if result == "양호":
+        return "안전확인"
+    return "해당없음"
+
+
 def judge_xss_endpoint(endpoint: dict,
                        ctrl_content: str,
                        handler_method: str,
@@ -928,34 +1894,24 @@ def judge_xss_endpoint(endpoint: dict,
                        filter_status: dict,
                        sqli_result: Optional[dict],
                        source_dir: Path,
-                       extra_rest_annotations: frozenset = frozenset()) -> dict:
-    """단일 endpoint XSS 판정 (5가지 유형 개별 판정 포함)
-
-    반환:
-      result           — 종합 worst-case 판정 (양호/취약/정보)
-      severity         — 종합 worst-case 심각도
-      xss_type         — 취약/정보 유형 요약 문자열
-      reflected_xss    — 유형별 개별 판정
-      view_xss         — 유형별 개별 판정
-      persistent_xss   — 유형별 개별 판정
-      redirect_xss     — 유형별 개별 판정
-      dom_xss          — 전역 스캔 참조 (endpoint별 해당없음)
-    """
+                       extra_rest_annotations: frozenset = frozenset(),
+                       class_index: Optional[dict] = None) -> dict:
+    """단일 endpoint XSS 판정 (5가지 유형 개별 판정 + xss_category)"""
     out = {
         "result":           "양호",
         "severity":         "N/A",
         "xss_type":         "None",
         "diagnosis_detail": "",
+        "xss_category":     "",
         "controller_type_detected": "",
         "phase_details":    {},
         "evidence":         [],
         "needs_review":     False,
-        # ── per-type 판정 (v1.1.0 NEW) ──────────────────────
         "reflected_xss":    "해당없음",
         "view_xss":         "해당없음",
         "persistent_xss":   "해당없음",
         "redirect_xss":     "해당없음",
-        "dom_xss":          "해당없음",  # 전역 스캔 결과는 scan_metadata에
+        "dom_xss":          "해당없음",
     }
 
     # ── Phase 1 ──────────────────────────────────────────────
@@ -964,14 +1920,30 @@ def judge_xss_endpoint(endpoint: dict,
     ct = p1["controller_type"]
     out["controller_type_detected"] = ct
 
-    if ct == "REST_JSON":
+    if ct == "REST_HTML_RISK":
+        # REST이지만 text/html 강제 — 취약 판정
+        out["reflected_xss"] = "취약"
+        out["view_xss"]      = "해당없음"
+        html_reason = (
+            "REST 컨트롤러에서 명시적 text/html Content-Type 설정 감지 — "
+            "브라우저가 HTML로 해석하여 Reflected XSS 실현 가능."
+        )
+        out.update({
+            "result":           "취약",
+            "severity":         "High",
+            "xss_type":         "[실제위협] Reflected XSS (text/html)",
+            "diagnosis_detail": html_reason,
+            "needs_review":     False,
+        })
+
+    elif ct == "REST_JSON":
         if p1["gson_unsafe"]:
             out["reflected_xss"] = "정보"
             out["view_xss"]      = "해당없음"
             out.update({
                 "result":           "정보",
                 "severity":         "Low",
-                "xss_type":         "Reflected (Gson)",
+                "xss_type":         "Reflected (Gson disableHtmlEscaping)",
                 "diagnosis_detail": (
                     "GsonBuilder.disableHtmlEscaping() 사용 — JSON 응답에 HTML 문자가 "
                     "이스케이프 없이 포함됨. JSON 응답을 innerHTML로 렌더링하는 "
@@ -1011,14 +1983,15 @@ def judge_xss_endpoint(endpoint: dict,
             is_jsp   = analysis.get("view_type") == "JSP"
             vuln_lines = analysis.get("vulnerable_lines", [])
 
-            # 취약 조건
+            # 취약 조건: 명시적 인코딩 없이 직접 출력
             is_vuln = (
                 analysis.get("has_direct_el")
                 or analysis.get("has_cout_unsafe")
                 or analysis.get("has_utext")
                 or analysis.get("has_scriptlet_out")
+                or analysis.get("has_handlebars_unsafe")
             )
-            # 안전 조건
+            # 안전 조건: 명시적 escaping 확인
             is_safe = (
                 (is_jsp
                  and (analysis.get("has_escape_xml") or analysis.get("has_cout_safe"))
@@ -1026,13 +1999,15 @@ def judge_xss_endpoint(endpoint: dict,
                  and not analysis.get("has_cout_unsafe"))
                 or (not is_jsp
                     and analysis.get("has_text")
-                    and not analysis.get("has_utext"))
+                    and not analysis.get("has_utext")
+                    and not analysis.get("has_handlebars_unsafe"))
             )
 
             if is_vuln:
-                # 취약 상세
                 if analysis.get("has_utext"):
                     vuln_desc = "Thymeleaf th:utext — HTML escape 없이 직접 렌더링"
+                elif analysis.get("has_handlebars_unsafe"):
+                    vuln_desc = "Handlebars {{{variable}}} — Triple-stache HTML escape 없음"
                 elif analysis.get("has_cout_unsafe"):
                     vuln_desc = '<c:out escapeXml="false"> — escapeXml 비활성화'
                 elif analysis.get("has_scriptlet_out"):
@@ -1040,17 +2015,15 @@ def judge_xss_endpoint(endpoint: dict,
                 else:
                     vuln_desc = "${value} 직접 출력 — HTML escape 미처리"
 
-                filter_ok = (
-                    filter_status.get("has_filter")
-                    and filter_status.get("filter_level") == "inbound"
-                )
+                # 전역 필터 있어도 View 취약 패턴은 [실제위협]
+                filter_ok = filter_status.get("filter_level") == "inbound"
                 if filter_ok:
                     out["reflected_xss"] = "정보"
                     out["view_xss"]      = "정보"
                     out.update({
                         "result":   "정보",
                         "severity": "Low",
-                        "xss_type": "View / Reflected",
+                        "xss_type": "View / Reflected (필터 완화)",
                         "diagnosis_detail": (
                             f"View XSS 패턴 감지({vuln_desc}) — "
                             f"전역 {filter_status['filter_type']} 입력 필터 적용 중이나 "
@@ -1061,12 +2034,13 @@ def judge_xss_endpoint(endpoint: dict,
                                       "vulnerable_lines": vuln_lines[:5]}],
                     })
                 else:
+                    # 전역 필터 없음 + View 직접 출력 → [실제위협] 취약
                     out["reflected_xss"] = "취약"
                     out["view_xss"]      = "취약"
                     out.update({
                         "result":   "취약",
                         "severity": "High",
-                        "xss_type": "View / Reflected XSS",
+                        "xss_type": "[실제위협] View / Reflected XSS",
                         "diagnosis_detail": (
                             f"{vuln_desc} — XSS 전역 필터 미적용. "
                             "사용자 입력이 View에 이스케이프 없이 출력됨."
@@ -1092,7 +2066,7 @@ def judge_xss_endpoint(endpoint: dict,
                 out.update({
                     "result":       "정보",
                     "severity":     "Info",
-                    "xss_type":     "View (판정 불가)",
+                    "xss_type":     "View (인코딩 처리 불명확)",
                     "diagnosis_detail": (
                         f"View 파일({view_file.name}) 확인 — "
                         "출력 이스케이프 패턴 자동 판정 불가. 수동 검토 필요."
@@ -1142,13 +2116,12 @@ def judge_xss_endpoint(endpoint: dict,
 
         out["redirect_xss"] = redirect_verdict
 
-        # 종합 판정 업그레이드 (기존보다 더 나쁘면)
         if _SEV_RANK.get(redirect_severity, 0) > _SEV_RANK.get(out["severity"], 0):
             prev_detail = out["diagnosis_detail"]
             out.update({
                 "result":   redirect_verdict,
                 "severity": redirect_severity,
-                "xss_type": _append_xss_type(out["xss_type"], "Redirect"),
+                "xss_type": _append_xss_type(out["xss_type"], "[잠재적위협] Redirect XSS"),
                 "diagnosis_detail": (
                     (prev_detail + " | " if prev_detail else "")
                     + "Open Redirect / Redirect XSS — "
@@ -1164,8 +2137,14 @@ def judge_xss_endpoint(endpoint: dict,
     else:
         out["redirect_xss"] = "양호"
 
-    # ── Phase 5: Persistent XSS 지표 ─────────────────────────
-    p5 = check_persistent_xss(endpoint, sqli_result, filter_status)
+    # ── Phase 5: Persistent XSS Taint Tracking ───────────────
+    p5 = check_persistent_xss(
+        endpoint, sqli_result, filter_status,
+        ctrl_content=ctrl_content,
+        handler_method=handler_method,
+        source_dir=source_dir,
+        class_index=class_index,
+    )
     out["phase_details"]["phase5_persistent"] = p5
 
     http_method = endpoint.get("method", "GET").upper()
@@ -1175,22 +2154,72 @@ def judge_xss_endpoint(endpoint: dict,
         risk = p5.get("risk", "없음")
         if risk == "낮음":
             out["persistent_xss"] = "양호"
+        elif risk == "취약":
+            # Persistent XSS 위험 확정 — Worst-case 강제 승급
+            out["persistent_xss"] = "취약"
+            # taint 경로 자동 추적 성공 여부로 severity 차등화
+            tr = p5.get("taint_result") or {}
+            taint_chain = p5.get("call_chain", [])
+            write_confirmed = (tr.get("taint_confirmed") is True) or bool(taint_chain)
+            sev = "High" if write_confirmed else "Medium"
+            if _VERDICT_RANK.get("취약", 0) >= _VERDICT_RANK.get(out["result"], 0):
+                prev_detail = out["diagnosis_detail"]
+                out.update({
+                    "result":   "취약",
+                    "severity": sev,
+                    "xss_type": _append_xss_type(
+                        out["xss_type"], "[잠재적위협] Persistent XSS (저장소 오염)"
+                    ),
+                    "diagnosis_detail": (
+                        (prev_detail + " | " if prev_detail else "")
+                        + p5["reason"]
+                    ),
+                    "needs_review": not write_confirmed,
+                })
+            out["evidence"].append({
+                "phase":       "persistent",
+                "taint_chain": taint_chain,
+                "write_method": tr.get("write_method", ""),
+            })
         elif risk == "잠재":
+            # v2.2.0: "잠재"도 Fix 1/2/3 통과 후 잔여 → "취약" 승급 (방어적 처리)
+            out["persistent_xss"] = "취약"
+            if _VERDICT_RANK.get("취약", 0) >= _VERDICT_RANK.get(out["result"], 0):
+                prev_detail = out["diagnosis_detail"]
+                out.update({
+                    "result":   "취약",
+                    "severity": "Medium",
+                    "xss_type": _append_xss_type(
+                        out["xss_type"], "[잠재적위협] Persistent XSS (저장소 오염)"
+                    ),
+                    "diagnosis_detail": (
+                        (prev_detail + " | " if prev_detail else "")
+                        + p5.get("reason", "POST/PUT + 자유 텍스트 입력 + 전역 필터 없음")
+                    ),
+                    "needs_review": True,
+                })
+        elif risk == "lucy_bypass":
             out["persistent_xss"] = "정보"
-            # 종합 판정: 기존이 양호인 경우에만 정보로 올림
             if out["result"] == "양호":
                 out.update({
                     "result":           "정보",
-                    "severity":         "Info",
-                    "xss_type":         _append_xss_type(out["xss_type"], "Persistent (잠재)"),
+                    "severity":         "Low",
+                    "xss_type":         _append_xss_type(
+                        out["xss_type"], "Lucy Multipart 우회 가능성"
+                    ),
                     "diagnosis_detail": p5["reason"],
                     "needs_review":     True,
                 })
         else:
-            # risk == "없음" (DB write 경로 미확인)
             out["persistent_xss"] = "해당없음"
     else:
         out["persistent_xss"] = "해당없음"
+
+    # ── xss_category 결정 ─────────────────────────────────────
+    out["xss_category"] = _assign_xss_category(
+        out["result"], out["xss_type"],
+        p5.get("risk", "없음") if is_write else ""
+    )
 
     return out
 
@@ -1274,13 +2303,16 @@ def run_xss_diagnosis(source_dir: Path,
                       sqli_result_path: Optional[Path] = None) -> dict:
     """XSS 전체 진단 실행 (Phase 1 ~ 6)"""
 
-    # 인벤토리 로드
     endpoints = _load_api_inventory(inventory_path, modules)
     print(f"API 인벤토리 로드: {len(endpoints)}개 endpoint")
 
-    # 클래스 인덱스 구축
+    # 클래스 인덱스 구축 (build_class_index는 (class_index, impl_index) 튜플 반환)
     print("클래스 인덱스 구축 중...")
-    class_index = build_class_index(source_dir)
+    _ci_result = build_class_index(source_dir)
+    if isinstance(_ci_result, tuple):
+        class_index, impl_index = _ci_result
+    else:
+        class_index, impl_index = _ci_result, {}
     print(f"  → {len(class_index)}개 클래스 인덱싱 완료")
 
     # View 인덱스 구축
@@ -1298,6 +2330,9 @@ def run_xss_diagnosis(source_dir: Path,
         if filter_status["has_filter"] else "✗ 없음"
     )
     print(f"  → XSS 필터: {flt_label}")
+    if filter_status.get("filter_level") in ("inbound_multipart_risk",):
+        lm = filter_status.get("lucy_multipart") or {}
+        print(f"  ⚠️  Lucy Multipart 우회 가능성: {lm.get('detail', '')}")
     if filter_status["filter_files"]:
         for ff in filter_status["filter_files"][:3]:
             print(f"     {ff}")
@@ -1310,7 +2345,7 @@ def run_xss_diagnosis(source_dir: Path,
         print(f"SQL Injection 결과 로드: {sqli_result_path.name} "
               f"({len(sqli_result.get('endpoint_diagnoses', []))}개 진단)")
 
-    # 커스텀 @RestController 메타 어노테이션 탐지 (프로젝트 고유 어노테이션)
+    # 커스텀 @RestController 메타 어노테이션 탐지
     print("커스텀 @RestController 메타 어노테이션 탐지 중...")
     extra_rest_annotations = build_custom_rest_annotations(source_dir)
     if extra_rest_annotations:
@@ -1340,12 +2375,14 @@ def run_xss_diagnosis(source_dir: Path,
                 view_index, view_prefix, view_suffix,
                 filter_status, sqli_result, source_dir,
                 extra_rest_annotations,
+                class_index=class_index,
             )
         else:
             judgment = {
                 "result":           "정보",
                 "severity":         "Info",
                 "xss_type":         "Controller 미탐지",
+                "xss_category":     "수동확인필요",
                 "diagnosis_detail": "Controller 파일 탐색 실패 — 수동 검토 필요.",
                 "controller_type_detected": "unknown",
                 "reflected_xss":    "정보",
@@ -1370,6 +2407,7 @@ def run_xss_diagnosis(source_dir: Path,
             severity        = judgment.get("severity", "N/A"),
             xss_type        = judgment.get("xss_type", ""),
             diagnosis_detail= judgment.get("diagnosis_detail", ""),
+            xss_category    = judgment.get("xss_category", ""),
             reflected_xss   = judgment.get("reflected_xss",   "해당없음"),
             view_xss        = judgment.get("view_xss",        "해당없음"),
             persistent_xss  = judgment.get("persistent_xss",  "해당없음"),
@@ -1397,15 +2435,23 @@ def run_xss_diagnosis(source_dir: Path,
             cnt[v] = cnt.get(v, 0) + 1
         per_type[fld] = cnt
 
+    # xss_category 통계 (v2.0.0)
+    _CATEGORIES = ["실제위협", "잠재적위협", "수동확인필요", "안전확인", "해당없음"]
+    cat_stats: dict = {c: 0 for c in _CATEGORIES}
+    for d in diagnoses:
+        cat = d.xss_category or "해당없음"
+        cat_stats[cat] = cat_stats.get(cat, 0) + 1
+
     total   = len(diagnoses)
     decided = stats["양호"] + stats["취약"]
     rate    = round(decided / total * 100, 1) if total else 0.0
     review  = sum(1 for d in diagnoses if d.needs_review)
 
     print(f"\nXSS 진단 완료: {total}개 endpoint  (판정률 {rate}%)")
-    print(f"  양호: {stats['양호']}건")
-    print(f"  취약: {stats['취약']}건")
-    print(f"  정보: {stats['정보']}건")
+    print(f"  🚨 취약: {stats['취약']}건  "
+          f"(실제위협 {cat_stats['실제위협']} / 잠재적위협 {cat_stats['잠재적위협']})")
+    print(f"  ⚠️  정보: {stats['정보']}건  (수동확인필요 {cat_stats['수동확인필요']})")
+    print(f"  ✅ 양호: {stats['양호']}건")
     if review:
         print(f"  수동 검토 필요: {review}건")
     print(f"\n[유형별 판정]")
@@ -1434,9 +2480,13 @@ def run_xss_diagnosis(source_dir: Path,
         "summary": {
             "total_endpoints": total,
             "xss":             stats,
+            "xss_category":    cat_stats,
             "per_type": {
                 **per_type,
-                "dom_xss": f"전역 스캔 결과 참조 (scan_metadata.dom_xss_scan) — {dom_xss_scan['summary']}",
+                "dom_xss": (
+                    f"전역 스캔 결과 참조 (scan_metadata.dom_xss_scan) — "
+                    f"{dom_xss_scan['summary']}"
+                ),
             },
             "판정률(%)":   rate,
             "수동검토":    review,
