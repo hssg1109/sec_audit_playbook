@@ -85,6 +85,25 @@ def get_repo_root():
     return result.stdout.strip()
 
 
+def _load_token_from_dotenv(repo_root: str) -> str:
+    """repo_root/.env 에서 BITBUCKET_TOKEN 값을 읽어 반환. 없으면 빈 문자열."""
+    env_path = os.path.join(repo_root, ".env")
+    if not os.path.isfile(env_path):
+        return ""
+    with open(env_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            if key.strip() == "BITBUCKET_TOKEN":
+                token = value.strip().strip('"').strip("'")
+                if token:
+                    print(f"[INFO] BITBUCKET_TOKEN을 .env 파일에서 로드했습니다.")
+                    return token
+    return ""
+
+
 def parse_release_notes(repo_root, version):
     """RELEASENOTE.md에서 특정 버전의 릴리즈 노트 섹션을 추출.
 
@@ -452,8 +471,13 @@ def main():
     )
     args = parser.parse_args()
 
+    # .env 파일 자동 로드 (--token / BITBUCKET_TOKEN 환경변수 미지정 시 폴백)
     if not args.token:
-        print("[ERROR] --token 또는 BITBUCKET_TOKEN 환경변수가 필요합니다.", file=sys.stderr)
+        args.token = _load_token_from_dotenv(get_repo_root())
+
+    if not args.token:
+        print("[ERROR] --token, BITBUCKET_TOKEN 환경변수, 또는 .env 파일이 필요합니다.",
+              file=sys.stderr)
         sys.exit(1)
 
     global USE_POWERSHELL
