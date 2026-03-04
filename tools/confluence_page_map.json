@@ -1,7 +1,7 @@
 {
   "version": "3.0",
   "prefix": "",
-  "next_test_number": 15,
+  "next_test_number": 16,
   "root_page": {
     "source": "README.md",
     "type": "doc"
@@ -154,6 +154,25 @@
           "entries": [
             {"source": "state/ocb_community_xss_v2.json",       "title": "테스트12 - XSS 취약점 진단 결과",   "type": "finding"},
             {"source": "state/ocb_community_xss_보고서.md",     "title": "테스트12 - OCB Community XSS 진단 보고서", "type": "doc"}
+          ]
+        },
+        {
+          "title": "테스트15 - OCB Community API 통합 진단 (v4.6.3)",
+          "confluence_page_id": "737058010",
+          "entries": [
+            {
+              "source": "state/ocb_community_진단보고서.md",
+              "title": "테스트15 - OCB Community API 통합 진단 보고서",
+              "type": "main_report",
+              "confluence_page_id": "737058011",
+              "task_sources": {
+                "api":       "state/ocb_community_new_api_inventory.json",
+                "injection": "state/ocb_community_injection_v463_run1.json",
+                "xss":       "state/ocb_community_xss_v463_run1.json"
+              }
+            },
+            {"source": "state/ocb_community_injection_v463_run1.json", "title": "테스트15 - 인젝션 취약점 진단 결과", "type": "finding", "confluence_page_id": "737058015"},
+            {"source": "state/ocb_community_xss_v463_run1.json",       "title": "테스트15 - XSS 취약점 진단 결과",   "type": "finding", "confluence_page_id": "737058018"}
           ]
         }
       ]
