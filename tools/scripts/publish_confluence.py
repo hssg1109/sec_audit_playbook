@@ -1129,6 +1129,15 @@ def _json_to_xhtml_enhanced_injection(data):
         ],
         ["OS Command Injection", f"{os_cmd.get('total', 0)}건 (하단 참조)"],
     ]
+    # SSI Injection — global_findings에서 실제 건수 반영
+    ssi_total = 0
+    gf = data.get("global_findings", {})
+    if isinstance(gf, dict):
+        ssi_total = gf.get("ssi_injection", {}).get("total", 0)
+    if ssi_total:
+        sum_rows.append(["SSI / SpEL Injection", f"<strong style='color:orange'>{ssi_total}건 ⚠️ (하단 참조)</strong>"])
+    else:
+        sum_rows.append(["SSI / SpEL Injection", "0건"])
     parts.append(_table(["항목", "결과"], sum_rows))
 
     # Group endpoints by result
@@ -1782,11 +1791,16 @@ def _build_main_summary_table(injection_data: dict, xss_data: dict) -> str:
         rows.append(["OS Command Injection",
                      "오탐 검토 필요" if os_total else "해당없음",
                      "0건", "0건"])
-        rows.append(["SSI Injection", "해당없음", "0건", "0건"])
+        # SSI — global_findings에서 실제 건수 반영
+        ssi_gf = injection_data.get("global_findings", {})
+        ssi_total = ssi_gf.get("ssi_injection", {}).get("total", 0) if isinstance(ssi_gf, dict) else 0
+        ssi_result = f"<strong style='color:orange'>⚠️ {ssi_total}건 (세부 보고서 참조)</strong>" \
+            if ssi_total else "해당없음"
+        rows.append(["SSI / SpEL Injection", ssi_result, f"{ssi_total}건", "0건"])
     else:
         rows.append(["SQL Injection", "—", "—", "—"])
         rows.append(["OS Command Injection", "—", "—", "—"])
-        rows.append(["SSI Injection", "—", "—", "—"])
+        rows.append(["SSI / SpEL Injection", "—", "—", "—"])
 
     # XSS
     if xss_data:
