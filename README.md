@@ -1,6 +1,6 @@
 # AI 보안진단 플레이북
 
-> AI 에이전트(Claude)를 활용한 소스코드 보안 진단 자동화 프레임워크 — v4.5.2
+> AI 에이전트(Claude)를 활용한 소스코드 보안 진단 자동화 프레임워크 — v4.8.0
 
 ## 개요
 
@@ -76,9 +76,12 @@ Phase 2: 정적 분석
       └── 글로벌 필터·인터셉터 확인
       └── 병렬 실행 ──┬── Task 2-2  인젝션 검토 (SQL / OS Command / SSI)
                       │                ← scan_injection_enhanced.py → LLM 교차검증
-                      ├── Task 2-3  XSS 검토 (Persistent / Reflected / Redirect)
+                      ├── Task 2-3  XSS 검토 (Persistent / Reflected / DOM / Redirect)
+                      │                ← scan_xss.py (v2.4.0) → LLM 보조
                       ├── Task 2-4  파일 처리 검토 (Upload / Download / LFI)
-                      └── Task 2-5  데이터 보호 검토 (CORS / Secrets / JWT)
+                      │                ← scan_file_processing.py → LLM 보조
+                      └── Task 2-5  데이터 보호 검토 (CORS / Secrets / JWT / Crypto / Logging)
+                                       ← scan_data_protection.py (v1.0.0) → LLM 보조
 
 Phase 3: 교차검증 (Cross-Verification)
   └── 자동 탐지 "취약" 판정 전체에 대해 수동 교차검증 수행
@@ -142,7 +145,10 @@ playbook/
 │   ├── confluence_page_map.json     # Confluence 페이지 매핑 (정합성 검증 이력)
 │   └── scripts/
 │       ├── scan_api.py              #   API 엔드포인트 인벤토리 추출
-│       ├── scan_injection_enhanced.py  #   SQL Injection 진단 엔진 (v4.5.2) ★
+│       ├── scan_injection_enhanced.py  #   SQL Injection 진단 엔진 (v4.6.3) ★
+│       ├── scan_xss.py              #   XSS 진단 엔진 (v2.4.0) ★
+│       ├── scan_file_processing.py  #   파일 처리 취약점 진단 ★
+│       ├── scan_data_protection.py  #   데이터 보호 진단 — 7개 모듈 (v1.0.0) ★
 │       ├── scan_injection_patterns.py  #   패턴 기반 취약점 탐지
 │       ├── scan_dto.py              #   DTO 구조 분석
 │       ├── publish_confluence.py    #   Confluence 보고서 게시
@@ -174,7 +180,7 @@ playbook/
 
 ## 핵심 스크립트 상세
 
-### `scan_injection_enhanced.py` (v4.5.2) — SQL Injection 진단 엔진
+### `scan_injection_enhanced.py` (v4.6.3) — SQL Injection 진단 엔진
 
 Controller → Service → Repository 호출 그래프를 추적하여 HTTP 파라미터의 SQL 삽입 경로를 분석합니다.
 
@@ -194,6 +200,27 @@ python tools/scripts/scan_injection_enhanced.py \
 | `정보` | 외부 모듈·XML 미발견·추적 불가 | 외부 라이브러리 위임 |
 
 **지원 기술 스택:** Java / Kotlin · Spring · MyBatis · iBatis · JPA / Hibernate
+
+### `scan_xss.py` (v2.4.0) — XSS 진단 엔진
+
+Persistent XSS (DB 저장 후 출력) / Reflected XSS (Taint Flow 검증) / DOM XSS / Open Redirect를 탐지합니다.
+
+```bash
+python tools/scripts/scan_xss.py <source_dir> \
+  --api-inventory state/<project>_api_inventory.json \
+  -o state/<project>_task23.json
+```
+
+### `scan_data_protection.py` (v1.0.0) — 데이터 보호 진단 엔진
+
+CORS·하드코딩 시크릿·민감정보 로깅·취약 암호화·JWT·DTO 과다노출·보안 헤더 등 7개 모듈을 자동 스캔합니다.
+
+```bash
+python tools/scripts/scan_data_protection.py <source_dir> \
+  --api-inventory state/<project>_api_inventory.json \
+  -o state/<project>_task25.json \
+  [--skip logging]  # 특정 모듈 제외
+```
 
 ### `publish_confluence.py` — Confluence 게시
 
@@ -298,7 +325,7 @@ IP 주소, 이메일, API 키, JWT 토큰, 전화번호, 비밀번호, 인증서
 
 ## 버전 관리
 
-현재 버전: **v4.5.2** — [RELEASENOTE.md](RELEASENOTE.md) 참조
+현재 버전: **v4.8.0** — [RELEASENOTE.md](RELEASENOTE.md) 참조
 
 진행 중 과제: [TODO.md](TODO.md) 참조
 

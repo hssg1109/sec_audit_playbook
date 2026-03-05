@@ -71,6 +71,18 @@ _KT_KEYWORDS: frozenset = frozenset({
     'or', 'not',
 })
 
+# [Step 1] MyBatis @Select/@Insert/@Update/@Delete 어노테이션 2-pass 파싱용 모듈 상수
+# 단일 문자열 형태: @Select("SQL ...")
+_MYBATIS_ANNOT_SINGLE_RE = re.compile(
+    r'@(Select|Insert|Update|Delete)\s*\(\s*"((?:[^"\\]|\\.)*)"\s*\)',
+    re.DOTALL,
+)
+# 배열 형태: @Select({"SQL1 ...", "SQL2 ..."})
+_MYBATIS_ANNOT_ARRAY_RE = re.compile(
+    r'@(Select|Insert|Update|Delete)\s*\(\s*\{((?:\s*"(?:[^"\\]|\\.)*"\s*,?\s*)+)\}\s*\)',
+    re.DOTALL,
+)
+
 
 # ============================================================
 #  1. 데이터 구조
@@ -369,31 +381,57 @@ def extract_method_calls(method_body: str, field_names: list) -> list:
 #  3. Call Graph 구축
 # ============================================================
 
+def _discover_source_dirs(root: Path) -> list:
+    """프로젝트 루트에서 모든 소스/리소스 디렉터리 자동 탐색 (멀티 모듈 지원).
+
+    탐색 패턴: **/src/main/{java,kotlin,resources}
+    제외: target/, build/, .git/, node_modules/, .idea/
+    """
+    exclude = {"target", "build", ".git", "node_modules", ".idea"}
+    dirs = []
+    for candidate in ("java", "kotlin", "resources"):
+        for p in root.rglob(f"src/main/{candidate}"):
+            if any(ex in p.parts for ex in exclude):
+                continue
+            if p.is_dir():
+                dirs.append(p)
+    return dirs or [root]
+
+
 def find_class_file(source_dir: Path, class_name: str,
-                    suffixes: list = None) -> Optional[Path]:
+                    suffixes: list = None,
+                    extra_source_dirs: list = None) -> Optional[Path]:
     """클래스명으로 파일 찾기"""
     if suffixes is None:
         suffixes = ['.kt', '.java']
 
-    for suffix in suffixes:
-        candidates = list(source_dir.rglob(f"{class_name}{suffix}"))
-        if candidates:
-            return candidates[0]
+    all_dirs = [source_dir] + (extra_source_dirs or [])
+
+    for search_dir in all_dirs:
+        for suffix in suffixes:
+            candidates = list(search_dir.rglob(f"{class_name}{suffix}"))
+            if candidates:
+                return candidates[0]
 
     # 파일명과 클래스명이 다를 수 있으므로 내용 검색
-    for suffix in suffixes:
-        for f in source_dir.rglob(f"*{suffix}"):
-            try:
-                content = f.read_text(encoding="utf-8", errors="replace")
-                if re.search(rf'class\s+{re.escape(class_name)}\b', content):
-                    return f
-            except (IOError, UnicodeDecodeError):
-                continue
+    for search_dir in all_dirs:
+        for suffix in suffixes:
+            for f in search_dir.rglob(f"*{suffix}"):
+                try:
+                    content = f.read_text(encoding="utf-8", errors="replace")
+                    if re.search(rf'class\s+{re.escape(class_name)}\b', content):
+                        return f
+                except (IOError, UnicodeDecodeError):
+                    continue
     return None
 
 
-def build_class_index(source_dir: Path) -> tuple:
+def build_class_index(source_dir: Path, extra_source_dirs: list = None) -> tuple:
     """소스 디렉토리의 클래스 인덱스 구축
+
+    Args:
+        source_dir: 기본 소스 디렉토리
+        extra_source_dirs: 멀티 모듈 추가 소스 디렉토리 목록 (선택)
 
     Returns:
         (class_index, impl_index)
@@ -413,24 +451,27 @@ def build_class_index(source_dir: Path) -> tuple:
         re.DOTALL,
     )
 
-    for suffix in ('.kt', '.java'):
-        for f in source_dir.rglob(f"*{suffix}"):
-            if any(ex in f.parts for ex in exclude_dirs):
-                continue
-            try:
-                content = f.read_text(encoding="utf-8", errors="replace")
-                # 기존: class_name → file
-                for m in re.finditer(r'(?:class|interface|object)\s+(\w+)', content):
-                    index[m.group(1)] = f
-                # 신규: interface → impl 매핑
-                pattern = _KT_IMPL_RE if suffix == '.kt' else _JAVA_IMPL_RE
-                for m in pattern.finditer(content):
-                    class_name = m.group(1)
-                    for iface in re.findall(r'\b([A-Z]\w+)\b', m.group(2)):
-                        if iface != class_name:
-                            impl_index.setdefault(iface, []).append(class_name)
-            except (IOError, UnicodeDecodeError):
-                continue
+    all_dirs = [source_dir] + (extra_source_dirs or [])
+
+    for search_dir in all_dirs:
+        for suffix in ('.kt', '.java'):
+            for f in search_dir.rglob(f"*{suffix}"):
+                if any(ex in f.parts for ex in exclude_dirs):
+                    continue
+                try:
+                    content = f.read_text(encoding="utf-8", errors="replace")
+                    # class_name → file (충돌 시 첫 번째 발견 유지)
+                    for m in re.finditer(r'(?:class|interface|object)\s+(\w+)', content):
+                        index.setdefault(m.group(1), f)
+                    # interface → impl 매핑
+                    pattern = _KT_IMPL_RE if suffix == '.kt' else _JAVA_IMPL_RE
+                    for m in pattern.finditer(content):
+                        class_name = m.group(1)
+                        for iface in re.findall(r'\b([A-Z]\w+)\b', m.group(2)):
+                            if iface != class_name:
+                                impl_index.setdefault(iface, []).append(class_name)
+                except (IOError, UnicodeDecodeError):
+                    continue
     return index, impl_index
 
 
@@ -451,11 +492,15 @@ def _collect_element_text(elem) -> str:
     return "".join(parts)
 
 
-def build_mybatis_index(source_dir: Path) -> dict:
+def build_mybatis_index(source_dir: Path, extra_source_dirs: list = None) -> dict:
     """MyBatis/iBatis XML mapper 파일을 ElementTree 기반으로 파싱하여 SQL ID 인덱스 구축
 
     주석(<!-- -->)은 자동 무시되어 오탐 방지.
     <include refid="...">는 해당 <sql id="..."> 를 인라인 병합.
+
+    Args:
+        source_dir: 기본 소스 디렉토리
+        extra_source_dirs: 멀티 모듈 추가 소스 디렉토리 목록 (선택)
 
     Returns:
         {
@@ -483,7 +528,13 @@ def build_mybatis_index(source_dir: Path) -> dict:
                             "tableName", "orderBy", "sortColumn", "sortField",
                             "direction", "limit", "offset"}
 
-    for xml_file in source_dir.rglob("*.xml"):
+    all_dirs = [source_dir] + (extra_source_dirs or [])
+
+    def _iter_xml_files():
+        for search_dir in all_dirs:
+            yield from search_dir.rglob("*.xml")
+
+    for xml_file in _iter_xml_files():
         if any(ex in xml_file.parts for ex in exclude_dirs):
             continue
 
@@ -507,7 +558,12 @@ def build_mybatis_index(source_dir: Path) -> dict:
         if not namespace:
             continue
 
-        rel_path = str(xml_file.relative_to(source_dir)) if xml_file.is_relative_to(source_dir) else str(xml_file)
+        # 상대 경로: source_dir 또는 extra_source_dirs 기준으로 계산
+        rel_base = next(
+            (d for d in all_dirs if xml_file.is_relative_to(d)),
+            None,
+        )
+        rel_path = str(xml_file.relative_to(rel_base)) if rel_base else str(xml_file)
 
         # <sql id="..."> 조각(fragment) 인덱스 구축 (include refid 병합용)
         sql_fragments = {}
@@ -1704,51 +1760,66 @@ def analyze_dao_method(content: str, method_name: str,
 
 def _analyze_mybatis_annotations(content: str, method_name: str,
                                   mybatis_index: dict = None) -> list:
-    """MyBatis @Select/@Insert/@Update/@Delete 어노테이션 분석
+    """MyBatis @Select/@Insert/@Update/@Delete 어노테이션 분석 (2-pass)
 
     Mapper interface 메서드에 붙은 SQL 어노테이션을 분석하여 양호/취약 판정.
+
+    기존 단일 regex의 한계:
+      BUG1: 반환 타입 `List<Map<String, Object>>`에서 `\w+`이 `List`만 매칭 후 실패
+      BUG2: SQL 내 이스케이프 문자(`\\"`) 미지원
+      BUG3: 배열 형태 `@Select({"SQL1","SQL2"})` 미지원
+
+    해결: 파일 내 모든 어노테이션 수집(2개 pre-compiled RE) → 어노테이션 종료 후
+    메서드명 후방 검증으로 대상 어노테이션 특정.
     """
     ops = []
-    # 메서드 앞에 위치한 어노테이션 찾기
-    # @Select("SELECT ... #{param} ...") 또는 @Select({"SELECT ...", "WHERE ..."})
-    annotation_pattern = (
-        rf'@(Select|Insert|Update|Delete)\s*\(\s*'
-        rf'((?:"[^"]*"|\{{[^}}]*\}}))\s*\)'
-        rf'\s*(?:fun|public|protected|private|\w+)\s+'
-        rf'{re.escape(method_name)}\s*\('
+    candidates = []  # [(annot_end, verb, sql_text)]
+
+    # 1단계: 파일 내 모든 어노테이션 수집
+    for m in _MYBATIS_ANNOT_SINGLE_RE.finditer(content):
+        candidates.append((m.end(), m.group(1), m.group(2)))
+    for m in _MYBATIS_ANNOT_ARRAY_RE.finditer(content):
+        strs = re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(2))
+        candidates.append((m.end(), m.group(1), ' '.join(strs)))
+    candidates.sort(key=lambda x: x[0])
+
+    # 2단계: 어노테이션 종료 후 → method_name( 까지 후방 검증
+    # [^;]{0,500}: 세미콜론(인터페이스 메서드 경계) 없는 500자 이내 영역
+    after_re = re.compile(
+        r'(?:(?!' + re.escape(method_name) + r'\s*\()[^;]){0,500}'
+        + re.escape(method_name) + r'\s*\('
     )
-    match = re.search(annotation_pattern, content, re.DOTALL)
-    if not match:
-        return ops
 
-    sql_text = match.group(2)
+    for annot_end, verb, sql_text in candidates:
+        if not after_re.match(content[annot_end:]):
+            continue
 
-    has_dollar = bool(re.search(r'\$\{[^}]+\}', sql_text))
-    has_concat = bool(re.search(r'"\s*\+\s*\w+\s*\+\s*"', sql_text))
-    has_hash = bool(re.search(r'#\{[^}]+\}', sql_text))
+        has_dollar = bool(re.search(r'\$\{[^}]+\}', sql_text))
+        has_concat = bool(re.search(r'"\s*\+\s*\w+', sql_text))
+        has_hash = bool(re.search(r'#\{[^}]+\}', sql_text))
 
-    if has_dollar or has_concat:
-        ops.append(DbOperation(
-            method=method_name,
-            access_type="mybatis_unsafe",
-            detail=f"취약: @{match.group(1)} 어노테이션에서 {'${} 직접 삽입' if has_dollar else '문자열 결합'} 사용",
-            is_vulnerable=True,
-        ))
-    elif has_hash:
-        ops.append(DbOperation(
-            method=method_name,
-            access_type="mybatis_safe",
-            detail=f"양호: @{match.group(1)} 어노테이션에서 #{{}} 바인딩 사용",
-            is_vulnerable=False,
-        ))
-    else:
-        # 어노테이션은 있으나 바인딩 패턴 불분명
-        ops.append(DbOperation(
-            method=method_name,
-            access_type="mybatis_safe",
-            detail=f"양호: @{match.group(1)} 어노테이션 - 정적 SQL (바인딩 불필요)",
-            is_vulnerable=False,
-        ))
+        if has_dollar or has_concat:
+            ops.append(DbOperation(
+                method=method_name,
+                access_type="mybatis_unsafe",
+                detail=f"취약: @{verb} 어노테이션에서 {'${} 직접 삽입' if has_dollar else '문자열 결합'} 사용",
+                is_vulnerable=True,
+            ))
+        elif has_hash:
+            ops.append(DbOperation(
+                method=method_name,
+                access_type="mybatis_safe",
+                detail=f"양호: @{verb} 어노테이션에서 #{{}} 바인딩 사용",
+                is_vulnerable=False,
+            ))
+        else:
+            ops.append(DbOperation(
+                method=method_name,
+                access_type="mybatis_safe",
+                detail=f"양호: @{verb} 어노테이션 - 정적 SQL (바인딩 불필요)",
+                is_vulnerable=False,
+            ))
+        break  # 첫 번째 매칭 어노테이션 사용
 
     return ops
 
@@ -3170,7 +3241,8 @@ def format_params(params: list) -> str:
 
 def run_diagnosis(source_dir: Path, inventory_path: Path,
                   modules: list = None,
-                  context_lines: int = 3) -> dict:
+                  context_lines: int = 3,
+                  extra_source_dirs: list = None) -> dict:
     """전체 진단 실행"""
 
     # 1. API 인벤토리 로드
@@ -3179,12 +3251,12 @@ def run_diagnosis(source_dir: Path, inventory_path: Path,
 
     # 2. 클래스 인덱스 구축
     print("클래스 인덱스 구축 중...")
-    class_index, impl_index = build_class_index(source_dir)
+    class_index, impl_index = build_class_index(source_dir, extra_source_dirs=extra_source_dirs)
     print(f"  → {len(class_index)}개 클래스 인덱싱 완료")
 
     # 2-1. MyBatis/iBatis XML mapper 인덱스 구축
     print("MyBatis/iBatis XML mapper 인덱스 구축 중...")
-    mybatis_index = build_mybatis_index(source_dir)
+    mybatis_index = build_mybatis_index(source_dir, extra_source_dirs=extra_source_dirs)
     print(f"  → {len(mybatis_index)}개 SQL 매핑 인덱싱 완료")
 
     # 3. Endpoint별 진단
@@ -3303,6 +3375,14 @@ def main():
         type=int,
         default=3,
     )
+    parser.add_argument(
+        "--source-root", "-r",
+        type=str,
+        default=None,
+        metavar="ROOT_DIR",
+        help="멀티 모듈 프로젝트 루트. 지정 시 하위 */src/main/{java,kotlin,resources}를 "
+             "자동 탐색하여 형제 모듈 클래스를 class_index에 포함",
+    )
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir)
@@ -3315,8 +3395,18 @@ def main():
         print(f"Error: 인벤토리 파일을 찾을 수 없습니다: {inventory_path}")
         sys.exit(1)
 
+    # 멀티 모듈 추가 소스 디렉토리 탐색
+    extra_dirs = []
+    if args.source_root:
+        discovered = _discover_source_dirs(Path(args.source_root))
+        extra_dirs = [d for d in discovered if d != source_dir]
+        print(f"멀티 모듈: {len(extra_dirs)}개 추가 소스 디렉토리 탐색 완료")
+        for d in extra_dirs:
+            print(f"  + {d}")
+
     result = run_diagnosis(source_dir, inventory_path,
-                           args.modules, args.context_lines)
+                           args.modules, args.context_lines,
+                           extra_source_dirs=extra_dirs if extra_dirs else None)
 
     # 파일 출력
     if args.output:

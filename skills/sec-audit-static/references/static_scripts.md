@@ -50,6 +50,15 @@ Canonical automation scripts (repo `tools/scripts/`):
   - Global scan: OS Command Injection, SSI Injection, Kotlin SQL Builder 전역 패턴
   - Output: endpoint_diagnoses (양호/취약/정보/N/A), global_findings, summary
 
+- `scan_file_processing.py` (v1.0): File Upload/Download & LFI/RFI vulnerability scanner
+  - 업로드 엔드포인트: MultipartFile + UUID 난수화 / Tika MIME 검증 / 확장자 Whitelist / 크기 제한
+  - 다운로드/LFI: HTTP 파라미터 → 파일 API Taint Tracking (Long 타입은 안전 판정)
+    - Path Traversal 필터(`replace("../")`, `getCanonicalPath()` 등) 미적용 시 취약 판정
+  - RFI/SSRF: HTTP String 파라미터 → 외부 요청 API Taint Tracking, URL Whitelist 검증
+  - 설정 파일: `application.properties/yml`에서 `max-file-size`, `max-request-size` 파싱
+  - Output: upload_diagnoses / download_diagnoses / rfi_diagnoses / config_findings / summary
+  - 수동진단 연동: `needs_review: true` 항목 → `task_prompts/task_24_file_handling.md` 프롬프트 4종
+
 - `scan_injection_patterns.py` (v2.1): Pattern definitions for injection detection
   - `SQLI_VULNERABLE_PATTERNS`: MyBatis `${}`, JDBC concat, Kotlin template 등
   - `SQLI_SAFE_PATTERNS`: `#{}`, `:param`, `?` binding 등

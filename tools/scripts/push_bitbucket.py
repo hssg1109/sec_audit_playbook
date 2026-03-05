@@ -27,11 +27,16 @@ Bitbucket Push Automation Script
 
 
 사용법 (tag 포함):
-  # push 후 v4.5.2 태그 생성 (RELEASENOTE.md에서 릴리즈 노트 자동 추출)
-  python push_bitbucket.py --token <TOKEN> --tag v4.5.2
+  # push 후 sec-audit-static 통합 버전 태그 생성 (RELEASENOTE.md에서 릴리즈 노트 자동 추출)
+  python push_bitbucket.py --token <TOKEN> --tag v4.7.1
 
   # 릴리즈 노트 직접 지정
-  python push_bitbucket.py --token <TOKEN> --tag v4.5.2 --release-notes "버그 수정"
+  python push_bitbucket.py --token <TOKEN> --tag v4.7.1 --release-notes "버그 수정"
+
+태그 정책:
+  - 태그는 sec-audit-static 통합 버전(vMAJOR.MINOR.PATCH)으로만 생성
+  - 개별 스크립트 버전(scan_xss.py v2.3.2 등)은 RELEASENOTE.md 세부 항목으로만 관리
+  - RELEASENOTE.md 헤더 형식: ## [vX.Y.Z] - YYYY-MM-DD
 """
 
 import argparse
@@ -460,7 +465,7 @@ def main():
         "--tag", "-T",
         default=None,
         metavar="VERSION",
-        help="push 후 Bitbucket annotated tag 생성 (예: v4.5.2). "
+        help="push 후 Bitbucket annotated tag 생성 (예: v4.7.1 — sec-audit-static 통합 버전). "
              "RELEASENOTE.md에서 해당 버전 릴리즈 노트를 자동 추출."
     )
     parser.add_argument(

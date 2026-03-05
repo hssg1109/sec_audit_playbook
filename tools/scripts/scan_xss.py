@@ -66,6 +66,19 @@ scan_api.py 결과를 기반으로 각 API endpoint에 대해
             @RequestBody DtoClass → 모든 필드가 Integer/Boolean/UUID/날짜 등 비-자유텍스트이면 양호
             FP 제거: ExchangePointsRequestDto(Integer goldenEggsCnt) → 양호
             _has_freetext_params: class_index/source_dir 선택적 수신, DTO 필드 검사 폴백 적용
+  v2.4.0 - Step 1: Reflected XSS Taint Flow 검증 추가 (REST_HTML_RISK FP 제거)
+            check_reflected_xss_taint(): 사용자 입력 파라미터 → 문자열 연결 → text/html 반환 흐름 추적
+            Taint 미확인 시 "취약" 대신 "정보"로 하향; HtmlUtils/Encode.forHtml 감지 시 양호
+           Step 2: DOM XSS 라이브러리 파일 제외 필터 추가 (FP 제거)
+            _P6_DOM_EXCLUDE_RE: *.min.js / jquery.* / bootstrap.* / /lib/ /vendor/ 등 제외
+            scan_dom_xss_global(): files_excluded / excluded_files 리포트 필드 추가
+           Step 3: 커스텀 XSS 필터 탐지 로직 추가 (미탐 방지)
+            _P3_CUSTOM_WRAPPER_RE: HttpServletRequestWrapper 상속 클래스 탐지
+            _P3_CUSTOM_CLEAN_METHOD_RE: cleanXss/stripXss 등 커스텀 메서드 탐지
+            _P3_BLACKLIST_REPLACE_RE: replace("<script", "") 블랙리스트 방식 탐지
+            filter_level "custom_wrapper" 신규 추가 — "[정보 - 커스텀 XSS 필터 발견]" 분류
+           Step 4: View XSS AI 수동 진단 프롬프트 템플릿 추가
+            skills/sec-audit-static/references/manual_review_prompt.md 에 View XSS 섹션 추가
 
 사용법:
     python scan_xss.py <source_dir> --api-inventory <json>
@@ -100,7 +113,7 @@ from scan_injection_enhanced import (
 #  0. 상수 / 컴파일된 패턴
 # ============================================================
 
-_SCRIPT_VERSION = "2.3.2"
+_SCRIPT_VERSION = "2.4.0"
 
 # View 파일 확장자
 _JSP_EXTS       = frozenset({".jsp", ".jspf", ".jspx"})
@@ -145,6 +158,45 @@ _P1_REST_HTML_CT = re.compile(
 # 오류/예외 핸들러에서 입력값 직접 반영 패턴
 _P1_ERROR_REFLECT = re.compile(
     r'@ExceptionHandler|getMessage\s*\(\s*\)|getLocalizedMessage\s*\(\s*\)',
+    re.IGNORECASE,
+)
+
+# ── Step 1: Reflected XSS Taint Flow 추적 패턴 (v2.4.0) ────────────────────
+
+# 사용자 입력 파라미터 변수명 추출:
+#   @RequestParam [Type] varName / @PathVariable [Type] varName /
+#   String varName = request.getParameter("...") 패턴
+_P1_TAINT_PARAM_EXTRACT = re.compile(
+    r'@(?:RequestParam|PathVariable|RequestHeader|RequestPart)'
+    r'(?:\s*\([^)]*\))?\s+'
+    r'(?:(?:final|required)\s+)?'
+    r'(?:[\w<>\[\]?,\s]+?\s+)'
+    r'(\w+)'
+    r'|'
+    r'(?:request|req)\s*\.\s*getParameter\s*\(\s*"[^"]+"\s*\)'
+    r'\s*;\s*'
+    r'(?:final\s+)?(?:String\s+)?(\w+)\s*=',
+    re.MULTILINE,
+)
+
+# 반환 문자열 내 변수 연결(Taint) 탐지:
+#   return "..." + var / return var + "..." / response.getWriter().write(var)
+_P1_TAINT_CONCAT_RE = re.compile(
+    r'return\s+(?:["\'][^"\']*["\']|[^;]+?)\s*\+\s*(\w+)'
+    r'|return\s+(\w+)\s*\+\s*(?:["\'][^"\']*["\']|[^;]+?)'
+    r'|(?:response|resp)\s*\.\s*(?:getWriter\s*\(\s*\)\s*\.\s*(?:write|print)'
+    r'|getOutputStream\s*\(\s*\)\s*\.\s*write)\s*\(\s*(\w+)',
+    re.MULTILINE,
+)
+
+# HTML 출력 안전 인코딩 함수 (Taint 해제 조건)
+_P1_ESCAPE_SAFE_RE = re.compile(
+    r'HtmlUtils\.htmlEscape\s*\('
+    r'|StringEscapeUtils\.escapeHtml[24]?\s*\('
+    r'|Encode\.forHtml\s*\('
+    r'|ESAPI\.encoder\s*\(\s*\)\s*\.\s*encodeForHTML\s*\('
+    r'|HtmlEscapers\.htmlEscaper\s*\(\s*\)\s*\.\s*escape\s*\('
+    r'|org\.springframework\.web\.util\.HtmlUtils',
     re.IGNORECASE,
 )
 
@@ -206,6 +258,39 @@ _P3_MULTIPART_RE = re.compile(
 )
 _P3_LUCY_FILTER_BEAN = re.compile(
     r'LucyXss(?:Servlet)?Filter|XssEscapeServletFilter',
+    re.IGNORECASE,
+)
+
+# ── Step 3: 커스텀 XSS 필터 탐지 패턴 (v2.4.0) ──────────────────────────────
+
+# HttpServletRequestWrapper 상속 커스텀 래퍼 클래스 탐지
+_P3_CUSTOM_WRAPPER_RE = re.compile(
+    r'extends\s+HttpServletRequestWrapper'
+    r'|implements\s+(?:[\w,\s]+,\s*)*HttpServletRequestWrapper',
+    re.MULTILINE,
+)
+
+# 커스텀 XSS 클렌징 메서드명 패턴
+_P3_CUSTOM_CLEAN_METHOD_RE = re.compile(
+    r'\b(?:clean|strip|remove|sanitize|filter|escape|replace)Xss\s*\('
+    r'|\bxss(?:Clean|Strip|Filter|Sanitize|Escape|Remove)\s*\('
+    r'|\bxssFilter\s*\('
+    r'|\bXssUtil(?:s)?\s*\.\s*\w+\s*\(',
+    re.IGNORECASE,
+)
+
+# 블랙리스트 방식 필터링 탐지: replace로 특정 HTML 공격 키워드 제거
+_P3_BLACKLIST_REPLACE_RE = re.compile(
+    r'\.replace\s*\(\s*'
+    r'(?:"(?:<script|</script|<iframe|<object|onerror|onload|javascript:|alert\s*\()'
+    r"|'(?:<script|</script|<iframe|<object|onerror|onload|javascript:|alert\s*\())"
+    r'\s*,',
+    re.IGNORECASE,
+)
+
+# 안전하지 않은 replace: HTML 특수문자를 빈 문자열로 제거 (화이트리스트 아님)
+_P3_UNSAFE_REPLACE_RE = re.compile(
+    r'\.replace\s*\(\s*(?:"<"|\'<\'|">"|\'>\'")\s*,\s*(?:""|\'\')',
     re.IGNORECASE,
 )
 
@@ -417,6 +502,25 @@ _P6_DOM_SAFE_CTX = re.compile(
 
 # JavaScript/TypeScript/Vue 파일 확장자 (DOM XSS 스캔 대상)
 _JS_SCAN_EXTS = frozenset({".js", ".jsx", ".ts", ".tsx", ".vue"})
+
+# ── Step 2: DOM XSS 스캔 제외 대상 (라이브러리/벤더 파일) (v2.4.0) ──────────
+# 파일명 또는 상대 경로에 매칭 시 스캔 제외
+_P6_DOM_EXCLUDE_RE = re.compile(
+    r'(?:'
+    r'\.min\.js$'
+    r'|jquery(?:[.\-][\d.]+)?(?:\.min)?\.js$'
+    r'|bootstrap(?:[.\-][\d.]+)?(?:\.min)?\.js$'
+    r'|(?:angular|react|react-dom|vue|ember|backbone|underscore|lodash)'
+    r'(?:[.\-][\d.]+)?(?:\.min)?\.js$'
+    r'|jquery[-.](?:ui|validate|cookie|form|migrate|fileupload)'
+    r'(?:[.\-][\d.]+)?(?:\.min)?\.js$'
+    r'|(?:owl\.carousel|slick|swiper|select2|chosen|moment)'
+    r'(?:[.\-][\d.]+)?(?:\.min)?\.js$'
+    r'|[\\/](?:lib|vendor|common[/\\]js|dist|bower_components|'
+    r'node_modules|static[/\\]js[/\\]lib|webapp[/\\]js[/\\]lib)[\\/]'
+    r')',
+    re.IGNORECASE,
+)
 
 # 커스텀 @RestController 메타 어노테이션 탐지 패턴
 _P1_META_REST = re.compile(r'@RestController\b')
@@ -672,6 +776,93 @@ def classify_controller(ctrl_content: str, handler_method: str,
     }
 
 
+# ── Step 1: Reflected XSS Taint Flow 검증 함수 (v2.4.0) ─────────────────────
+
+def check_reflected_xss_taint(method_body: str, ctrl_content: str) -> dict:
+    """Step 1: REST_HTML_RISK 컨트롤러에서 사용자 입력 → HTML 출력 Taint Flow 검증.
+
+    Taint Flow 확정 조건:
+      1. 메서드 본문에서 사용자 입력 파라미터 변수명 추출
+      2. return 문 또는 response.write()에서 해당 변수가 문자열 연결로 포함
+      3. HTML 인코딩 함수(_P1_ESCAPE_SAFE_RE)가 경로에 없을 것
+
+    Returns:
+      taint_confirmed: True  → 실제 Reflected XSS 위험
+      taint_confirmed: False → Taint Flow 미확인 (양호 또는 수동확인 필요)
+    """
+    # 1. 사용자 입력 파라미터 변수명 추출
+    param_names: set = set()
+    for m in _P1_TAINT_PARAM_EXTRACT.finditer(method_body):
+        name = m.group(1) or m.group(2)
+        if name:
+            param_names.add(name)
+
+    if not param_names:
+        return {
+            "taint_confirmed": False,
+            "param_names":     [],
+            "tainted_params":  [],
+            "has_escape":      False,
+            "reason":          "사용자 입력 파라미터 없음 — Taint Flow 불가 (양호)",
+        }
+
+    # 2. HTML 안전 인코딩 함수 존재 시 Taint 해제
+    has_escape = bool(_P1_ESCAPE_SAFE_RE.search(method_body))
+    if has_escape:
+        return {
+            "taint_confirmed": False,
+            "param_names":     sorted(param_names),
+            "tainted_params":  [],
+            "has_escape":      True,
+            "reason":          "HTML 인코딩 함수 적용 확인 (HtmlUtils/Encode.forHtml 등) — 양호",
+        }
+
+    # 3. return/write 구문에서 tainted 변수 연결 탐지
+    tainted: list = []
+    for m in _P1_TAINT_CONCAT_RE.finditer(method_body):
+        var = m.group(1) or m.group(2) or m.group(3)
+        if var and var in param_names:
+            tainted.append(var)
+
+    # 4. ResponseEntity.ok().body() 또는 ResponseEntity.ok(var) 내 변수 포함 여부
+    resp_entity_re = re.compile(
+        r'ResponseEntity\s*(?:<[^>]+>)?\s*\.\s*(?:ok|status)\s*\([^)]*\)'
+        r'(?:\s*\.\s*body\s*\()?([^;)]+)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    for m in resp_entity_re.finditer(method_body):
+        body_expr = m.group(1)
+        for p in param_names:
+            if re.search(rf'\b{re.escape(p)}\b', body_expr):
+                tainted.append(p)
+
+    tainted = list(dict.fromkeys(tainted))  # 중복 제거
+
+    if tainted:
+        return {
+            "taint_confirmed": True,
+            "param_names":     sorted(param_names),
+            "tainted_params":  tainted,
+            "has_escape":      False,
+            "reason":          (
+                f"사용자 입력 파라미터 {tainted} 가 HTML 인코딩 없이 "
+                "text/html 응답에 직접 연결(Taint 확정) — Reflected XSS 실제위협"
+            ),
+        }
+
+    return {
+        "taint_confirmed": False,
+        "param_names":     sorted(param_names),
+        "tainted_params":  [],
+        "has_escape":      False,
+        "reason":          (
+            "text/html Content-Type 설정 확인되나 "
+            f"입력 파라미터 {sorted(param_names)} 의 return/write 직접 연결 미확인 — "
+            "양호 (수동 확인 권장)"
+        ),
+    }
+
+
 # ============================================================
 #  4. Phase 2: View 파일 분석 (Outbound Escaping)
 # ============================================================
@@ -896,26 +1087,35 @@ def _check_lucy_multipart_order(source_dir: Path) -> dict:
 
 
 def build_global_filter_status(source_dir: Path) -> dict:
-    """Phase 3: web.xml / *Config.java / *Filter.java / *XSS*.java 에서
-    전역 XSS 필터 탐지 후 종합 판정
+    """Phase 3 (v2.4.0): web.xml / *Config.java / *Filter.java / *XSS*.java 에서
+    전역 XSS 필터 탐지 후 종합 판정. Step 3 커스텀 필터 탐지 추가.
 
     filter_level:
       none                   — XSS 필터 미발견
       header_only            — X-XSS-Protection 헤더만 (불충분)
       inbound                — Lucy/AntiSamy/ESAPI/Jackson 입력 새니타이징
       inbound_multipart_risk — Lucy 존재하나 multipart 우회 가능성
+      custom_wrapper         — 커스텀 HttpServletRequestWrapper 탐지 (수동 점검 필요)
     """
-    found_lucy    = False
+    found_lucy     = False
     found_antisamy = False
-    found_esapi   = False
-    found_ss_xss  = False
-    found_jack    = False
+    found_esapi    = False
+    found_ss_xss   = False
+    found_jack     = False
+    # Step 3: 커스텀 필터 추적 변수
+    found_custom_wrapper  = False
+    found_custom_method   = False
+    custom_wrapper_files: list = []
+    custom_method_files:  list = []
+    has_blacklist_pattern = False
     filter_files: list = []
 
     glob_patterns = [
         "web.xml", "*Config*.java", "*Filter*.java",
         "*XSS*.java", "*Xss*.java", "*xss*.java",
         "*Security*.java", "*WebMvc*.java",
+        # Step 3 추가: 래퍼/유틸 클래스 포함
+        "*Wrapper*.java", "*Util*.java", "*Utils*.java",
     ]
     scanned: set = set()
 
@@ -931,30 +1131,69 @@ def build_global_filter_status(source_dir: Path) -> dict:
             if not content:
                 continue
 
+            try:
+                rel = str(fp.relative_to(source_dir))
+            except ValueError:
+                rel = str(fp)
+
             hit = False
             if _P3_LUCY.search(content):
-                found_lucy = True;    hit = True
+                found_lucy = True;     hit = True
             if _P3_ANTISAMY.search(content):
                 found_antisamy = True; hit = True
             if _P3_ESAPI.search(content):
-                found_esapi = True;   hit = True
+                found_esapi = True;    hit = True
             if _P3_SS_XSS.search(content):
-                found_ss_xss = True;  hit = True
+                found_ss_xss = True;   hit = True
             if _P3_JACK_DESER.search(content) or _P3_JACK_MOD.search(content):
-                found_jack = True;    hit = True
+                found_jack = True;     hit = True
 
-            if hit:
-                try:
-                    filter_files.append(str(fp.relative_to(source_dir)))
-                except ValueError:
-                    filter_files.append(str(fp))
+            # Step 3: 커스텀 필터 탐지
+            if _P3_CUSTOM_WRAPPER_RE.search(content):
+                found_custom_wrapper = True
+                hit = True
+                custom_wrapper_files.append(rel)
+                if (_P3_BLACKLIST_REPLACE_RE.search(content)
+                        or _P3_UNSAFE_REPLACE_RE.search(content)):
+                    has_blacklist_pattern = True
+
+            if _P3_CUSTOM_CLEAN_METHOD_RE.search(content):
+                found_custom_method = True
+                hit = True
+                if rel not in custom_method_files:
+                    custom_method_files.append(rel)
+                if (_P3_BLACKLIST_REPLACE_RE.search(content)
+                        or _P3_UNSAFE_REPLACE_RE.search(content)):
+                    has_blacklist_pattern = True
+
+            if hit and rel not in filter_files:
+                filter_files.append(rel)
 
     # Lucy multipart bypass 검증
     lucy_multipart = None
     if found_lucy:
         lucy_multipart = _check_lucy_multipart_order(source_dir)
 
-    # 종합 판정
+    # Step 3: 커스텀 필터 메타 정보
+    custom_filter_info: Optional[dict] = None
+    if found_custom_wrapper or found_custom_method:
+        blacklist_warning = (
+            " 블랙리스트(replace) 방식 필터링 패턴 탐지 — 우회 가능성 높음."
+            if has_blacklist_pattern else
+            " 필터 로직 안전성(루프 결함, 우회 가능성) 수동 점검 필요."
+        )
+        custom_filter_info = {
+            "detected":           True,
+            "wrapper_files":      custom_wrapper_files[:5],
+            "method_files":       custom_method_files[:5],
+            "has_blacklist":      has_blacklist_pattern,
+            "manual_review_note": (
+                "[정보 - 커스텀 XSS 필터 발견: 블랙리스트 방식 여부 수동 점검 필요]"
+                + blacklist_warning
+            ),
+        }
+
+    # 종합 판정 (공인 라이브러리 우선)
     if found_lucy:
         bypass_risk = lucy_multipart.get("bypass_risk") if lucy_multipart else None
         if bypass_risk is True:
@@ -991,6 +1230,19 @@ def build_global_filter_status(source_dir: Path) -> dict:
         filter_type  = "Jackson XSS Deserializer"
         filter_detail = "Jackson ObjectMapper에 커스텀 XSS Deserializer 등록 확인."
         filter_level = "inbound"
+    # Step 3: 커스텀 필터만 발견된 경우
+    elif found_custom_wrapper or found_custom_method:
+        blacklist_tag = " [블랙리스트 방식 의심]" if has_blacklist_pattern else ""
+        filter_type  = f"커스텀 XSS 필터{blacklist_tag}"
+        filter_detail = (
+            "[정보 - 커스텀 XSS 필터 발견: 블랙리스트 방식 여부 수동 점검 필요] "
+            f"HttpServletRequestWrapper 상속 클래스: {custom_wrapper_files[:3]} / "
+            f"커스텀 클렌징 메서드: {custom_method_files[:3]}. "
+            "공인 라이브러리(Lucy/AntiSamy/ESAPI)가 아닌 자체 구현 필터입니다. "
+            "HTML Entity 인코딩 방식(화이트리스트) 여부, 루프 결함, 인코딩 재처리 우회 등을 "
+            "보안 담당자가 직접 점검하십시오."
+        )
+        filter_level = "custom_wrapper"
     elif found_ss_xss:
         filter_type  = "Spring Security XSS Header"
         filter_detail = (
@@ -1006,18 +1258,21 @@ def build_global_filter_status(source_dir: Path) -> dict:
     is_inbound = filter_level in ("inbound", "inbound_multipart_risk")
 
     return {
-        "has_filter":        is_inbound or filter_level == "header_only",
-        "has_inbound_filter": is_inbound,
-        "filter_type":       filter_type,
-        "filter_detail":     filter_detail,
-        "filter_level":      filter_level,
-        "has_lucy":          found_lucy,
-        "has_antisamy":      found_antisamy,
-        "has_esapi":         found_esapi,
-        "has_ss_xss":        found_ss_xss,
-        "has_jackson_xss":   found_jack,
-        "lucy_multipart":    lucy_multipart,
-        "filter_files":      filter_files,
+        "has_filter":          is_inbound or filter_level == "header_only",
+        "has_inbound_filter":  is_inbound,
+        "filter_type":         filter_type,
+        "filter_detail":       filter_detail,
+        "filter_level":        filter_level,
+        "has_lucy":            found_lucy,
+        "has_antisamy":        found_antisamy,
+        "has_esapi":           found_esapi,
+        "has_ss_xss":          found_ss_xss,
+        "has_jackson_xss":     found_jack,
+        "lucy_multipart":      lucy_multipart,
+        "filter_files":        filter_files,
+        # Step 3 신규 필드
+        "has_custom_filter":   found_custom_wrapper or found_custom_method,
+        "custom_filter_info":  custom_filter_info,
     }
 
 
@@ -1703,6 +1958,22 @@ def check_persistent_xss(endpoint: dict,
             "taint_result": taint_result,
         }
 
+    # Step 3: 커스텀 필터 발견 — 안전성 불명확 → 정보 분류
+    if filter_level == "custom_wrapper":
+        custom_info = filter_status.get("custom_filter_info", {})
+        return {
+            "risk":   "정보",
+            "reason": (
+                "[정보 - 커스텀 XSS 필터 발견: 블랙리스트 방식 여부 수동 점검 필요] "
+                f"{filter_status.get('filter_detail', '')} "
+                "커스텀 필터의 안전성(HTML Entity 인코딩 여부, 루프 결함, 우회 가능성)이 "
+                "자동으로 검증되지 않아 Persistent XSS 위험 제거를 단정할 수 없음. "
+                "보안 담당자의 직접 코드 리뷰 필요."
+            ),
+            "taint_result":       taint_result,
+            "custom_filter_info": custom_info,
+        }
+
     if filter_level == "inbound_multipart_risk":
         lucy_detail = ""
         if filter_status.get("lucy_multipart"):
@@ -1771,14 +2042,29 @@ def check_persistent_xss(endpoint: dict,
 # ============================================================
 
 def scan_dom_xss_global(source_dir: Path) -> dict:
-    """Phase 6: JS/TS/Vue 파일에서 DOM XSS 취약 패턴 전역 스캔"""
-    findings: list = []
-    files_scanned: int = 0
+    """Phase 6 (v2.4.0): JS/TS/Vue 파일에서 DOM XSS 취약 패턴 전역 스캔.
+    Step 2: 라이브러리/벤더 파일은 _P6_DOM_EXCLUDE_RE 기준으로 스캔 제외.
+    """
+    findings: list      = []
+    files_scanned: int  = 0
+    files_excluded: int = 0
+    excluded_files: list = []
     safe_ctx_files: list = []
 
     for ext in _JS_SCAN_EXTS:
         for fp in source_dir.rglob(f"*{ext}"):
             if any(ex in fp.parts for ex in _EXCLUDE_DIRS):
+                continue
+
+            try:
+                rel_path = str(fp.relative_to(source_dir))
+            except ValueError:
+                rel_path = str(fp)
+
+            # Step 2: 라이브러리 파일 제외
+            if _P6_DOM_EXCLUDE_RE.search(fp.name) or _P6_DOM_EXCLUDE_RE.search(rel_path):
+                files_excluded += 1
+                excluded_files.append(rel_path)
                 continue
 
             content = read_file_safe(fp)
@@ -1788,10 +2074,7 @@ def scan_dom_xss_global(source_dir: Path) -> dict:
 
             has_safe_ctx = bool(_P6_DOM_SAFE_CTX.search(content))
             if has_safe_ctx:
-                try:
-                    safe_ctx_files.append(str(fp.relative_to(source_dir)))
-                except ValueError:
-                    safe_ctx_files.append(str(fp))
+                safe_ctx_files.append(rel_path)
 
             lines = content.splitlines()
             for i, line in enumerate(lines, 1):
@@ -1801,15 +2084,11 @@ def scan_dom_xss_global(source_dir: Path) -> dict:
 
                 for pattern, desc in _P6_DOM_VULN_PATTERNS:
                     if pattern.search(stripped):
-                        try:
-                            rel_path = str(fp.relative_to(source_dir))
-                        except ValueError:
-                            rel_path = str(fp)
                         findings.append({
-                            "file":    rel_path,
-                            "line":    i,
-                            "snippet": stripped[:120],
-                            "type":    desc,
+                            "file":         rel_path,
+                            "line":         i,
+                            "snippet":      stripped[:120],
+                            "type":         desc,
                             "has_safe_ctx": has_safe_ctx,
                         })
                         break
@@ -1827,17 +2106,21 @@ def scan_dom_xss_global(source_dir: Path) -> dict:
 
     return {
         "js_files_scanned":  files_scanned,
+        "js_files_excluded": files_excluded,      # Step 2 신규
+        "excluded_files":    excluded_files[:10], # Step 2 신규
         "findings_count":    len(deduped),
         "safe_ctx_files":    safe_ctx_files[:5],
         "vuln_files":        vuln_files[:10],
         "findings":          deduped[:30],
         "risk":              risk,
         "summary": (
-            f"JS/TS/Vue {files_scanned}개 파일 스캔 — "
+            f"JS/TS/Vue {files_scanned}개 파일 스캔 "
+            f"(라이브러리 {files_excluded}개 제외) — "
             f"DOM XSS 잠재 패턴 {len(deduped)}건 발견 "
             f"(sanitize 컨텍스트 파일 {len(safe_ctx_files)}개 포함)"
             if deduped else
-            f"JS/TS/Vue {files_scanned}개 파일 스캔 — DOM XSS 패턴 미발견"
+            f"JS/TS/Vue {files_scanned}개 파일 스캔 "
+            f"(라이브러리 {files_excluded}개 제외) — DOM XSS 패턴 미발견"
         ),
     }
 
@@ -1921,20 +2204,51 @@ def judge_xss_endpoint(endpoint: dict,
     out["controller_type_detected"] = ct
 
     if ct == "REST_HTML_RISK":
-        # REST이지만 text/html 강제 — 취약 판정
-        out["reflected_xss"] = "취약"
-        out["view_xss"]      = "해당없음"
-        html_reason = (
-            "REST 컨트롤러에서 명시적 text/html Content-Type 설정 감지 — "
-            "브라우저가 HTML로 해석하여 Reflected XSS 실현 가능."
-        )
-        out.update({
-            "result":           "취약",
-            "severity":         "High",
-            "xss_type":         "[실제위협] Reflected XSS (text/html)",
-            "diagnosis_detail": html_reason,
-            "needs_review":     False,
-        })
+        # Step 1: text/html 설정 확인 + Taint Flow 검증으로 FP 제거
+        method_body_for_taint = extract_method_body(ctrl_content, handler_method) or ""
+        taint = check_reflected_xss_taint(method_body_for_taint, ctrl_content)
+        out["phase_details"]["reflected_taint"] = taint
+        out["view_xss"] = "해당없음"
+
+        if taint["taint_confirmed"]:
+            # Taint 확정 → 실제위협
+            out["reflected_xss"] = "취약"
+            html_reason = (
+                "REST 컨트롤러에서 명시적 text/html Content-Type 설정 감지 + "
+                f"사용자 입력 파라미터 {taint['tainted_params']} 의 직접 문자열 연결(Taint 확정) — "
+                "Reflected XSS 실제위협."
+            )
+            out.update({
+                "result":           "취약",
+                "severity":         "High",
+                "xss_type":         "[실제위협] Reflected XSS (text/html + Taint 확정)",
+                "diagnosis_detail": html_reason,
+                "needs_review":     False,
+            })
+        elif taint["has_escape"]:
+            # HTML 인코딩 함수 적용 확인 → 양호
+            out["reflected_xss"] = "양호"
+            out.update({
+                "result":           "양호",
+                "severity":         "N/A",
+                "xss_type":         "",
+                "diagnosis_detail": taint["reason"],
+                "needs_review":     False,
+            })
+        else:
+            # text/html 있으나 Taint 미확인 → 정보 (수동 확인 권장)
+            out["reflected_xss"] = "정보"
+            html_reason = (
+                "REST 컨트롤러에서 text/html Content-Type 설정 확인. "
+                f"{taint['reason']} — 수동 확인 권장."
+            )
+            out.update({
+                "result":           "정보",
+                "severity":         "Medium",
+                "xss_type":         "[수동확인필요] Reflected XSS (text/html, Taint 미확정)",
+                "diagnosis_detail": html_reason,
+                "needs_review":     True,
+            })
 
     elif ct == "REST_JSON":
         if p1["gson_unsafe"]:
@@ -2209,6 +2523,24 @@ def judge_xss_endpoint(endpoint: dict,
                     ),
                     "diagnosis_detail": p5["reason"],
                     "needs_review":     True,
+                })
+        elif risk == "정보":
+            # Step 3: 커스텀 필터 발견 → 정보 분류 (안전성 불명확)
+            out["persistent_xss"] = "정보"
+            if _VERDICT_RANK.get(out["result"], 0) < _VERDICT_RANK.get("정보", 0):
+                prev_detail = out["diagnosis_detail"]
+                out.update({
+                    "result":   "정보",
+                    "severity": "Medium",
+                    "xss_type": _append_xss_type(
+                        out["xss_type"],
+                        "[정보] Persistent XSS (커스텀 XSS 필터 수동 점검 필요)"
+                    ),
+                    "diagnosis_detail": (
+                        (prev_detail + " | " if prev_detail else "")
+                        + p5.get("reason", "커스텀 XSS 필터 안전성 수동 점검 필요")
+                    ),
+                    "needs_review": True,
                 })
         else:
             out["persistent_xss"] = "해당없음"

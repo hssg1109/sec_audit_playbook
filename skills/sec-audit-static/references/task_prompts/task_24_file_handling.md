@@ -160,3 +160,200 @@ API 목록 → Controller → Service → 파일 처리 로직
 - 추측 금지 (코드 근거 필수)
 - 민감정보 포함 금지
 - API 인벤토리에 없는 파일을 임의로 탐색 금지
+
+---
+
+## 자동화 스크립트 연동
+
+`scan_file_processing.py`로 1차 자동 탐지 후, `needs_review: true` 항목에 대해
+아래 수동진단 프롬프트를 사용해 LLM 심층 분석을 수행합니다.
+
+```bash
+python tools/scripts/scan_file_processing.py <source_dir> -o state/<prefix>_task24.json
+```
+
+---
+
+## 수동진단 프롬프트 템플릿 (LLM 심층 분석용)
+
+> **공통 전제**: 아래 4종 프롬프트는 자동 스크립트가 `needs_review: true`로
+> 분류한 항목 또는 자동 탐지 한계 구간(비즈니스 로직·우회 기법)에 대해 사용합니다.
+> `manual_review_prompt.md`의 **답변 원칙 5가지**를 동일하게 적용합니다.
+
+---
+
+### 프롬프트 1 — 다운로드 권한 검증 (IDOR / BOLA)
+
+**진단 목표**: 요청자가 본인 소유의 파일만 다운로드할 수 있는지 확인.
+권한 검증 없이 타인의 파일 ID/경로로 다운로드가 가능하면 **[취약: IDOR/BOLA]** 판정.
+
+```
+당신은 엔터프라이즈 환경의 취약점을 분석하는 '시니어 애플리케이션 보안 컨설턴트'입니다.
+아래 코드를 분석하여 파일 다운로드 기능의 접근 제어(Authorization) 취약점을 진단해 주십시오.
+
+### 진단 기준 (OWASP A01:2021 Broken Access Control / KISA 접근통제)
+1. 세션 또는 JWT 토큰에서 추출한 현재 사용자 ID와 다운로드 대상 파일의 소유자(DB 조회)를
+   명시적으로 비교하는 로직이 있는지 확인하십시오.
+2. 파일 ID(Long)나 파일명(String)을 파라미터로 받을 때, 인증 없이 임의의 파일에
+   접근 가능한지 (IDOR: Insecure Direct Object Reference) 확인하십시오.
+3. 권한 검증이 Service 계층에 위임된 경우 해당 Service 코드도 함께 제공해 주십시오.
+
+### 판정 기준
+- 양호: 세션/토큰 소유자 == DB 파일 소유자 비교 로직 존재
+- 취약: 파일 ID/경로만으로 다운로드 가능, 소유자 검증 없음 (IDOR)
+- 정보: Service 위임 구조로 권한 검증 여부 코드만으로 확인 불가
+
+### 답변 원칙
+- 권한 검증 로직이 명확히 보이지 않으면 "확인 불가"로 명시하고 추가 코드를 요청하십시오.
+- 판정 시 OWASP A01:2021 또는 KISA 취약점 항목 번호를 근거로 제시하십시오.
+
+### 분석 대상 코드
+- API: [여기에 API 경로 + HTTP Method 입력]
+- 스크립트 판정: [needs_review 사유 입력]
+
+[Controller 코드]
+(붙여넣기)
+
+[Service 코드]
+(붙여넣기 — 있는 경우)
+
+[Repository / DB 조회 쿼리]
+(붙여넣기 — 있는 경우)
+```
+
+---
+
+### 프롬프트 2 — 안전한 업로드 검증 우회 (이중 확장자 / Null Byte)
+
+**진단 목표**: 스크립트가 탐지한 확장자 검증 로직이 우회 가능한 구현인지 심층 확인.
+이중 확장자, Null Byte, MIME 스푸핑 등 우회 시나리오에 취약하면 **[취약: 파일 업로드 우회]** 판정.
+
+```
+당신은 엔터프라이즈 환경의 취약점을 분석하는 '시니어 애플리케이션 보안 컨설턴트'입니다.
+아래 파일 업로드 코드가 다음 우회 기법에 대해 안전한지 진단해 주십시오.
+
+### 우회 기법 진단 기준 (OWASP A03:2021 / KISA 파일 업로드 취약점)
+1. **이중 확장자 우회**: `file.php.jpg` 형식의 파일명에서 마지막 확장자만 검사하는지
+   확인하십시오. `getOriginalFilename()`의 마지막 `.` 이후 부분만 잘라내면 우회 불가합니다.
+2. **Null Byte Injection**: `file.php%00.jpg` 형식의 파일명 처리 시 Java 8 미만 환경에서
+   취약할 수 있습니다. Null Byte 필터링 또는 Java 버전을 확인하십시오.
+3. **Content-Type 스푸핑**: `MultipartFile.getContentType()`은 클라이언트가 조작 가능합니다.
+   서버 사이드에서 Tika 등을 사용한 실제 MIME 타입 검증이 없으면 우회 가능합니다.
+4. **인프라 설정 오류**: 저장 디렉토리가 Web Root 하위에 있거나 실행 권한이 있으면
+   업로드된 스크립트가 직접 실행될 수 있습니다. 저장 경로 설정 코드를 확인하십시오.
+
+### 판정 기준
+- 양호: 마지막 확장자만 검증 + 서버사이드 MIME 검증 + Web Root 외부 저장
+- 취약: 위 항목 중 하나 이상 우회 가능
+- 정보/추가 필요: 저장 경로 또는 인프라 설정 코드가 제공되지 않아 판단 불가
+
+### 답변 원칙
+- 코드에서 근거를 찾을 수 없는 경우 "확인 불가"로 명시하십시오.
+- OWASP WSTG-UPLD-01 또는 KISA 가이드 항목을 판정 근거로 제시하십시오.
+
+### 분석 대상 코드
+- API: [여기에 API 경로 + HTTP Method 입력]
+- 스크립트 판정: [has_tika_mime_check / has_ext_whitelist 값 입력]
+
+[Controller 업로드 코드]
+(붙여넣기)
+
+[Service / 파일 저장 유틸 코드]
+(붙여넣기 — 있는 경우)
+
+[저장 경로 설정 (@Value / application.yml)]
+(붙여넣기 — 있는 경우)
+```
+
+---
+
+### 프롬프트 3 — 악성코드 탐지 / 파일 무해화 (Sanitization)
+
+**진단 목표**: 이미지·PDF·Office 파일 등 허용된 형식으로 위장한 악성코드에 대한
+무해화(Sanitization) 로직이 올바르게 구현되었는지 확인.
+무해화 없이 저장·배포 시 **[취약: 악성파일 업로드]** 판정.
+
+```
+당신은 엔터프라이즈 환경의 취약점을 분석하는 '시니어 애플리케이션 보안 컨설턴트'입니다.
+아래 파일 업로드 처리 코드에서 OWASP 권고에 따른 파일 무해화(Sanitization) 로직을 진단해 주십시오.
+
+### 진단 기준 (OWASP File Upload Cheat Sheet / KISA)
+1. **이미지 파일**: ImageIO.read() 후 재인코딩하여 저장하면 내포된 악성 스크립트를 제거합니다.
+   단순 스트림 복사만 하는 경우 무해화 없음으로 판정합니다.
+2. **PDF/Office 파일**: Apache PDFBox, Apache POI 등으로 파싱 후 재저장하지 않고
+   원본 바이너리를 그대로 저장하면 악성 매크로/스크립트 포함 위험이 있습니다.
+3. **압축 파일 (ZIP/TAR)**: 압축 해제 후 내부 파일에도 동일한 검증 로직이 적용되는지,
+   Zip Slip 취약점(경로 탈출)에 대한 방어 코드가 있는지 확인하십시오.
+4. **CDN/별도 스토리지**: S3 등 외부 스토리지에 저장 후 다운로드 URL을 제공하는 경우,
+   Content-Disposition 헤더가 `attachment`로 강제 설정되었는지 확인하십시오.
+
+### 판정 기준
+- 양호: 파일 형식별 재인코딩/재파싱 후 저장, Content-Disposition: attachment 강제
+- 취약: 원본 바이너리 그대로 저장 + 인라인 렌더링 허용
+- 정보: 파일 처리 로직이 외부 라이브러리에 위임되어 세부 구현 확인 불가
+
+### 답변 원칙
+- 라이브러리 호출만 있고 내부 로직 코드가 없으면 "추가 정보 필요"로 명시하십시오.
+- OWASP File Upload Cheat Sheet 또는 KISA 항목을 판정 근거로 제시하십시오.
+
+### 분석 대상 코드
+- API: [여기에 API 경로 + HTTP Method 입력]
+- 허용 파일 형식: [예: image/jpeg, application/pdf]
+
+[파일 저장 Service / Util 코드]
+(붙여넣기)
+
+[설정 코드 (S3 업로드, CDN URL 생성 등)]
+(붙여넣기 — 있는 경우)
+```
+
+---
+
+### 프롬프트 4 — LFI / RFI 특화 검증 (View Resolver / Whitelist 우회)
+
+**진단 목표**: 동적 View Resolver를 통한 Template Injection 가능성과
+URL Whitelist 검증 로직의 구현 결함(정규식 오류, 서브도메인 우회 등)을 심층 확인.
+
+```
+당신은 엔터프라이즈 환경의 취약점을 분석하는 '시니어 애플리케이션 보안 컨설턴트'입니다.
+아래 코드를 분석하여 LFI(Local File Inclusion) 및 RFI(Remote File Inclusion) 취약점을
+다음 고급 시나리오 기준으로 심층 진단해 주십시오.
+
+### 진단 기준 1 — LFI via Dynamic View Resolver (OWASP A03:2021)
+1. Spring의 InternalResourceViewResolver, FreeMarker, Thymeleaf 등에서
+   사용자 입력값이 View 이름에 직접 포함되는지 확인하십시오. (Template Injection → LFI)
+   - 예: `return "template/" + userInput;` → `../../etc/passwd` 우회 가능
+2. `ModelAndView` 또는 `return (String)` 패턴에서 View 이름에 사용자 입력 포함 여부를 확인하십시오.
+3. View Resolver 설정에 `prefix/suffix`가 고정되어 있어도 `../ ` 경로 탈출이 가능한지 확인하십시오.
+
+### 진단 기준 2 — RFI/SSRF URL Whitelist 우회 (OWASP A10:2021 SSRF)
+1. **서브도메인 우회**: Whitelist가 `trusted.com`으로 시작하는지 확인할 경우
+   `trusted.com.evil.com` 형태로 우회 가능합니다. `.endsWith()` 또는 `.equals()` 검증 방식을 확인하십시오.
+2. **정규식 앵커 미사용**: 정규식에 `^`와 `$` 앵커가 없으면 중간 삽입으로 우회 가능합니다.
+3. **URL 인코딩 우회**: `@`, `#`, `?` 등을 활용한 URL 파싱 혼동 공격 (예: `http://trusted.com@evil.com/`)
+   에 대한 파싱 정규화 여부를 확인하십시오.
+4. **DNS Rebinding 가능성**: IP Whitelist가 도메인 기반이라면 DNS Rebinding 공격 가능성을 명시하십시오.
+
+### 판정 기준
+- 양호: View 이름 고정값 사용 / URL은 도메인+경로 완전 일치(equals) 검증
+- 취약: 사용자 입력 View 이름 사용 / Whitelist 정규식 우회 가능
+- 정보: View Resolver 설정 코드 미제공 / Whitelist 구현체 코드 미제공으로 판단 불가
+
+### 답변 원칙
+- 정규식 패턴이 제공된 경우 직접 우회 가능 여부를 검증하고 예시를 제시하십시오.
+- 코드가 모호하여 판정 불가하면 필요한 추가 코드(View Resolver Bean 설정 등)를 명시 요청하십시오.
+- OWASP A03:2021(LFI), A10:2021(SSRF) 또는 KISA 항목을 판정 근거로 제시하십시오.
+
+### 분석 대상 코드
+- API: [여기에 API 경로 + HTTP Method 입력]
+- 스크립트 판정: [needs_review 사유 또는 RFI 취약 detail 입력]
+
+[Controller 코드 (View Resolver 또는 외부 URL 호출)]
+(붙여넣기)
+
+[URL Whitelist 검증 로직 / 정규식]
+(붙여넣기 — 있는 경우)
+
+[View Resolver Bean 설정]
+(붙여넣기 — 있는 경우)
+```

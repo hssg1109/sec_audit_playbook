@@ -1,6 +1,7 @@
 ---
 name: sec-audit-static
-description: Static code security audit playbook (SAST, SCA, secret detection) with standardized JSON outputs and reporting. Self-contained skill - all diagnosis criteria, task prompts, schemas, and workflow definitions are included in references/.
+description: Static code security audit playbook (SAST) — SQL Injection, OS Command, XSS, File Handling, Data Protection diagnosis for Spring/Kotlin/Java backends. Runs automated scan scripts then LLM cross-verification. Use when asked to run security audit, SAST scan, or 정적 진단 on a target in testbed/.
+tools: Read, Glob, Grep, Bash, Edit, Write, Agent, WebFetch
 ---
 
 # Sec Audit Static
@@ -18,7 +19,8 @@ This skill is **self-contained**: `skills/sec-audit-static/` + `tools/scripts/` 
 - `references/severity_criteria.md` for risk mapping (5→Critical ... 1→Info).
 - `references/output_schemas.md` for JSON output schema definitions.
 - `references/injection_diagnosis_criteria.md` for framework-specific injection criteria (MyBatis/JPA/JDBC/Kotlin/R2DBC).
-- `references/cross_verification.md` for post-scan cross-verification procedure.
+- `references/cross_verification.md` for post-scan cross-verification procedure (Phase 3-1: 취약 교차검증 / Phase 3-2: 정보/수동검토 LLM 심층진단).
+- `references/manual_review_prompt.md` for LLM persona, diagnosis criteria, and response principles used in Phase 3-2 manual review.
 - `references/taint_tracking.md` for Source→Sink confirmation (includes Kotlin-specific patterns).
 - `references/global_filters.md` for global filter/interceptor verification.
 - `references/vuln_automation_principles.md` for discovery/analysis split and hypothesis loop.
@@ -53,16 +55,23 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
     - For Kotlin codebases, run Kotlin SQL Builder 5-method detection. See `references/injection_diagnosis_criteria.md`.
     - Do not use CodeQL. Use Joern for flow-based checks.
   - Task 2-3: XSS review per task prompt.
-  - Task 2-4: File handling review per task prompt.
+  - Task 2-4: File handling (script-first: `scan_file_processing.py` → LLM manual review).
+    - Script detects Upload/Download/LFI/RFI endpoints and outputs `needs_review` flags.
+    - For `needs_review: true` items, apply 4 LLM prompt templates in `task_prompts/task_24_file_handling.md`
+      (IDOR/BOLA, upload bypass, sanitization, LFI/RFI View Resolver).
   - Task 2-5: Data protection review per task prompt.
 - Add SCA and secret detection when configured (Gitleaks-first).
 - For confirmed findings, create/update Semgrep/Joern rules (unless waived).
 
-**Phase 3**: Cross-verification.
-- For all automated "취약" findings, perform cross-verification per `references/cross_verification.md`.
-- Trace: Controller → Service → Repository → SQL Builder data flow.
-- Verify: user input reachability, type safety, code activation, branch path reachability.
-- Reclassify false positives with `diagnosis_method: "교차검증(수동)"`.
+**Phase 3**: Cross-verification + Manual deep review.
+- **Phase 3-1** (자동판정 "취약" 건): Cross-verification per `references/cross_verification.md` Phase 3-1.
+  - Trace: Controller → Service → Repository → SQL Builder data flow.
+  - Verify: user input reachability, type safety, code activation, branch path reachability.
+  - Reclassify false positives with `diagnosis_method: "교차검증(수동)"`.
+- **Phase 3-2** ("정보/수동검토" 건): LLM manual deep review per `references/cross_verification.md` Phase 3-2.
+  - Target: `result: "정보"` with `needs_review: true`, or `taint_confirmed: null`, or `[잠재] 취약한 쿼리 구조`.
+  - Use LLM persona and criteria defined in `references/manual_review_prompt.md`.
+  - Update result with `diagnosis_method: "수동진단(LLM)"` and `manual_review_note`.
 
 **Phase 4**: Reporting.
 - Merge: `tools/scripts/merge_results.py`
@@ -94,7 +103,8 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
 
 #### Diagnosis Criteria
 - `references/injection_diagnosis_criteria.md` - SQL/OS Command/SSI diagnosis criteria by framework
-- `references/cross_verification.md` - Post-scan cross-verification procedure
+- `references/cross_verification.md` - Phase 3-1 교차검증 + Phase 3-2 LLM 수동 심층진단 절차
+- `references/manual_review_prompt.md` - LLM 수동진단 페르소나, 진단기준, 답변원칙 (Phase 3-2)
 - `references/taint_tracking.md` - Source→Sink taint tracking (Kotlin-specific patterns)
 - `references/global_filters.md` - Global filter/interceptor verification
 
