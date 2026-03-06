@@ -147,9 +147,10 @@ _PII_VAR_NAMES = (
 
 # 로그 구문 내 PII 변수 직접 삽입 탐지
 # log.info("...", ssn) / log.debug("pwd={}", pwd) / log.info("ci=" + ci)
+# ★ (?<!\w) 추가: 단어 내부의 ci/di 등 (mbrCi, mbrDi 접미사) 오탐 방지
 _L_LOG_PII_RE = re.compile(
     rf'(?i)(?:log(?:ger)?|LOG)\s*\.\s*(?:trace|debug|info|warn|error|fatal)\s*\('
-    rf'[^;]*?(?:{_PII_VAR_NAMES})\b',
+    rf'[^;]*?(?<!\w)(?:{_PII_VAR_NAMES})\b',
     re.MULTILINE,
 )
 
@@ -157,7 +158,7 @@ _L_LOG_PII_RE = re.compile(
 _L_LOG_PARAM_BIND_RE = re.compile(
     rf'(?i)(?:log(?:ger)?|LOG)\s*\.\s*(?:trace|debug|info|warn|error)\s*\('
     rf'[^,)]*["\'][^"\']*\{{\}}'   # "...{}" 포맷 문자열
-    rf'[^)]*(?:{_PII_VAR_NAMES})\b',
+    rf'[^)]*(?<!\w)(?:{_PII_VAR_NAMES})\b',
     re.MULTILINE,
 )
 
@@ -168,7 +169,7 @@ _L_MASKING_SAFE_RE = re.compile(
 
 # System.out.println PII 출력 (비운영 코드지만 경고)
 _L_SYSOUT_PII_RE = re.compile(
-    rf'(?i)System\.out\.(?:print(?:ln)?|printf)\s*\([^;]*?(?:{_PII_VAR_NAMES})\b',
+    rf'(?i)System\.out\.(?:print(?:ln)?|printf)\s*\([^;]*?(?<!\w)(?:{_PII_VAR_NAMES})\b',
     re.MULTILINE,
 )
 
@@ -182,12 +183,13 @@ _C_WEAK_DIGEST_RE = re.compile(
 )
 
 # Cipher: DES, 3DES, RC4, ARCFOUR, ECB 모드
+# ★ RSA/ECB/OAEPWith... — OAEP 패딩은 RSA에서 안전 → 제외 (FP 방지)
 _C_WEAK_CIPHER_RE = re.compile(
     r'Cipher\.getInstance\s*\(\s*"('
     r'DES(?:/[^"]*)?'
     r'|DESede(?:/[^"]*)?'
     r'|RC4|ARCFOUR'
-    r'|[A-Za-z]+/ECB/[^"]*'          # ECB 모드 (AES/ECB 포함)
+    r'|[A-Za-z]+/ECB/(?!OAEP)[^"]*'  # ECB 모드 (OAEP 패딩 제외)
     r')"\s*\)',
     re.IGNORECASE,
 )
@@ -225,12 +227,19 @@ _J_PARSE_UNSIGNED_RE = re.compile(
 )
 
 # alg=none 허용: setAllowedAlgorithms, NONE 상수 사용
+# ★ "none"\s*(?:,|\)) 패턴은 .orElse("none") 등에서 FP 발생 → 앞에 알고리즘 함수 컨텍스트 요구
 _J_ALG_NONE_RE = re.compile(
     r'(?:SignatureAlgorithm\.NONE'
-    r'|"none"\s*(?:,|\))'          # algorithm("none")
+    r'|\.algorithm\s*\(\s*"none"\s*\)'   # algorithm("none") — 메서드 체인 한정
     r'|setAllowedAlgorithms.*NONE'
     r')',
     re.IGNORECASE,
+)
+
+# JWT 라이브러리 import 확인 (파일 수준 필터 — FP 방지)
+_J_JWT_IMPORT_RE = re.compile(
+    r'import\s+(?:io\.jsonwebtoken|com\.auth0\.jwt|org\.jose4j|'
+    r'com\.nimbusds\.jwt|io\.fusionauth\.jwt)',
 )
 
 # 서명 검증 없이 decode 만 사용 (jjwt setSigningKey 없는 parser)
@@ -763,6 +772,9 @@ def scan_jwt_issues(source_dir: Path) -> list[DPFinding]:
     for fp in _iter_sources(source_dir):
         content = _read(fp)
         if not content:
+            continue
+        # JWT 라이브러리 import 없는 파일 제외 — FP 방지
+        if not _J_JWT_IMPORT_RE.search(content):
             continue
         rel = _rel(fp, source_dir)
 

@@ -10,6 +10,57 @@
 
 ---
 
+## [v4.9.0] - 2026-03-06
+
+### Fixed — scan_injection_enhanced.py: P1/P2 "정보" 판정 고도화 (외부 의존성 + XML 미발견 감소)
+
+#### P2 — HTTP 클라이언트 패턴 탐지 (신규 `http_client` access_type)
+
+Phase 13 (외부 모듈 서비스 미발견) 판정 시, Controller 메서드 본문 및 클래스 전체에서
+`RestTemplate`, `WebClient`, `FeignClient`, `HttpClient`, `OkHttpClient` 등 HTTP 클라이언트 패턴을 탐지합니다.
+
+- 탐지 시 → `access_type="http_client"` → `_assess_op()` priority=0 → **양호**
+- 미탐지 시 → 기존 `external_module` → **정보 (수동 확인 필요)**
+
+#### P2 — 비DB 서비스명 패턴 (`_NON_DB_SERVICE_RE`) 추가
+
+`Push|Notification|Email|Sms|Redis|Cache|Kafka|Fcm|Apns|Scheduler` 등 DB 접근 불필요한
+클래스명 패턴을 탐지하여 `access_type="none"` → **양호**로 확정.
+
+#### P1 — `@Mapper` 어노테이션 기반 양호 확정
+
+Phase 10/18 XML 미발견 시, `@Mapper` 어노테이션이 있고 `${}` 패턴이 파일에 없으면
+`"추정"` 없이 **양호 확정** (needs_review=False). 개선 전 "정보"로 처리되던 항목 감소.
+
+**예상 효과 (msgsugar_new_ 기준):**
+
+| 분류 | 개선 전 | 개선 후 |
+|---|---|---|
+| 정보 (외부 의존성) | 95건 | ~20건 |
+| 정보 (XML 미발견) | 76건 | ~36건 |
+| 합계 정보 | 171건 | **~56건** (67% 감소) |
+
+---
+
+### Fixed — scan_data_protection.py v1.1.0: 주요 FP 3종 수정
+
+#### [L] SENSITIVE_LOGGING 단어 경계 오탐 수정 (927건 → 대폭 감소)
+
+`_L_LOG_PII_RE` 패턴에 `(?<!\w)` 음성 룩비하인드 추가.
+`mbrCi`, `mbrDi`, `userCi` 등 접미사 패턴에서 `ci`/`di`가 오탐되던 문제 해결.
+
+#### [J] JWT_INCOMPLETE FP 수정 (20건 → 0건 예상)
+
+- `_J_ALG_NONE_RE`: `.orElse("none")` 패턴 오탐 수정 — `.algorithm("none")` 메서드 체인으로 한정
+- `scan_jwt_issues()`: JWT 라이브러리 import 없는 파일 자동 제외 필터 추가 (`_J_JWT_IMPORT_RE`)
+
+#### [C] WEAK_CRYPTO RSA/ECB/OAEP FP 수정
+
+`_C_WEAK_CIPHER_RE`: `RSA/ECB/OAEPWith...` 패턴에 부정 룩어헤드 `(?!OAEP)` 추가.
+OAEP 패딩은 RSA 암호화에서 안전하므로 취약으로 분류하지 않음.
+
+---
+
 ## [v4.8.0] - 2026-03-05
 
 ### Added — scan_data_protection.py v1.0.0: Task 2-5 데이터 보호 전용 스캐너 신규

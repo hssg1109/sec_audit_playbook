@@ -71,6 +71,21 @@ _KT_KEYWORDS: frozenset = frozenset({
     'or', 'not',
 })
 
+# [P2] HTTP 클라이언트 패턴: 해당 클래스/메서드 본문에서 발견되면 DB 직접 접근 없음 → 양호
+_HTTP_CLIENT_RE = re.compile(
+    r'RestTemplate|WebClient|FeignClient|HttpClient|OkHttpClient|'
+    r'HttpURLConnection|URLConnection|HttpEntity|ResponseEntity\b',
+    re.IGNORECASE,
+)
+
+# [P2] 비DB 서비스명 패턴: 클래스명만으로 DB 접근 없음을 추정할 수 있는 접미사
+_NON_DB_SERVICE_RE = re.compile(
+    r'(?:Push|Notification|Email|Sms|Redis|Cache|Session|'
+    r'External|Api|Client|Proxy|Gateway|Webhook|Kafka|Rabbit|'
+    r'Fcm|Apns|Slack|Alert|Scheduler|Event)(?:Service|Client|Adapter|Publisher)$',
+    re.IGNORECASE,
+)
+
 # [Step 1] MyBatis @Select/@Insert/@Update/@Delete 어노테이션 2-pass 파싱용 모듈 상수
 # 단일 문자열 형태: @Select("SQL ...")
 _MYBATIS_ANNOT_SINGLE_RE = re.compile(
@@ -1282,15 +1297,34 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
         # 4. Service 파일 찾기 → Repository 호출 추적
         svc_file = class_index.get(svc_class)
         if not svc_file:
-            # [Phase 13] 외부 모듈 서비스 추정 판정
-            result["service_calls"][-1] = f"{svc_class}.{svc_method}() [external]"
-            result["db_operations"].append(DbOperation(
-                method=svc_method,
-                access_type="external_module",
-                detail=f"양호(추정): {svc_class}는 외부 모듈 - "
-                       f"cross-module injection 위험 낮음",
-                is_vulnerable=False,
-            ))
+            # [Phase 13] 외부 모듈 서비스 — HTTP 클라이언트 / 비DB 패턴 우선 판정
+            # [P2-A] Controller 메서드 본문 + 클래스 전체에서 HTTP 클라이언트 사용 확인
+            if _HTTP_CLIENT_RE.search(method_body) or _HTTP_CLIENT_RE.search(ctrl_content):
+                result["service_calls"][-1] = f"{svc_class}.{svc_method}() [http-client]"
+                result["db_operations"].append(DbOperation(
+                    method=svc_method,
+                    access_type="http_client",
+                    detail=f"양호: {svc_class}는 HTTP API 클라이언트 - DB 직접 접근 없음",
+                    is_vulnerable=False,
+                ))
+            # [P2-B] 비DB 서비스명 패턴 (Push/Email/Redis/Kafka 등)
+            elif _NON_DB_SERVICE_RE.search(svc_class):
+                result["service_calls"][-1] = f"{svc_class}.{svc_method}() [non-db]"
+                result["db_operations"].append(DbOperation(
+                    method=svc_method,
+                    access_type="none",
+                    detail=f"양호: {svc_class}는 비DB 서비스 패턴 - DB 접근 없음",
+                    is_vulnerable=False,
+                ))
+            else:
+                result["service_calls"][-1] = f"{svc_class}.{svc_method}() [external]"
+                result["db_operations"].append(DbOperation(
+                    method=svc_method,
+                    access_type="external_module",
+                    detail=f"양호(추정): {svc_class}는 외부 모듈 - "
+                           f"cross-module injection 위험 낮음",
+                    is_vulnerable=False,
+                ))
             continue
 
         svc_content = read_file_safe(svc_file)
@@ -2135,6 +2169,17 @@ def analyze_repository_method(content: str, method_name: str,
         class_name = extract_class_name(content)
         if class_name and class_name.endswith(('Mapper', 'Dao', 'DAO')) \
                 and not _is_jpa_repository(content):
+            # [P1] @Mapper 어노테이션 확인: 어노테이션 기반 MyBatis 인터페이스 → 양호 확정
+            has_mapper_annot = bool(re.search(r'@Mapper\b', content))
+            # ${}가 파일 내에 단 한 곳도 없으면 안전한 XML 전용 Mapper
+            has_dollar_brace = bool(re.search(r'\$\{', content))
+            if has_mapper_annot and not has_dollar_brace:
+                return [DbOperation(
+                    method=method_name,
+                    access_type="mybatis_safe",
+                    detail=f"양호: {class_name} @Mapper 인터페이스 - XML 범위 밖 (안전)",
+                    is_vulnerable=False,
+                )]
             return [DbOperation(
                 method=method_name,
                 access_type="mybatis_safe",
@@ -3029,6 +3074,19 @@ def judge_endpoint(trace_result: dict, endpoint: dict) -> dict:
                     "needs_review": False,
                     "evidence": evidence,
                 }
+
+        # ----- [P2] HTTP 클라이언트 → 양호 -----
+        if op.access_type == "http_client":
+            return {
+                "_priority": 0,
+                "result": "양호",
+                "diagnosis_type": "외부 HTTP API 호출",
+                "diagnosis_detail": op.detail,
+                "filter_type": "N/A",
+                "filter_detail": "external-http",
+                "needs_review": False,
+                "evidence": evidence,
+            }
 
         # ----- [Requirement 2] 양호 추정 → 정보 강등 -----
         if op.access_type == "external_module":
