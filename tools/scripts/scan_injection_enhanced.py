@@ -507,6 +507,63 @@ def _collect_element_text(elem) -> str:
     return "".join(parts)
 
 
+def _resolve_sql_text(elem, sql_fragments: dict,
+                      visited: frozenset = frozenset(), depth: int = 0) -> str:
+    """XML Element의 SQL 텍스트를 수집하면서 <include refid="...">를 제자리(in-place) 치환.
+
+    <include>가 등장하는 정확한 위치에 <sql id="..."> 블록 텍스트를 삽입하여
+    MyBatis가 실행할 완성된 SQL 문자열을 재현합니다.
+
+    처리 순서:
+      1. elem.text (태그 시작 이후 첫 자식 이전 텍스트)
+      2. 각 자식 Element:
+           - <include refid="..."> → sql_fragments에서 해당 Element를 재귀 치환
+           - 그 외 동적 태그 (<if>/<when>/<foreach>/<trim> 등) → 재귀 수집
+      3. child.tail (해당 자식 닫힘 태그 이후 다음 형제 이전 텍스트)
+
+    Args:
+        elem:           현재 처리 중인 XML Element
+        sql_fragments:  {frag_id: Element} — <sql id="..."> 인덱스 (Element 객체)
+        visited:        순환 참조 방지용 방문 refid 집합 (immutable frozenset)
+        depth:          재귀 깊이 (최대 10 — 무한 재귀 방지)
+
+    Returns:
+        <include> 치환이 완료된 완성 SQL 텍스트 문자열
+    """
+    if depth > 10:
+        return ""
+
+    parts = []
+    if elem.text:
+        parts.append(elem.text)
+
+    for child in elem:
+        child_tag = child.tag if isinstance(child.tag, str) else ""
+
+        if child_tag == "include":
+            refid = child.get("refid", "")
+            # namespace.id → simple_id 양쪽 키로 조회
+            simple_id = refid.rsplit(".", 1)[-1] if "." in refid else refid
+            frag_elem = sql_fragments.get(refid) or sql_fragments.get(simple_id)
+
+            if frag_elem is not None and refid not in visited and simple_id not in visited:
+                # 순환 참조 방지: 방문한 refid 추가
+                new_visited = visited | {refid, simple_id}
+                parts.append(_resolve_sql_text(frag_elem, sql_fragments,
+                                               new_visited, depth + 1))
+            # 미해소 <include>는 빈 문자열로 처리 (다른 파일/모듈의 fragment)
+        else:
+            # 동적 태그 (<if>, <when>, <foreach>, <trim>, <where>, <set>,
+            #             <choose>, <otherwise>, <bind>, iBatis <isNotEmpty> 등)
+            parts.append(_resolve_sql_text(child, sql_fragments, visited, depth + 1))
+
+        # child.tail: 닫힘 태그 뒤, 다음 형제 전까지의 SQL 텍스트
+        if child.tail:
+            parts.append(child.tail)
+
+    return "".join(parts)
+
+
 def build_mybatis_index(source_dir: Path, extra_source_dirs: list = None) -> dict:
     """MyBatis/iBatis XML mapper 파일을 ElementTree 기반으로 파싱하여 SQL ID 인덱스 구축
 
@@ -580,14 +637,15 @@ def build_mybatis_index(source_dir: Path, extra_source_dirs: list = None) -> dic
         )
         rel_path = str(xml_file.relative_to(rel_base)) if rel_base else str(xml_file)
 
-        # <sql id="..."> 조각(fragment) 인덱스 구축 (include refid 병합용)
-        sql_fragments = {}
+        # ── Phase A: <sql id="..."> 조각(fragment) 인덱스 구축 ──────────────────
+        # Element 객체 저장 (텍스트가 아닌 Element → 중첩 <include> 재귀 해소 가능)
+        sql_fragments: dict = {}
         for sql_elem in root.iter("sql"):
             frag_id = sql_elem.get("id", "")
             if frag_id:
-                sql_fragments[frag_id] = _collect_element_text(sql_elem)
+                sql_fragments[frag_id] = sql_elem  # Element 객체 저장
 
-        # SQL statement 태그 파싱
+        # ── Phase B: DML 태그 파싱 + <include> 인라인 치환 ────────────────────
         for elem in root:
             tag = elem.tag.lower()
             if tag not in sql_tags:
@@ -597,14 +655,9 @@ def build_mybatis_index(source_dir: Path, extra_source_dirs: list = None) -> dic
             if not sql_id:
                 continue
 
-            # 순수 텍스트 수집 (XML 주석 <!-- --> 은 ElementTree가 자동 무시)
-            sql_text = _collect_element_text(elem)
-
-            # <include refid="..."> 병합
-            for include_elem in elem.iter("include"):
-                refid = include_elem.get("refid", "")
-                if refid in sql_fragments:
-                    sql_text += " " + sql_fragments[refid]
+            # <include refid="...">를 정확한 위치에서 <sql> 블록 텍스트로 치환하여
+            # MyBatis가 실행할 완성된 SQL 문자열 구성
+            sql_text = _resolve_sql_text(elem, sql_fragments)
 
             # SQL 주석 제거 (/* ... */ 내의 ${}/$param$ 오탐 방지)
             sql_text = re.sub(r'/\*.*?\*/', '', sql_text, flags=re.DOTALL)
