@@ -614,8 +614,10 @@ def build_mybatis_index(source_dir: Path, extra_source_dirs: list = None) -> dic
         if not content:
             continue
 
-        # namespace 빠른 필터 (sqlMap 또는 mapper가 없으면 skip)
-        if "<sqlMap " not in content and "<mapper " not in content:
+        # namespace 빠른 필터 (MyBatis <mapper> 또는 iBatis <sqlMap> 가 없으면 skip)
+        # 구형 iBatis는 namespace 없이 <sqlMap>(속성 없음)으로 시작하므로
+        # "<sqlMap " (공백 포함) 대신 "<sqlMap" + 단어 경계로 검사
+        if not re.search(r'<(?:sqlMap|mapper)[\s>]', content):
             continue
 
         # ElementTree 파싱
@@ -626,9 +628,15 @@ def build_mybatis_index(source_dir: Path, extra_source_dirs: list = None) -> dic
         root = tree.getroot()
 
         # namespace 추출
+        # 구형 iBatis <sqlMap>은 namespace 속성이 없어서 기존 코드의
+        # "if not namespace: continue"가 파일 전체를 스킵하는 치명적 버그를 유발.
+        # → namespace 없을 경우 파일명 stem을 pseudo-namespace로 사용하여
+        #   "{stem}.{sqlId}" 및 "{sqlId}" 단독 키로 모두 등록.
         namespace = root.get("namespace", "")
+        ibatis_no_namespace = False
         if not namespace:
-            continue
+            namespace = xml_file.stem   # 예: "UserSqlMap" (파일명 stem)
+            ibatis_no_namespace = True  # 등록 시 namespace.id 키는 선택적으로만 추가
 
         # 상대 경로: source_dir 또는 extra_source_dirs 기준으로 계산
         rel_base = next(
@@ -693,17 +701,21 @@ def build_mybatis_index(source_dir: Path, extra_source_dirs: list = None) -> dic
             }
 
             # Register with namespace.id (primary key)
+            # iBatis namespace 없음: stem.sqlId 도 등록 (양쪽 조회 지원)
             full_id = f"{namespace}.{sql_id}"
             index[full_id] = entry
 
             # Also register with className.sqlId for interface method matching
             # namespace: com.foo.bar.MyMapper → className: MyMapper
-            class_name = namespace.rsplit(".", 1)[-1] if "." in namespace else namespace
-            class_key = f"{class_name}.{sql_id}"
-            if class_key not in index:
-                index[class_key] = entry
+            # ibatis_no_namespace=True: namespace = stem(파일명), '.' 없음 → class_key 불필요
+            if not ibatis_no_namespace:
+                class_name = namespace.rsplit(".", 1)[-1] if "." in namespace else namespace
+                class_key = f"{class_name}.{sql_id}"
+                if class_key not in index:
+                    index[class_key] = entry
 
             # Also register with just sql_id for loose matching
+            # (iBatis 구형 파일: SQL ID 단독 조회의 주요 경로)
             if sql_id not in index:
                 index[sql_id] = entry
 
@@ -1546,11 +1558,13 @@ def trace_endpoint(endpoint: dict, source_dir: Path,
                 continue
 
             # [Phase 24] Service → Repository 위치 인덱스 기반 taint 전파
-            # 전파 결과가 non-empty → 위치 인덱스 추적 사용
-            # empty (DTO 랩핑/파싱 실패) → None 전달 → name-based 폴백
+            # conservative_fallback=True: Service 내부에서 DTO를 새로 생성해
+            # Repository에 전달하는 패턴(SearchReq req = new SearchReq(); ...)에서
+            # 위치 인덱스 매칭 실패 시에도 svc_tainted를 보수적으로 유지
             repo_tainted: set = (
                 _propagate_taint_by_index(svc_method_body, repo_method,
-                                          repo_content, svc_tainted)
+                                          repo_content, svc_tainted,
+                                          conservative_fallback=True)
                 if svc_tainted else set()
             )
             tainted_arg = repo_tainted or svc_tainted or None
@@ -2835,7 +2849,8 @@ def _propagate_taint_by_index(
         caller_body: str,
         callee_name: str,
         callee_content: str,
-        tainted: set) -> set:
+        tainted: set,
+        conservative_fallback: bool = False) -> set:
     """호출 인자의 위치 인덱스 기반으로 taint를 callee 파라미터명으로 전파.
 
     예:
@@ -2843,10 +2858,21 @@ def _propagate_taint_by_index(
         callee:  fun getFeeds(accountId: Long, ...)
         결과:    {"accountId"}  (uid=arg[0] → accountId=param[0])
 
+    매칭 전략 (2단계):
+        1. 단어 경계 직접 매칭:  \\bt\\b  — 변수명 정확 일치
+        2. DTO 접근자 패턴 매칭: \\bt\\.  — 오염 변수 t가 DTO/객체로 래핑되어
+           .get(), .is(), Kotlin 프로퍼티(.) 형태로 전달되는 경우에도 taint 전파.
+           예) dto.getUserId(), request.getKeyword(), obj.field
+
     파싱 실패 시 (args/params 추출 불가):
         보수적 폴백 → tainted.copy() 반환 (추적 유실 방지)
-    tainted 인자 없음 (파싱 성공 + 매칭 없음):
-        empty set 반환 (taint 미전파)
+
+    파싱 성공 + 매칭 없음 시:
+        conservative_fallback=False (기본): empty set 반환 (taint 미전파)
+        conservative_fallback=True:  tainted.copy() 반환
+            → 서비스 내부에서 DTO를 새로 생성하여 레포지토리에 전달하는 패턴
+              (SearchReq req = new SearchReq(); req.setKeyword(t); repo.find(req);)
+              처럼 taint 흐름이 간접적으로 이어지는 경우 FN 방지
     """
     if not tainted:
         return set()
@@ -2864,11 +2890,23 @@ def _propagate_taint_by_index(
         if i >= len(callee_params):
             break
         for t in tainted:
+            # ── 전략 1: 단어 경계 직접 매칭 ──────────────────────────────────
             if re.search(rf'\b{re.escape(t)}\b', arg):
                 new_tainted.add(callee_params[i])
                 break
+            # ── 전략 2: DTO 접근자 패턴 ───────────────────────────────────────
+            # 오염 변수 t 뒤에 '.'이 이어지는 패턴 → DTO/객체로 래핑된 taint 전파
+            # 예) dto.getKeyword()  request.isActive()  obj.fieldName
+            # '\b'로 식별자 시작을 보장하고, '\.' 로 접근자를 확인
+            if re.search(rf'\b{re.escape(t)}\s*\.', arg):
+                new_tainted.add(callee_params[i])
+                break
 
-    return new_tainted  # 정상 파싱이지만 오염 인자 없으면 empty set
+    # ── 안전망: 파싱 성공 + 오염 인자 미발견 ──────────────────────────────────
+    if not new_tainted and conservative_fallback:
+        return tainted.copy()
+
+    return new_tainted
 
 
 def is_non_db_endpoint(endpoint: dict) -> bool:
