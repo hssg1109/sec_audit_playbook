@@ -731,46 +731,82 @@ def _is_jpa_safe_method(method_name: str) -> bool:
 
 
 def _analyze_jpa_query(content: str, method_name: str) -> list:
-    """JPA @Query 어노테이션 분석"""
+    """JPA @Query 어노테이션 분석
+
+    개선 사항:
+    - @Query(...)의 전체 인수를 캡처(value= 이후 텍스트만 아님)하여
+      nativeQuery=true 속성 및 쿼리 밖의 '+' 결합 패턴을 정확히 탐지
+    - nativeQuery=true 여부를 판정 결과에 반영
+    - 파라미터 바인딩: ?1/?2(positional) / :param(named) 구분
+    - has_concat: "..." + var 또는 var + "..." 패턴 탐지
+      (기존 구현은 첫 "..." 안에서만 검색하여 결합이 항상 미탐)
+    - has_positional: ?\d* → ?\d+ (숫자 필수, 빈 ? 오탐 방지)
+    """
     ops = []
-    # @Query("...") 또는 @Query(value="...") 바로 뒤에 메서드 선언
-    pattern = (
-        rf'@Query\s*\(\s*(?:value\s*=\s*)?'
-        rf'("(?:[^"\\]|\\.)*")\s*'
-        rf'(?:,\s*nativeQuery\s*=\s*(?:true|false)\s*)?'
+
+    # @Query 어노테이션 전체 인수 블록을 캡처
+    # group(1) = @Query(...)의 괄호 내부 전체 텍스트
+    #   - "..." 리터럴은 완전히 인식(내부 이스케이프 포함)
+    #   - 그 외 쉼표·공백·= 등은 [^)"] 로 수집
+    #   - 닫힘 ')' 만나면 종료 (nativeQuery 값에 메서드 호출 없음 가정 — true/false 리터럴)
+    annot_pattern = (
+        rf'@Query\s*\('
+        rf'((?:[^)"]|"(?:[^"\\]|\\.)*")*)'   # ← 전체 어노테이션 인수
         rf'\)\s*'
-        rf'(?:@\w+(?:\([^)]*\))?\s*)*'
+        rf'(?:@\w+(?:\([^)]*\))?\s*)*'        # 추가 어노테이션 (@Transactional 등)
         rf'(?:fun|public|protected|private|\w+[\w.<>,\[\] ]*)\s+'
         rf'{re.escape(method_name)}\s*\('
     )
-    match = re.search(pattern, content, re.DOTALL)
+    match = re.search(annot_pattern, content, re.DOTALL)
     if not match:
         return ops
 
-    query_text = match.group(1)
-    has_named_param = bool(re.search(r':\w+', query_text))
-    has_positional = bool(re.search(r'\?\d*', query_text))
-    has_concat = bool(re.search(r'"\s*\+\s*\w+', query_text))
+    annot_args = match.group(1)  # 예: '"SELECT ..." + var, nativeQuery = true'
 
+    # ── nativeQuery 속성 확인 ──────────────────────────────────────────────
+    is_native = bool(re.search(
+        r'\bnativeQuery\s*=\s*true\b', annot_args, re.IGNORECASE))
+
+    # ── 쿼리 문자열 '+' 결합 여부 ────────────────────────────────────────────
+    # "..." + identifier  또는  identifier + "..." 패턴
+    # nativeQuery=true 상황에서도 concat 이면 더욱 위험(Raw SQL 직접 조작)
+    has_concat = bool(re.search(
+        r'"(?:[^"\\]|\\.)*"\s*\+\s*\w'      # "..." + var
+        r'|\w\s*\+\s*"(?:[^"\\]|\\.)*"',    # var + "..."
+        annot_args, re.DOTALL,
+    ))
+
+    # ── 바인딩 파라미터 유형 확인 ─────────────────────────────────────────────
+    # 모든 문자열 리터럴을 이어 붙여 :param / ?1 패턴 검색
+    query_literals = re.findall(r'"((?:[^"\\]|\\.)*)"', annot_args)
+    query_combined = " ".join(query_literals)
+    has_named_param = bool(re.search(r':\w+', query_combined))
+    has_positional  = bool(re.search(r'\?\d+', query_combined))  # ?\d+ (숫자 1개 이상 필수)
+
+    # ── 최종 판정 ─────────────────────────────────────────────────────────────
     if has_concat:
+        native_tag = " (nativeQuery=true)" if is_native else ""
         ops.append(DbOperation(
             method=method_name,
             access_type="raw_concat",
-            detail="취약: @Query 어노테이션에서 문자열 결합 사용",
+            detail=f"취약: @Query{native_tag} - 쿼리 문자열 '+' 결합으로 파라미터 직접 삽입",
             is_vulnerable=True,
         ))
     elif has_named_param or has_positional:
+        bind_type  = "named(:param)" if has_named_param else "positional(?n)"
+        native_tag = " [nativeQuery=true]" if is_native else ""
         ops.append(DbOperation(
             method=method_name,
             access_type="jpa_builtin",
-            detail=f"양호: @Query에서 {'named parameter' if has_named_param else 'positional'} 바인딩 사용",
+            detail=f"양호: @Query{native_tag} - {bind_type} 바인딩 사용",
             is_vulnerable=False,
         ))
     else:
+        native_tag = " [nativeQuery=true]" if is_native else ""
         ops.append(DbOperation(
             method=method_name,
             access_type="jpa_builtin",
-            detail="양호: @Query 어노테이션 - 정적 JPQL (바인딩 불필요)",
+            detail=f"양호: @Query{native_tag} - 정적 쿼리 (파라미터 직접 삽입 없음)",
             is_vulnerable=False,
         ))
     return ops
@@ -2589,17 +2625,52 @@ def analyze_repository_method(content: str, method_name: str,
     # PathBuilder/BooleanBuilder/Q-type 패턴도 QueryDSL 위임 helper 사용 케이스로 포함
     if re.search(_QUERYDSL_HINT_RE, method_body):
         if re.search(r'Expressions\s*\.\s*stringTemplate\s*\(', method_body):
-            # Expressions.stringTemplate() 은 raw 문자열 삽입 가능 → 취약
-            m_expr = re.search(r'Expressions\s*\.\s*stringTemplate\s*\(', method_body)
-            line_no, code = find_line(m_expr)
-            ops.append(DbOperation(
-                method=method_name,
-                access_type="raw_concat",
-                detail="취약: QueryDSL Expressions.stringTemplate() - 사용자 입력 직접 삽입 가능",
-                line=line_no,
-                code_snippet=code,
-                is_vulnerable=True,
-            ))
+            # Expressions.stringTemplate(template, args...) 취약/안전 구분
+            #
+            # 안전: 첫 인수가 순수 문자열 리터럴 + {0}/{1} 플레이스홀더 사용
+            #       → QueryDSL이 내부적으로 PreparedStatement 파라미터 바인딩
+            #   예) Expressions.stringTemplate("FUNCTION({0})", expr)
+            #       Expressions.stringTemplate("DATE_FORMAT({0},'%Y')", dateExpr)
+            #
+            # 취약: 첫 인수(템플릿 문자열)에 '+' 결합으로 변수를 직접 삽입
+            #       → 완성된 SQL 조각이 그대로 쿼리에 삽입됨
+            #   예) Expressions.stringTemplate("REGEXP_LIKE(col," + pattern + ")")
+            #       Expressions.stringTemplate("func(" + userInput + ")")
+            #
+            # 판정 기준: 첫 인수 영역에 "..." + 식별자  또는  식별자 + "..." 패턴
+            _ST_CONCAT_RE = re.compile(
+                r'Expressions\s*\.\s*stringTemplate\s*\(\s*'
+                r'(?:'
+                r'"(?:[^"\\]|\\.)*"\s*\+\s*\w'    # "template" + var
+                r'|\w[\w.]*\s*\+\s*"'              # var + "template"
+                r')',
+            )
+            m_vuln = _ST_CONCAT_RE.search(method_body)
+            if m_vuln:
+                line_no, code = find_line(m_vuln)
+                ops.append(DbOperation(
+                    method=method_name,
+                    access_type="raw_concat",
+                    detail="취약: QueryDSL Expressions.stringTemplate() - "
+                           "템플릿 문자열 '+' 결합으로 변수 직접 삽입",
+                    line=line_no,
+                    code_snippet=code,
+                    is_vulnerable=True,
+                ))
+            else:
+                # {0}/{1} 플레이스홀더 또는 정적 템플릿 → PreparedStatement 안전
+                m_expr = re.search(
+                    r'Expressions\s*\.\s*stringTemplate\s*\(', method_body)
+                line_no, code = find_line(m_expr)
+                ops.append(DbOperation(
+                    method=method_name,
+                    access_type="jpa_builtin",
+                    detail="양호: QueryDSL Expressions.stringTemplate() - "
+                           "{0} 플레이스홀더 바인딩 (PreparedStatement 안전)",
+                    line=line_no,
+                    code_snippet=code,
+                    is_vulnerable=False,
+                ))
         else:
             ops.append(DbOperation(
                 method=method_name,
