@@ -30,7 +30,7 @@
 
 | # | 항목 | 우선순위 | 복잡도 | 상태 | 관련 컴포넌트 | 시작일 | 완료일 | 참고/링크 |
 |---|------|---------|--------|------|--------------|--------|--------|-----------|
-| T-07 | **Task 2-3~2-5 진단 자동화 고도화**<br>XSS / 파일처리 / 데이터보호 진단을<br>SQL Injection 수준의 자동화로 끌어올림<br>• `scan_xss.py` v2.3.2: ✅ Controller→View/Persistent/DOM taint 추적, 필터 설정 탐지 완성<br>• `scan_file_handling.py`: 업로드 확장자/경로 검증 자동 탐지 (미착수)<br>• `scan_data_protection.py`: CORS/하드코딩 시크릿/JWT 자동 탐지 (미착수) | 🔴 | L | 🔄 진행중 | `tools/scripts/`<br>`skills/sec-audit-static/references/task_prompts/` | 2026-02-25 | - | task_23~25_review.md 기반 |
+| T-07 | **Task 2-3~2-5 진단 자동화 고도화**<br>XSS / 파일처리 / 데이터보호 진단을<br>SQL Injection 수준의 자동화로 끌어올림<br>• `scan_xss.py` v2.4.0: ✅ Reflected Taint Flow 검증, DOM 라이브러리 제외, 커스텀 필터 탐지<br>• `scan_file_processing.py` v1.0: ✅ Upload/Download/LFI/RFI 자동 탐지 완성<br>• `scan_data_protection.py` v1.1.0: ✅ CORS/Secrets/JWT/Crypto/Logging 7개 모듈 + FP 3종 수정 | 🔴 | L | ✅ 완료 | `tools/scripts/`<br>`skills/sec-audit-static/references/task_prompts/` | 2026-02-25 | 2026-03-06 | v4.7.0~v4.9.0 |
 | T-01 | 보고서 상단에 서비스 설명 및 자산 구조 명시<br>(URL, IP, Repo, 담당자) | 🔴 | M | ⬜ 대기 | `publish_confluence.py`<br>`generate_finding_report.py` | - | - | - |
 | T-02 | 보안진단 완료 후 PoC/테스트 코드 자동 생성<br>(JUnit / Fuzz / ZAP 활용, 검증용) | 🔴 | XL | ⬜ 대기 | `scan_injection_enhanced.py`<br>`skills/sec-audit-static/` | - | - | - |
 | T-03 | 검증 절차 자동화<br>1차: AI 진단 → 보고서 자동 생성<br>2차: 인력 검토 → Confirm<br>오탐/과탐 체크 워크플로우 | 🔴 | L | ⬜ 대기 | 전체 파이프라인 | - | - | - |
@@ -60,6 +60,14 @@
 | ✅ | `scan_xss.py` v2.1.0~v2.3.2 FP 제거 + SET/WHERE 구분 + DTO 필드 검사 | 2026-03-03~04 | v2.3.2 | 3종 FP 수정, Hexagonal 구현체 해석, DTO record balanced-paren 파싱 |
 | ✅ | `publish_confluence.py` XSS 보고서 렌더링 전면 개편 | 2026-03-03 | v2.3.1 | 카테고리 그룹핑 + Expand 매크로 + DOM XSS 분리 + 필터 info/warning 박스 |
 | ✅ | `docs/ANALYSIS_REPORT_INJECTION_XSS.md` 설계 분석 보고서 작성 | 2026-03-04 | - | Hexagonal 추적, SET/WHERE 구분, FN 방어, 폴백/교차검증 기술 문서화 |
+| ✅ | Task 2-3~2-5 진단 자동화 고도화 완성 (T-07) | 2026-03-06 | v4.7.0~v4.9.0 | scan_xss v2.4.0 / scan_file_processing v1.0 / scan_data_protection v1.1.0 |
+| ✅ | MyBatis `<include>` 인라인 치환 로직 전면 재작성 (`_resolve_sql_text`) | 2026-03-06 | v4.9.1 | 순환 참조 방지 + 중첩 include + namespace 한정 refid 지원 |
+| ✅ | @Query 어노테이션 전체 인수 파싱 + nativeQuery 탐지 | 2026-03-06 | v4.9.2 | `+` 연결 취약 판정, `:param`/`?1` 안전 판정 분리 |
+| ✅ | QueryDSL `Expressions.stringTemplate()` `{0}` 플레이스홀더 → 양호 세분화 | 2026-03-06 | v4.9.2 | `_ST_CONCAT_RE` 신규 패턴 도입 |
+| ✅ | iBatis `<sqlMap>` namespace 누락 버그 2종 수정 | 2026-03-06 | v4.9.3 | Quick filter regex 교체 + xml_file.stem pseudo-namespace fallback |
+| ✅ | DTO Taint 단절 해결 — DTO 접근자 패턴 + `conservative_fallback` | 2026-03-06 | v4.9.3 | `_propagate_taint_by_index` Strategy 2 추가 |
+| ✅ | `manual_review_prompt.md` SQL Injection Taint 역추적 프롬프트 추가 | 2026-03-06 | v4.9.3 | DTO/Map 래핑, 동적 SQL ID 생성 2대 역추적 시나리오 + `taint_path` 스키마 |
+| ✅ | 미사용 파일 17개 정리 (docs/ 10개, references/ 2개, scripts/ 4개 + old docx 4개) | 2026-03-06 | v4.9.4 | 구세대 절차 문서 제거, 대체된 스크립트 삭제 |
 
 ---
 

@@ -1,6 +1,6 @@
 # AI 보안진단 플레이북
 
-> AI 에이전트(Claude)를 활용한 소스코드 보안 진단 자동화 프레임워크 — v4.8.0
+> AI 에이전트(Claude)를 활용한 소스코드 보안 진단 자동화 프레임워크 — v4.9.4
 
 ## 개요
 
@@ -48,7 +48,7 @@ python tools/scripts/scan_injection_enhanced.py \
 python tools/scripts/publish_confluence.py
 
 # Bitbucket 동기화 (skills/tools 팀 공유)
-python tools/scripts/push_bitbucket.py --tag v4.5.2
+python tools/scripts/push_bitbucket.py
 ```
 
 ---
@@ -78,16 +78,17 @@ Phase 2: 정적 분석
                       │                ← scan_injection_enhanced.py → LLM 교차검증
                       ├── Task 2-3  XSS 검토 (Persistent / Reflected / DOM / Redirect)
                       │                ← scan_xss.py (v2.4.0) → LLM 보조
-                      ├── Task 2-4  파일 처리 검토 (Upload / Download / LFI)
-                      │                ← scan_file_processing.py → LLM 보조
+                      ├── Task 2-4  파일 처리 검토 (Upload / Download / LFI / RFI)
+                      │                ← scan_file_processing.py (v1.0) → LLM 보조
                       └── Task 2-5  데이터 보호 검토 (CORS / Secrets / JWT / Crypto / Logging)
-                                       ← scan_data_protection.py (v1.0.0) → LLM 보조
+                                       ← scan_data_protection.py (v1.1.0) → LLM 보조
 
 Phase 3: 교차검증 (Cross-Verification)
-  └── 자동 탐지 "취약" 판정 전체에 대해 수동 교차검증 수행
-      Controller → Service → Repository → SQL Builder 데이터 흐름 추적
-      사용자 입력 도달 가능성 / 타입 안전성 / 코드 활성화 여부 / 분기 경로 검증
-      오탐 재분류: diagnosis_method = "교차검증(수동)"
+  ├── Phase 3-1: 자동 탐지 "취약" 판정 → 수동 교차검증
+  │     Controller → Service → Repository → SQL Builder 데이터 흐름 추적
+  │     사용자 입력 도달 가능성 / 타입 안전성 / 코드 활성화 여부 / 분기 경로 검증
+  └── Phase 3-2: "정보/수동검토" 판정 → LLM 심층진단
+        manual_review_prompt.md 기준 역추적 (DTO 래핑 / 동적 SQL ID 등)
 
 Phase 4: 보고
   └── merge_results.py          → final_report.json
@@ -100,13 +101,13 @@ Phase 4: 보고
 ```
 skills/sec-audit-static/
 ├── SKILL.md                          # 스킬 진입점 (워크플로 정의)
-├── agents/openai.yaml                # 에이전트 설정
 └── references/
     ├── workflow.md                   # Phase/Task 실행 맵, 보안 정책
     ├── injection_diagnosis_criteria.md  # SQL/OS/SSI 프레임워크별 진단 기준
     │                                    # (MyBatis / JPA / JDBC / Kotlin / R2DBC)
     ├── taint_tracking.md             # Source→Sink taint 추적 (Kotlin 포함)
-    ├── cross_verification.md         # 교차검증 절차
+    ├── cross_verification.md         # Phase 3-1 교차검증 + Phase 3-2 LLM 심층진단 절차
+    ├── manual_review_prompt.md       # LLM 수동진단 페르소나, 진단기준, 역추적 프롬프트
     ├── global_filters.md             # 글로벌 필터·인터셉터 확인
     ├── output_schemas.md             # JSON 출력 스키마
     ├── severity_criteria.md          # 심각도 판정 기준
@@ -123,6 +124,9 @@ skills/sec-audit-static/
     │   ├── task_23_xss_review.md
     │   ├── task_24_file_handling.md
     │   └── task_25_data_protection.md
+    ├── schemas/                      # JSON 스키마 (validate_task_output.py 연동)
+    │   ├── finding_schema.json
+    │   └── task_output_schema.json
     └── rules/                        # 탐지 룰
         ├── semgrep/                  #   Semgrep YAML 룰 (7개)
         └── joern/                    #   Joern taint 쿼리 (2개)
@@ -145,28 +149,26 @@ playbook/
 │   ├── confluence_page_map.json     # Confluence 페이지 매핑 (정합성 검증 이력)
 │   └── scripts/
 │       ├── scan_api.py              #   API 엔드포인트 인벤토리 추출
-│       ├── scan_injection_enhanced.py  #   SQL Injection 진단 엔진 (v4.6.3) ★
+│       ├── scan_dto.py              #   DTO/타입 카탈로그 추출 (scan_api.py 연동)
+│       ├── scan_injection_enhanced.py  #   SQL Injection 진단 엔진 ★
+│       ├── scan_injection_patterns.py  #   패턴 상수 모음 (scan_injection_enhanced 의존)
 │       ├── scan_xss.py              #   XSS 진단 엔진 (v2.4.0) ★
-│       ├── scan_file_processing.py  #   파일 처리 취약점 진단 ★
-│       ├── scan_data_protection.py  #   데이터 보호 진단 — 7개 모듈 (v1.0.0) ★
-│       ├── scan_injection_patterns.py  #   패턴 기반 취약점 탐지
-│       ├── scan_dto.py              #   DTO 구조 분석
+│       ├── scan_file_processing.py  #   파일 처리 취약점 진단 (v1.0) ★
+│       ├── scan_data_protection.py  #   데이터 보호 진단 — 7개 모듈 (v1.1.0) ★
 │       ├── publish_confluence.py    #   Confluence 보고서 게시
-│       ├── push_bitbucket.py        #   Bitbucket 팀 공유 (증분 커밋, 태그)
+│       ├── push_bitbucket.py        #   Bitbucket 팀 공유 (증분 커밋)
 │       ├── generate_finding_report.py  #   Markdown 보고서 생성
-│       ├── generate_reporting_summary.py  #  요약 보고서 생성
+│       ├── generate_reporting_summary.py  #  크로스 스킬 요약 보고서 생성
 │       ├── merge_results.py         #   다중 태스크 결과 집계
 │       ├── parse_asset_excel.py     #   자산 Excel → JSON 변환
 │       ├── validate_task_output.py  #   스키마 유효성 검증
 │       ├── redact.py                #   민감정보 마스킹
-│       ├── asm_findings_to_csv.py   #   ASM 취약점 CSV 변환
-│       ├── sarif_from_csv.py        #   SARIF 포맷 변환
-│       ├── extract_endpoints_rg.py  #   ripgrep 기반 엔드포인트 추출
+│       ├── asm_findings_to_csv.py   #   ASM 취약점 CSV 변환 (sec-audit-dast 연동)
+│       ├── sarif_from_csv.py        #   SARIF 포맷 변환 (sec-audit-dast 연동)
 │       └── run_gitleaks.sh          #   시크릿 스캔 (Gitleaks)
 │
-├── docs/                            # 절차서 문서
-├── schemas/                         # JSON 유효성 검증 스키마
-├── ai/                              # AI 거버넌스 정책
+├── docs/
+│   └── 정책보고서.md                # SCM-2026-001 형상관리 정책 (GitHub/Bitbucket 이원화)
 │
 ├── RELEASENOTE.md                   # 버전 이력 (SemVer)
 ├── TODO.md                          # 작업 목록 (우선순위·상태·담당)
@@ -180,7 +182,7 @@ playbook/
 
 ## 핵심 스크립트 상세
 
-### `scan_injection_enhanced.py` (v4.6.3) — SQL Injection 진단 엔진
+### `scan_injection_enhanced.py` — SQL Injection 진단 엔진
 
 Controller → Service → Repository 호출 그래프를 추적하여 HTTP 파라미터의 SQL 삽입 경로를 분석합니다.
 
@@ -196,10 +198,19 @@ python tools/scripts/scan_injection_enhanced.py \
 |------|------|------|
 | `[실제] SQL Injection` | HTTP 파라미터 → SQL taint 경로 확인 | `${}` / `$param$` 직접 삽입 |
 | `[잠재] 취약한 쿼리 구조` | 취약 구조이나 taint 미확인 | 동적 쿼리 조합 패턴 |
-| `양호` | JPA·MyBatis `#{}` 바인딩 / DB 미접근 | `@Query`, `#{}`, JPA |
+| `양호` | JPA·MyBatis `#{}` 바인딩 / DB 미접근 | `@Query`, `#{}`, JPA builtin |
 | `정보` | 외부 모듈·XML 미발견·추적 불가 | 외부 라이브러리 위임 |
 
-**지원 기술 스택:** Java / Kotlin · Spring · MyBatis · iBatis · JPA / Hibernate
+**지원 기술 스택:** Java / Kotlin · Spring · MyBatis · iBatis · JPA / Hibernate · QueryDSL · R2DBC
+
+**주요 기능:**
+- Phase 24 Positional Index Taint Tracking (HTTP param → Service → Repository 계층간 전파)
+- MyBatis `<include>` 인라인 치환 (`_resolve_sql_text` — 순환 참조 방지 + 중첩 include)
+- iBatis `<sqlMap>` namespace 없는 파일 인식 (stem 폴백)
+- DTO 래핑 taint 추적 (DTO 접근자 패턴 + `conservative_fallback`)
+- HTTP 클라이언트 서비스 자동 양호 확정 (`RestTemplate`, `WebClient`, `FeignClient` 등)
+- `@Query nativeQuery=true` 판별 + `+` 연결 취약 탐지
+- QueryDSL `Expressions.stringTemplate()` `{0}` 플레이스홀더 vs `+` 연결 구분
 
 ### `scan_xss.py` (v2.4.0) — XSS 진단 엔진
 
@@ -211,7 +222,17 @@ python tools/scripts/scan_xss.py <source_dir> \
   -o state/<project>_task23.json
 ```
 
-### `scan_data_protection.py` (v1.0.0) — 데이터 보호 진단 엔진
+### `scan_file_processing.py` (v1.0) — 파일 처리 취약점 진단
+
+Upload / Download / LFI / RFI(SSRF) 엔드포인트를 탐지하고 보안 검증 여부를 판정합니다.
+
+```bash
+python tools/scripts/scan_file_processing.py <source_dir> \
+  --api-inventory state/<project>_api_inventory.json \
+  -o state/<project>_task24.json
+```
+
+### `scan_data_protection.py` (v1.1.0) — 데이터 보호 진단 엔진
 
 CORS·하드코딩 시크릿·민감정보 로깅·취약 암호화·JWT·DTO 과다노출·보안 헤더 등 7개 모듈을 자동 스캔합니다.
 
@@ -230,14 +251,11 @@ python tools/scripts/publish_confluence.py [--dry-run] [--filter <file>]
 
 ### `push_bitbucket.py` — Bitbucket 팀 공유
 
-`skills/`, `tools/`, `RELEASENOTE.md`, `TODO.md`를 증분 커밋으로 push합니다.
+`skills/`, `tools/`, `docs/`, `RELEASENOTE.md`, `TODO.md`를 증분 커밋으로 push합니다.
 
 ```bash
 # 일반 push
 python tools/scripts/push_bitbucket.py
-
-# 버전 태그 생성 (RELEASENOTE.md 자동 추출)
-python tools/scripts/push_bitbucket.py --tag v4.5.2
 
 # PR 모드 (develop → main)
 python tools/scripts/push_bitbucket.py --pr
@@ -316,16 +334,15 @@ IP 주소, 이메일, API 키, JWT 토큰, 전화번호, 비밀번호, 인증서
 
 - **언어:** Python 3, YAML, JSON, Markdown
 - **AI:** Claude Sonnet (Anthropic) — Claude Code CLI 환경
-- **진단 대상:** Java / Kotlin · Spring Boot · MyBatis · JPA
+- **진단 대상:** Java / Kotlin · Spring Boot · MyBatis · iBatis · JPA · QueryDSL
 - **라이브러리:** openpyxl (Excel), jsonschema (검증), urllib (Confluence API)
 - **게시:** Confluence Server/DC REST API, Bitbucket Server REST API
-- **워크플로:** YAML 기반 태스크 오케스트레이션
 
 ---
 
 ## 버전 관리
 
-현재 버전: **v4.8.0** — [RELEASENOTE.md](RELEASENOTE.md) 참조
+현재 버전: **v4.9.4** — [RELEASENOTE.md](RELEASENOTE.md) 참조
 
 진행 중 과제: [TODO.md](TODO.md) 참조
 

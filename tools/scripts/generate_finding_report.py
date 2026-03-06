@@ -93,6 +93,15 @@ RISK_MAP = {
 ANCHOR_STYLE = "confluence"
 
 
+# Task 순서 정의 (트리 + 매트릭스 공유)
+_TASK_ORDER: list[tuple[str, str, str]] = [
+    ("Task 2-2", "인젝션 (Injection)",         "injection"),
+    ("Task 2-3", "XSS (Cross-Site Scripting)", "xss"),
+    ("Task 2-4", "파일 처리 (File Handling)",   "file_handling"),
+    ("Task 2-5", "데이터 보호 (Data Protection)", "data_protection"),
+]
+
+
 def _anchor(name: str) -> str:
     if ANCHOR_STYLE == "html":
         return ""
@@ -143,6 +152,7 @@ class Finding:
     evidence_type: str  # code, config, api, etc.
     flow: list
     instances: list = field(default_factory=list)
+    is_supplemental: bool = False  # LLM 수동분석 보완 finding 여부
 
 
 @dataclass
@@ -218,7 +228,8 @@ def extract_code_evidence(source_dir: Path, file_path: str, line: int,
     return code_line, before, after
 
 
-def load_findings(filepath: Path, source_dir: Path) -> tuple[str, list[Finding]]:
+def load_findings(filepath: Path, source_dir: Path,
+                  is_supplemental: bool = False) -> tuple[str, list[Finding]]:
     """진단 결과 파일 로드"""
     with open(filepath, encoding="utf-8") as f:
         data = json.load(f)
@@ -330,6 +341,7 @@ def load_findings(filepath: Path, source_dir: Path) -> tuple[str, list[Finding]]
             evidence_type="code" if code_snippet else "description",
             flow=f.get("flow", []),
             instances=instances,
+            is_supplemental=is_supplemental,
         ))
 
     return category, findings
@@ -339,18 +351,167 @@ def load_findings(filepath: Path, source_dir: Path) -> tuple[str, list[Finding]]
 #  보고서 생성
 # =============================================================================
 
+def _collect_supplemental_paths(finding_files: list[Path],
+                                page_map_path: Path) -> dict[str, list[Path]]:
+    """confluence_page_map.json 에서 각 finding 파일의 supplemental_sources 경로를 수집.
+
+    Returns: {str(finding_path): [Path(supp1), Path(supp2), ...]}
+    """
+    if not page_map_path or not page_map_path.exists():
+        return {}
+
+    try:
+        page_map = json.loads(page_map_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+    base_dir = page_map_path.parent.parent  # tools/ → playbook root
+
+    # 모든 entries를 평탄화
+    def _iter_entries(node):
+        for e in node.get("entries", []):
+            yield e
+        for g in node.get("groups", []):
+            yield from _iter_entries(g)
+
+    # finding 파일 경로 집합 (정규화)
+    finding_stems = {str(fp.resolve()) for fp in finding_files}
+
+    result: dict[str, list[Path]] = {}
+    for entry in _iter_entries(page_map):
+        src = entry.get("source", "")
+        supp_list = entry.get("supplemental_sources", [])
+        if not supp_list:
+            continue
+        src_abs = str((base_dir / src).resolve())
+        if src_abs not in finding_stems:
+            continue
+        paths = []
+        for s in supp_list:
+            p = (base_dir / s).resolve()
+            if p.exists():
+                paths.append(p)
+        if paths:
+            result[src_abs] = paths
+
+    return result
+
+
+def generate_task_tree(all_findings: dict[str, list[Finding]]) -> str:
+    """진단 항목 분류 ASCII 트리 생성.
+
+    CATEGORY_INFO['items']를 읽어 Task별 하위 진단 항목을 시각화한다.
+    실제 finding이 존재하는 Task만 강조(* 표시)하고, 없는 Task는 그대로 출력한다.
+    """
+    lines: list[str] = [
+        "```",
+        "🌳 진단 항목 분류 (Task Tree)",
+        "Phase 2: 정적 분석",
+    ]
+
+    n_tasks = len(_TASK_ORDER)
+    for t_idx, (task_label, task_desc, cat_id) in enumerate(_TASK_ORDER):
+        is_last_task  = (t_idx == n_tasks - 1)
+        task_prefix   = "└──" if is_last_task else "├──"
+        child_prefix  = "    " if is_last_task else "│   "
+
+        has_findings = bool(all_findings.get(cat_id))
+        marker = " ★" if has_findings else ""
+        lines.append(f"{task_prefix} {task_label}: {task_desc}{marker}")
+
+        items = list(CATEGORY_INFO[cat_id]["items"].values())
+        # 중복 제거 (ssi/ssti 같은 중복 값)
+        seen: list[str] = []
+        for v in items:
+            if v not in seen:
+                seen.append(v)
+        items = seen
+
+        for i_idx, item_name in enumerate(items):
+            is_last_item = (i_idx == len(items) - 1)
+            item_prefix  = "└──" if is_last_item else "├──"
+            lines.append(f"{child_prefix}{item_prefix} {item_name}")
+
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def generate_stats_matrix(all_findings: dict[str, list[Finding]]) -> str:
+    """Task × 세부항목 진단 결과 매트릭스 표 생성.
+
+    JSON findings에서 취약/정보/양호 건수를 명확한 정수(int)로 분리 추출하여
+    포맷팅 붕괴(예: "취약 0건0건171건")가 발생하지 않도록 한다.
+    Task 컬럼은 첫 번째 항목 행에만 표시하고 이후 행은 공백으로 처리한다.
+    """
+    header = ("| Task | 세부 진단 항목 "
+              "| 🔴 취약 | 🟡 정보 (수동검토) | 🟢 양호 / 해당없음 |")
+    sep    = ("|:-----|:------------|"
+              ":------:|:-----------------:|:-----------------:|")
+    rows: list[str] = [header, sep]
+
+    for task_label, _task_desc, cat_id in _TASK_ORDER:
+        findings  = all_findings.get(cat_id, [])
+        cat_items = CATEGORY_INFO[cat_id]["items"]
+
+        # subtype별 카운터 초기화 (중복 제거)
+        seen_names: list[str] = []
+        for v in cat_items.values():
+            if v not in seen_names:
+                seen_names.append(v)
+
+        counts: dict[str, dict[str, int]] = {
+            name: {"vuln": 0, "info": 0, "safe": 0} for name in seen_names
+        }
+
+        # findings에서 정수 단위 집계
+        for f in findings:
+            result, _ = RISK_MAP.get(f.severity, ("정보", 4))
+            subcat = f.subcategory
+            if subcat not in counts:
+                counts[subcat] = {"vuln": 0, "info": 0, "safe": 0}
+            key = {"취약": "vuln", "정보": "info", "양호": "safe"}.get(result, "info")
+            counts[subcat][key] += 1
+
+        first_row = True
+        for item_name, c in counts.items():
+            task_col: str = task_label if first_row else ""
+            v: int = c["vuln"]
+            i: int = c["info"]
+            s: int = c["safe"]
+            # 취약 건수가 있으면 굵게 강조
+            v_str = f"**{v}**" if v > 0 else "0"
+            i_str = f"**{i}**" if i > 0 else "0"
+            rows.append(f"| {task_col} | {item_name} | {v_str} | {i_str} | {s} |")
+            first_row = False
+
+    return "\n".join(rows)
+
+
 def generate_summary_table(all_findings: dict[str, list[Finding]]) -> str:
-    """진단 결과 요약 표 생성"""
+    """진단 결과 요약 표 생성 (Task Tree + 매트릭스 표 + 항목별 목록)"""
     lines = []
     if ANCHOR_STYLE == "md2cf":
         lines.append("## summary-table\n")
-        lines.append("**2. 진단 결과 요약**\n")
+        lines.append("**2. 종합 진단 결과 요약**\n")
     else:
-        lines.append("## 2. 진단 결과 요약\n")
+        lines.append("## 2. 종합 진단 결과 요약\n")
         anchor_line = _anchor("summary-table")
         if anchor_line:
             lines.append(anchor_line)
             lines.append("")
+
+    # ── 진단 항목 분류 트리 ────────────────────────────────────────────────
+    lines.append("### 🌳 진단 항목 분류 (Task Tree)\n")
+    lines.append(generate_task_tree(all_findings))
+    lines.append("")
+
+    # ── Task × 세부항목 매트릭스 표 ──────────────────────────────────────
+    lines.append("### 📊 Task별 진단 결과 매트릭스\n")
+    lines.append(generate_stats_matrix(all_findings))
+    lines.append("")
+
+    # ── 항목별 상세 목록 ──────────────────────────────────────────────────
+    lines.append("### 📋 항목별 상세 목록\n")
     headers = ["No", "점검 구분", "점검 항목", "결과", "위험도", "Request Mapping", "File"]
     rows: list[list[str]] = []
 
@@ -367,7 +528,8 @@ def generate_summary_table(all_findings: dict[str, list[Finding]]) -> str:
                 file_short = f.file.split("/")[-1] if f.file else "-"
             endpoint = f.endpoint if f.endpoint else "-"
 
-            rows.append([f.id, f.category, f.subcategory, result, str(risk), f"`{endpoint}`", file_short])
+            supp_marker = " ★LLM보완" if f.is_supplemental else ""
+            rows.append([f.id, f.category, f.subcategory + supp_marker, result, str(risk), f"`{endpoint}`", file_short])
             link_pairs.append((f.id, f.subcategory))
 
     if ANCHOR_STYLE == "md2cf":
@@ -578,6 +740,7 @@ def generate_report(
     domain: str | None = None,
     source_label: str | None = None,
     anchor_style: str | None = None,
+    page_map_path: Path | None = None,
 ):
     """최종 보고서 생성"""
     global ANCHOR_STYLE
@@ -594,6 +757,34 @@ def generate_report(
             all_findings[category] = []
         all_findings[category].extend(findings)
         print(f"  {fpath.name}: {len(findings)}건 ({category})")
+
+    # supplemental_sources 병합 (page_map 기반)
+    supp_map = _collect_supplemental_paths(finding_files, page_map_path)
+    if supp_map:
+        print("\n  [LLM 수동분석 보완 병합]")
+        for src_abs, supp_paths in supp_map.items():
+            for sp in supp_paths:
+                try:
+                    s_category, s_findings = load_findings(sp, source_dir, is_supplemental=True)
+                except Exception as e:
+                    print(f"  Warning: {sp.name} 로드 실패: {e}")
+                    continue
+                if not s_findings:
+                    continue
+                if s_category not in all_findings:
+                    all_findings[s_category] = []
+                # ID 중복 체크: 같은 카테고리 내 existing finding과 원본 id 충돌 방지
+                existing_ids = {f.id for f in all_findings[s_category]}
+                for sf in s_findings:
+                    # 새 ID 할당 (LLM 접두사)
+                    base_id = sf.id
+                    candidate = f"LLM-{base_id}"
+                    while candidate in existing_ids:
+                        candidate += "'"
+                    sf.id = candidate
+                    existing_ids.add(candidate)
+                    all_findings[s_category].append(sf)
+                print(f"  {sp.name}: {len(s_findings)}건 ({s_category}) ★보완")
 
     # 통계
     total_vuln = sum(
@@ -636,15 +827,19 @@ def generate_report(
 
     if total_vuln > 0 or total_info > 0:
         report_lines.append("### 1.2 주요 식별 취약점\n")
-        # 주요 취약점 요약 (High/Critical만)
-        for category_id, findings in all_findings.items():
+        # Task 순서대로 High/Critical 취약점 출력
+        for task_label, _task_desc, cat_id in _TASK_ORDER:
+            findings = all_findings.get(cat_id, [])
             high_findings = [f for f in findings if f.severity in ("critical", "high")]
-            if high_findings:
-                cat_info = CATEGORY_INFO[category_id]
-                report_lines.append(f"**{cat_info['name']}**")
-                for f in high_findings[:3]:  # 상위 3개만
-                    report_lines.append(f"- {f.title}")
-                report_lines.append("")
+            if not high_findings:
+                continue
+            cat_info = CATEGORY_INFO[cat_id]
+            # 예: * **[Task 2-2] 인젝션**
+            report_lines.append(f"* **[{task_label}] {cat_info['name']}**")
+            for f in high_findings[:3]:   # 상위 3개만
+                supp = " _(LLM 보완)_" if f.is_supplemental else ""
+                report_lines.append(f"  - {f.title}{supp}")
+            report_lines.append("")
 
     # 요약 표
     report_lines.append(generate_summary_table(all_findings))
@@ -736,6 +931,11 @@ def main():
         default="confluence",
         choices=["confluence", "html", "md2cf"],
     )
+    parser.add_argument(
+        "--page-map",
+        help="confluence_page_map.json 경로. supplemental_sources LLM 보완 findings를 통계에 병합한다.",
+        default=None,
+    )
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir)
@@ -772,6 +972,7 @@ def main():
         args.domain,
         args.source_label,
         args.anchor_style,
+        page_map_path=Path(args.page_map) if args.page_map else None,
     )
 
 

@@ -1,9 +1,12 @@
-## Task: 2-3 XSS 취약점 검토
+## Task: 2-3 XSS 취약점 검토 (LLM 수동분석 보완)
 
 **역할**: 당신은 보안 진단 전문가입니다.
-**입력 파일**: state/task_21_result.json (API 인벤토리)
-**출력 파일**: state/task_23_result.json
-**출력 스키마**: references/schemas/finding_schema.json
+**입력 파일**: `state/<prefix>_xss.json` (scan_xss.py 자동스캔 결과)
+**출력 파일**: `state/<prefix>_task23_llm.json` (LLM 수동분석 보완 — supplemental)
+**게시 방식**: 별도 Confluence 페이지 X → `<prefix>_xss.json` finding 페이지의 `supplemental_sources`로 통합
+
+> ⚠️ **이 JSON은 자동스캔 페이지에 통합 렌더링된다.** 독립 보고서가 아님.
+> `confluence_page_map.json`의 xss finding 항목에 `supplemental_sources` 배열로 추가할 것.
 
 ---
 
@@ -199,6 +202,9 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 
 ### 출력 형식
 
+자동스캔 결과(`<prefix>_xss.json`)에서 수동 확정이 필요한 항목만 findings로 출력합니다.
+`endpoint_diagnoses`는 포함하지 않으며(자동스캔 JSON에 이미 있음), **보완 findings만** 작성합니다:
+
 ```json
 {
   "task_id": "2-3",
@@ -208,23 +214,38 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
       "id": "XSS-001",
       "title": "취약점 제목",
       "severity": "High",
-      "category": "XSS / Persistent",
-      "description": "상세 설명",
-      "affected_endpoint": "/api/xxx",
+      "category": "XSS / Filter Misconfiguration",
+      "description": "상세 설명 — 자동스캔이 탐지하지 못한 전역 필터 취약점 등",
+      "affected_endpoint": "전체 엔드포인트 (전역 필터)",
       "evidence": {
-        "file": "src/controller/XxxController.java",
-        "lines": "30-45",
-        "code_snippet": "취약 코드"
+        "file": "com/.../XssFilterUtil.java",
+        "lines": "35-51",
+        "code_snippet": "취약 코드 스니펫"
       },
       "cwe_id": "CWE-79",
       "owasp_category": "A03:2021 Injection",
+      "diagnosis_method": "수동진단(LLM)",
+      "diagnosis_type": "[취약] XSS 필터 불충분",
+      "result": "취약",
+      "needs_review": false,
+      "manual_review_note": "코드 직접 확인 근거",
       "recommendation": "조치 방안"
     }
   ],
+  "xss_filter_assessment": {
+    "has_lucy": false,
+    "has_antisamy": false,
+    "has_custom_filter": true,
+    "filter_default_enabled": false,
+    "filter_level": "insufficient"
+  },
   "executed_at": "",
   "claude_session": ""
 }
 ```
+
+**주의**: `endpoint_diagnoses` 키는 출력하지 않는다 (자동스캔 JSON과 중복).
+전역 XSS 필터 상태(`xss_filter_assessment`)와 수동 확정 findings만 포함한다.
 
 ---
 

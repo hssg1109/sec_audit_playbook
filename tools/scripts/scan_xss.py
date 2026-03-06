@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-XSS 취약점 자동 진단 스크립트 v2.0.0
+XSS 취약점 자동 진단 스크립트 v2.5.0
 
 scan_api.py 결과를 기반으로 각 API endpoint에 대해
 6가지 Phase로 XSS 취약 여부를 자동 판정합니다.
@@ -66,6 +66,14 @@ scan_api.py 결과를 기반으로 각 API endpoint에 대해
             @RequestBody DtoClass → 모든 필드가 Integer/Boolean/UUID/날짜 등 비-자유텍스트이면 양호
             FP 제거: ExchangePointsRequestDto(Integer goldenEggsCnt) → 양호
             _has_freetext_params: class_index/source_dir 선택적 수신, DTO 필드 검사 폴백 적용
+  v2.5.0 - FP 수정: 정규식 문맥 오염(Context Bleed) 차단 + Kotlin 파싱 + Protobuf 예외
+            _extract_method_region: pre_window 슬라이싱 → 마지막 `}` 경계에서 중단 (문맥 오염 방지)
+                                    Kotlin `fun` 키워드 시그니처 탐지 추가
+            _extract_return_type:   Kotlin 명시적 반환 타입(`fun f(): Type`) 및
+                                    단일 표현식(`fun f() = Type(...)`) 정규식 추가
+            classify_controller:    _P1_PROTO_API_RT_RE 신규 — 반환 타입에 Protos/Protobuf/
+                                    Message/ResponseEntity 포함 시 @Controller이어도 REST_JSON 강제
+            manual_review_prompt.md: View XSS AI 점검 지시에 [Step 0] 순수 API 교차 검증 추가
   v2.4.0 - Step 1: Reflected XSS Taint Flow 검증 추가 (REST_HTML_RISK FP 제거)
             check_reflected_xss_taint(): 사용자 입력 파라미터 → 문자열 연결 → text/html 반환 흐름 추적
             Taint 미확인 시 "취약" 대신 "정보"로 하향; HtmlUtils/Encode.forHtml 감지 시 양호
@@ -158,6 +166,15 @@ _P1_REST_HTML_CT = re.compile(
 # 오류/예외 핸들러에서 입력값 직접 반영 패턴
 _P1_ERROR_REFLECT = re.compile(
     r'@ExceptionHandler|getMessage\s*\(\s*\)|getLocalizedMessage\s*\(\s*\)',
+    re.IGNORECASE,
+)
+# Protobuf / API 전용 객체 반환 타입 — @Controller이어도 REST_JSON 강제 분류 (FP 방지)
+# Protos: MainProtos.*, FooProtos.* 등 Protobuf 생성 클래스 접미사
+# Protobuf: 명시적 Protobuf 타입
+# Message: Protobuf GeneratedMessage 파생 클래스
+# ResponseEntity: Spring HTTP 응답 래퍼 (내부 타입 불문)
+_P1_PROTO_API_RT_RE = re.compile(
+    r'Protos\b|Protobuf\b|Message\b|ResponseEntity\b',
     re.IGNORECASE,
 )
 
@@ -669,31 +686,80 @@ def _resolve_view_file(view_name: str,
 
 def _extract_method_region(content: str, method_name: str,
                             pre_window: int = 800) -> str:
-    """메서드 선언 전 어노테이션 포함 영역 추출"""
+    """메서드 선언 바로 위 어노테이션 영역만 추출 (문맥 오염 방지).
+
+    단순 pre_window 슬라이싱 대신 메서드 시그니처 위치에서 위쪽으로 탐색하며
+    이전 메서드 본문의 닫힌 중괄호(``}``)를 만나면 거기서 중단하여,
+    이전 메서드의 어노테이션(produces="text/html" 등)이 오염되는 '문맥 오염'을 방지합니다.
+    Java 및 Kotlin(fun 키워드) 양쪽을 지원합니다.
+    """
+    # Java 스타일 메서드 시그니처
     m = re.search(
-        rf'(?:(?:public|protected|private|static|final|synchronized)\s+){{0,4}}'
+        rf'(?:(?:public|protected|private|static|final|synchronized|override)\s+)*'
         rf'[\w<>\[\],?\s]+\s+{re.escape(method_name)}\s*\(',
         content,
     )
     if not m:
+        # Kotlin fun 키워드 — fun methodName( 또는 fun methodName<T>(
+        m = re.search(rf'\bfun\s+{re.escape(method_name)}\s*[(<]', content)
+    if not m:
         m = re.search(rf'\b{re.escape(method_name)}\s*\(', content)
     if not m:
         return ""
-    start = max(0, m.start() - pre_window)
-    return content[start: m.end() + 50]
+
+    method_start = m.start()
+    # 위로 최대 pre_window 문자까지 후보 영역 추출
+    look_back = content[max(0, method_start - pre_window): method_start]
+
+    # 이전 메서드 본문의 마지막 `}` 이후부터 현재 메서드까지만 어노테이션 영역으로 사용
+    last_brace = look_back.rfind('}')
+    annotation_region = look_back[last_brace + 1:] if last_brace != -1 else look_back
+
+    return annotation_region + content[method_start: m.end() + 50]
 
 
 def _extract_return_type(content: str, method_name: str) -> str:
-    """메서드 반환 타입 추출 (제네릭 제외 베이스 타입)"""
+    """메서드 반환 타입 추출 (제네릭 제외 베이스 타입) — Java 및 Kotlin 지원.
+
+    Java:
+      public ReturnType method(...)
+    Kotlin 명시적 반환 타입:
+      fun method(...): ReturnType
+      fun method(...): ResponseEntity<Foo>
+    Kotlin 단일 표현식:
+      fun method() = SomeType(...)
+    """
+    # Java 스타일 — `[\w<>\[\].,?\s]+?` 에 `.` 포함하여 한정 타입명(FooProtos.Bar) 캡처
     m = re.search(
         rf'(?:public|protected|private|static|final|\s)+\s+'
-        rf'([\w<>\[\],?\s]+?)\s+{re.escape(method_name)}\s*\(',
+        rf'([\w<>\[\].,?\s]+?)\s+{re.escape(method_name)}\s*\(',
         content,
     )
-    if not m:
-        return ""
-    raw = m.group(1).strip()
-    return raw.split("<")[0].strip()
+    if m:
+        raw = m.group(1).strip()
+        return raw.split("<")[0].strip()
+
+    # Kotlin 명시적 반환 타입: fun methodName(...): ReturnType
+    m = re.search(
+        rf'\bfun\s+{re.escape(method_name)}\s*(?:<[^>]*>)?\s*'
+        rf'\([^)]*\)\s*:\s*([\w<>.,?\s]+)',
+        content,
+    )
+    if m:
+        raw = m.group(1).strip()
+        return raw.split("<")[0].strip()
+
+    # Kotlin 단일 표현식: fun methodName() = TypeName(...)
+    m = re.search(
+        rf'\bfun\s+{re.escape(method_name)}\s*(?:<[^>]*>)?\s*'
+        rf'\([^)]*\)\s*=\s*([\w.]+)',
+        content,
+    )
+    if m:
+        # 패키지 접두 제거 (com.example.FooType → FooType)
+        return m.group(1).strip().split(".")[-1]
+
+    return ""
 
 
 def build_custom_rest_annotations(source_dir: Path) -> frozenset:
@@ -762,6 +828,14 @@ def classify_controller(ctrl_content: str, handler_method: str,
         ct = "unknown"
     else:
         ct = "HTML_VIEW"
+
+    # ---- Protobuf / API 객체 반환 타입 강제 Override ----
+    # @Controller 클래스이더라도 반환 타입이 Protobuf 메시지 또는 ResponseEntity이면
+    # HTML View를 렌더링하지 않는 순수 API → REST_JSON으로 강제 분류
+    # (produces_html 명시 시에는 override 하지 않음 — 명시적 HTML 선언 우선)
+    if ct == "HTML_VIEW" and not produces_html:
+        if _P1_PROTO_API_RT_RE.search(base_rt or ""):
+            ct = "REST_JSON"
 
     return {
         "is_rest_class":     is_rest_class,

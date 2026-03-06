@@ -65,9 +65,6 @@ Canonical automation scripts (repo `tools/scripts/`):
   - `SQLI_CONCAT_PATTERNS`: Kotlin `${expr}`, `$var`, `+ var +`
   - `CMDI_*`, `SSI_*` patterns
 
-- `extract_endpoints_rg.py`: Spring/Kotlin endpoint inventory (rg/regex, low-cost)
-- `extract_endpoints_treesitter.py`: Spring/Kotlin endpoint inventory (tree-sitter, higher precision)
-
 ## Publishing Scripts
 
 - `publish_confluence.py` (v2.0): Confluence Server/DC auto-publishing
@@ -82,12 +79,6 @@ Canonical automation scripts (repo `tools/scripts/`):
   - Auto-detection: `endpoint_diagnoses` key → enhanced injection, `endpoints` key → api_inventory
   - `confluence_page_map.json`으로 페이지 구조 관리
 
-## Utility Scripts
-
-- `migrate_test_groups.py`: internal migration utility (use only if needed)
-- `rename_remove_prefix.py`: internal rename utility (use only if needed)
-
-Use only the scripts required for the target workflow; mark optional ones explicitly.
 
 ## Notes
 

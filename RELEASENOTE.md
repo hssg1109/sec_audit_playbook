@@ -10,6 +10,99 @@
 
 ---
 
+## [v4.9.4] - 2026-03-06
+
+### Chore — 미사용 파일 정리 (17개 삭제)
+
+#### docs/ 구세대 절차 문서 전체 제거 (10개)
+
+`skills/` 기반 워크플로 이전 전 작성된 단계별 절차 문서가 `task_prompts/` + `workflow.md`로 완전히 대체됨을 확인하고 삭제.
+
+- `docs/00_overview.md`, `PLAYBOOK_GUIDE.md`
+- `docs/10_asset_identification.md` ~ `25_data_protection_review.md` (5개)
+- `docs/20_static_analysis.md`, `21_api_inventory.md`
+- `docs/ANALYSIS_REPORT_INJECTION_XSS.md` (2026-03-04 스크립트 분석 보고서 — 내용 반영 완료)
+
+#### references/ 미참조 파일 제거 (2개)
+
+전체 프로젝트에서 참조 없음 확인 후 삭제.
+
+- `skills/sec-audit-static/references/static_sources.md` — `SKILL.md` Resources 섹션으로 대체됨
+- `skills/sec-audit-static/references/task_prompts/task_23_xss_report_format.md` — `task_23_xss_review.md` 미연동
+
+#### tools/scripts/ 사실상 미사용 스크립트 제거 (4개) + static_scripts.md 정리
+
+- `extract_endpoints_rg.py` / `extract_endpoints_treesitter.py` — `scan_api.py` v3.2로 대체됨
+- `migrate_test_groups.py` / `rename_remove_prefix.py` — 일회성 마이그레이션 유틸
+
+**결과:** `docs/`에 `정책보고서.md` 1개만 잔존. `tools/scripts/`는 워크플로 실운용 스크립트만 유지.
+
+---
+
+## [v4.9.3] - 2026-03-06
+
+### Fixed — scan_injection_enhanced.py: iBatis 누락 버그 + DTO Taint 단절 해결
+
+#### 수정 1 — `build_mybatis_index()`: iBatis `<sqlMap>` 파일 완전 누락 버그 수정
+
+- **버그 1** (Quick filter): `"<sqlMap " not in content` → 속성 없는 `<sqlMap>` 태그 (`<sqlMap>`) 스킵 → `re.search(r'<(?:sqlMap|mapper)[\s>]', content)` 로 교체
+- **버그 2** (Namespace fallback): 빈 namespace 시 `continue` → `xml_file.stem`을 pseudo-namespace로 사용, `ibatis_no_namespace=True` 플래그로 FQN 중복 등록 방지
+- **효과**: 구형 iBatis 프로젝트 XML 매핑 전량 인식
+
+#### 수정 2 — `_propagate_taint_by_index()`: DTO 래핑 시 Taint 단절 해결
+
+- **Strategy 1** (기존 유지): 인수 내 `\b{taint_var}\b` 단어 경계 탐지
+- **Strategy 2** (신규): `\b{taint_var}\.` DTO 접근자 패턴 탐지 (`t.getXxx()`, `t.field`)
+- `conservative_fallback: bool = False` 파라미터 추가 → Service→Repository 호출 시 `True` 설정으로 taint 보존
+- **효과**: `new XxxRequest(param)` 래핑 케이스에서 taint 흐름 단절 방지
+
+#### 수정 3 — `manual_review_prompt.md`: SQL Injection Taint 역추적 진단 프롬프트 추가
+
+`db_operations` 비어 있거나 `access_type=unknown` 항목에 대한 LLM 역추적 지시문:
+- **역추적 우선순위 1**: DTO/Map 파라미터 래핑 확인 (a~d 단계)
+- **역추적 우선순위 2**: SQL ID 동적 생성 3가지 위험 패턴
+- 입력/출력 형식 + `taint_path` 필드 JSON 스키마
+
+---
+
+## [v4.9.2] - 2026-03-06
+
+### Fixed — scan_injection_enhanced.py: @Query 파싱 완성 + QueryDSL stringTemplate() 세분화
+
+#### @Query 어노테이션 전체 인수 파싱
+
+- **이전**: `"..."` 첫 번째 문자열 리터럴만 캡처 → `+` 연결이 따옴표 밖에 있으면 탐지 불가
+- **이후**: `(?:[^)"]|"(?:[^"\\]|\\.)*")*` 패턴으로 전체 어노테이션 인수 캡처
+- `nativeQuery=true` 속성 탐지 → `diagnosis_type`에 JDBC native SQL 명시
+- `?\d*` → `?\d+` 수정 (positional param `?1` 정확 탐지)
+- `"..." + var` / `var + "..."` 패턴만 취약 판정 (`:param`, `?1` 있으면 안전)
+
+#### QueryDSL `Expressions.stringTemplate()` 세분화
+
+- **이전**: `stringTemplate()` 호출 모두 취약 판정
+- **이후**: `_ST_CONCAT_RE`로 첫 번째 인수에 `+` 직접 연결 여부 확인
+  - `"template" + var` → **취약** (`raw_concat`)
+  - `{0}` / `{1}` 플레이스홀더 → **양호** (PreparedStatement 바인딩)
+
+---
+
+## [v4.9.1] - 2026-03-06
+
+### Fixed — scan_injection_enhanced.py: MyBatis `<include>` 인라인 치환 로직 전면 재작성
+
+#### `_resolve_sql_text()` 신규 함수
+
+이전 방식(append-at-end)은 `<include>` 위치 정보를 무시하여 SQL 구조 왜곡 발생.
+재귀 트리 워커로 대체하여 정확한 인라인 치환 수행.
+
+- `<sql id="...">` 태그를 Element 객체로 `sql_fragments` 딕셔너리에 저장 (Phase A)
+- DML 파싱 시 `_resolve_sql_text()` 호출로 `<include refid="...">` 정확 위치 치환 (Phase B)
+- Namespace 한정 refid (`ns.fragId`) 및 단순 ID 동시 지원
+- `frozenset visited` + `depth > 10` 가드로 순환 참조 및 무한 재귀 방지
+- 중첩 include (`<include>` 내부의 또 다른 `<include>`) 정확 처리
+
+---
+
 ## [v4.9.0] - 2026-03-06
 
 ### Fixed — scan_injection_enhanced.py: P1/P2 "정보" 판정 고도화 (외부 의존성 + XML 미발견 감소)
