@@ -41,6 +41,39 @@
 
 ---
 
+## Phase 1 — 다중 SAST 도구 통합 및 정규화 (Single Pane of Glass)
+
+> 자체 AI 기반 정적 분석(A)과 상용/오픈소스 SAST 도구(Fortify, FindSecBugs) 진단 결과를 단일 뷰로 통합한다.
+> **핵심 설계 원칙**: CWE 번호를 병합 Key로 사용. AI 역할을 "탐지"에서 "FP 심판관"으로 전환하여 토큰 비용 절감 + 정확도 극대화.
+
+| # | 항목 | 우선순위 | 복잡도 | 상태 | 관련 컴포넌트 | 비고 |
+|---|------|---------|--------|------|--------------|------|
+| P1-01 | **Fortify 결과 파서 구현**<br>• FPR(zip 압축 XML) 언패킹 및 파싱<br>• XML/JSON 출력 포맷 지원<br>• 공통 스키마(CWE Key 기반)로 변환 | 🔴 | M | ⬜ 대기 | `tools/scripts/parse_fortify.py` (신규) | FPR = zip+XML |
+| P1-02 | **Fortify 취약점 분류 → 공통 스키마 매핑**<br>• Kingdom/Category → CWE 번호 매핑 테이블<br>• 심각도 정규화 (Critical/High/Medium/Low)<br>• `source_tool=Fortify` 필드 추가 | 🔴 | M | ⬜ 대기 | `tools/scripts/parse_fortify.py` | - |
+| P1-03 | **Fortify FP 2차 필터링 AI 프롬프트 작성**<br>• 입력: Fortify finding + 소스 스니펫 + 호출 컨텍스트<br>• 출력: result / fp_reason / confidence<br>• AI = "이 취약점이 실제 코드 문맥상 진짜인가?" 심판관 역할 | 🔴 | M | ⬜ 대기 | `skills/sec-audit-static/` 프롬프트 | 토큰 절감 전략 포함 |
+| P1-04 | **FindSecBugs 결과 파서 구현**<br>• SpotBugs XML(BugCollection) 파싱<br>• HTML 리포트 fallback 파싱<br>• BugPattern → CWE 매핑 후 공통 스키마 출력 | 🟡 | M | ⬜ 대기 | `tools/scripts/parse_findsecbugs.py` (신규) | - |
+| P1-05 | **FindSecBugs 취약점 유형 → 공통 스키마 매핑**<br>• BugPattern 코드 → CWE 매핑 테이블<br>• 심각도 정규화 (SCARY/TROUBLING/OF_CONCERN → High/Medium/Low) | 🟡 | S | ⬜ 대기 | `tools/scripts/parse_findsecbugs.py` | - |
+| P1-06 | **A + F + F 결과 병합 — De-duplication 및 교차 검증**<br>• CWE + 파일경로 + 라인 기준 중복 병합<br>• 복수 도구 동시 탐지 시 `confidence=High` 상향<br>• `detected_by[]` 배열로 출처 추적<br>• `merge_results.py` 고도화로 구현 | 🔴 | L | ⬜ 대기 | `tools/scripts/merge_results.py` | - |
+| P1-07 | **통합 보안 진단 리포트 자동 생성 파이프라인**<br>• merge → generate_finding_report → publish_confluence 연결<br>• 도구별 탐지 건수 / 교차검증 건수 / 최종 집계 포함<br>• Confluence 게시 시 통합 요약 섹션 자동 추가 | 🔴 | L | ⬜ 대기 | `tools/scripts/generate_finding_report.py`<br>`tools/scripts/publish_confluence.py` | - |
+
+---
+
+## Phase 2 — 전방위 보안 진단(DevSecOps) 영역 확장
+
+> SAST를 넘어 런타임(DAST), 오픈소스(SCA), 인프라(IaC/CSPM), 파이프라인(CI/CD)까지 SDLC 전 구간 자동화.
+
+| # | 항목 | 우선순위 | 복잡도 | 상태 | 관련 컴포넌트 | 비고 |
+|---|------|---------|--------|------|--------------|------|
+| P2-01 | **SCA — 의존성 파일 스캔 및 CVE 매핑**<br>• 대상: pom.xml, build.gradle, package.json, requirements.txt<br>• 라이브러리 버전 추출 → NVD/OSV CVE DB 조회<br>• CVSS 점수 및 영향 버전 범위 매핑<br>• 결과를 공통 스키마(`source_tool=SCA`)로 출력 | 🔴 | L | ⬜ 대기 | `tools/scripts/scan_sca.py` (신규) | - |
+| P2-02 | **SCA — CVE Exploit/PoC 악용 가능성 자동 분석**<br>• ExploitDB / GitHub PoC / CISA KEV 조회<br>• Exploit 존재 시 severity 상향 조정<br>• AI: "이 서비스가 해당 취약 컴포넌트를 실제로 사용하는지" 문맥 판별 | 🟡 | L | ⬜ 대기 | `tools/scripts/scan_sca.py` | - |
+| P2-03 | **DAST 결과 임포트 모듈 개발 (ZAP / Burp Suite)**<br>• OWASP ZAP XML/JSON 리포트 파서<br>• Burp Suite XML 리포트 파서<br>• 공통 스키마(`source_tool=DAST`)로 변환 및 CWE 매핑 | 🟡 | M | ⬜ 대기 | `tools/scripts/parse_dast.py` (신규) | - |
+| P2-04 | **SAST-DAST 교차 검증 — 코드 취약점의 런타임 재현 여부 확인**<br>• CWE + URL 엔드포인트 기준 SAST ↔ DAST 매칭<br>• 양쪽 동시 탐지 → `confidence=Critical`, 즉시 조치 권고<br>• SAST 탐지 / DAST 미탐 → "잠재적 취약점 — 추가 검증 필요" | 🟡 | L | ⬜ 대기 | `tools/scripts/merge_results.py` | P2-03 완료 후 착수 |
+| P2-05 | **IaC/CSPM — 서버·Nginx/Tomcat 설정 파일 취약점 분석**<br>• 대상: nginx.conf, server.xml, httpd.conf, OS 설정<br>• 탐지 항목: SSL/TLS 버전, 약한 암호 스위트, 디렉토리 리스팅, 에러 페이지 노출<br>• 결과를 공통 스키마(`source_tool=IaC`)로 출력 | 🟡 | M | ⬜ 대기 | `tools/scripts/scan_iac.py` (신규) | - |
+| P2-06 | **IaC/CSPM — Docker/K8s 설정 오류 스캔**<br>• Dockerfile: root 실행 / 불필요한 포트 / 시크릿 COPY<br>• docker-compose.yml: privileged 모드, 취약 볼륨 마운트<br>• K8s YAML: 과도한 RBAC / securityContext 미설정 / 시크릿 평문 저장 | 🟡 | M | ⬜ 대기 | `tools/scripts/scan_iac.py` (신규) | - |
+| P2-07 | **CI/CD 파이프라인 보안 점검 — 시크릿 노출 및 권한 탈취 탐지**<br>• 대상: Jenkinsfile, .github/workflows/*.yml, .gitlab-ci.yml<br>• 탐지 항목: 평문 시크릿 하드코딩, 과도한 권한(sudo/root), 신뢰할 수 없는 외부 액션 참조<br>• 결과를 공통 스키마(`source_tool=CICD`)로 출력 | 🟡 | M | ⬜ 대기 | `tools/scripts/scan_cicd.py` (신규) | - |
+
+---
+
 ## 완료 과제
 
 | # | 항목 | 완료일 | 버전 | 비고 |

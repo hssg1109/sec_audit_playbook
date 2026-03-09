@@ -261,10 +261,10 @@ def scan_uploads(source_dir: Path) -> list[dict]:
                 missing.append("파일 크기 제한 미확인")
 
             if not has_uuid and not has_ext_wl:
-                result, severity = "vulnerable", "High"
+                result, severity = "vulnerable", "Critical"
                 detail = "웹쉘 업로드 위험: " + " / ".join(missing)
             elif missing:
-                result, severity = "info", "Low"
+                result, severity = "info", "Medium"
                 detail = "보안 보완 권고: " + " / ".join(missing)
             else:
                 result, severity = "safe", "Info"
@@ -370,7 +370,7 @@ def scan_downloads(source_dir: Path) -> list[dict]:
                     detail = f"String 파라미터 '{param_name}' 사용이지만 Path Traversal 필터 적용 확인"
                     needs_review = False
                 else:
-                    result, severity = "vulnerable", "High"
+                    result, severity = "vulnerable", "Critical"
                     detail = (
                         f"String 파라미터 '{param_name}' → 파일 API 직접 전달 "
                         f"/ Path Traversal 필터 미확인 → LFI/Path Traversal 취약"

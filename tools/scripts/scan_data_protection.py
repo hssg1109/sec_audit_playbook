@@ -25,12 +25,13 @@ import argparse
 import json
 import re
 import sys
+from collections import defaultdict
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-VERSION = "1.0.0"
+VERSION = "1.2.0"
 
 # ============================================================
 #  0. 공통 유틸
@@ -110,9 +111,17 @@ _S_DB_PASS_RE = re.compile(
     re.MULTILINE,
 )
 
-# 프로퍼티 파일 내 평문 비밀번호 (application.properties/yml)
+# 프로퍼티/YAML 파일 내 평문 시크릿
+# password / passwd / secret / token 키워드 포함
+# 값이 환경변수 참조(${...}), Jasypt 암호화(ENC(...)), YAML 앵커(&/*), 빈 값이 아닌 경우에만 탐지
 _S_PROP_PASS_RE = re.compile(
-    r'(?i)(?:password|passwd|secret)\s*[=:]\s*(?!\$\{)(?!ENC\()(\S{4,})',
+    r'(?i)(?:^|[\s.])(?:password|passwd|secret|token)\s*[=:]\s*'
+    r'(?!\s*$)'           # 빈 값 제외
+    r'(?!\$\{)'           # 환경변수 참조 ${...} 제외
+    r'(?!ENC\()'          # Jasypt ENC(...) 제외
+    r'(?![#!])'           # 주석 문자로 시작하는 값 제외
+    r'(?![&*])'           # YAML 앵커/별칭 제외
+    r'([^\s\$\#\{\[\'\"]{4,}|["\'][^"\']{4,}["\'])',  # 순수 평문 리터럴
     re.MULTILINE,
 )
 
@@ -145,19 +154,43 @@ _PII_VAR_NAMES = (
     r'|accountNo|account_?no|bankAccount'
 )
 
-# 로그 구문 내 PII 변수 직접 삽입 탐지
-# log.info("...", ssn) / log.debug("pwd={}", pwd) / log.info("ci=" + ci)
-# ★ (?<!\w) 추가: 단어 내부의 ci/di 등 (mbrCi, mbrDi 접미사) 오탐 방지
+# 로그 구문 내 PII 변수 직접 삽입 탐지 — 레벨별 분리
+# ★ info/warn/error/fatal: 상용 환경 출력 → High/취약
+# ★ debug/trace          : 개발/검증계 출력 → Low/정보
+_L_LOG_PII_HIGH_RE = re.compile(
+    rf'(?i)(?:log(?:ger)?|LOG)\s*\.\s*(?:info|warn|error|fatal)\s*\('
+    rf'[^;]*?(?<!\w)(?:{_PII_VAR_NAMES})\b',
+    re.MULTILINE,
+)
+_L_LOG_PII_LOW_RE = re.compile(
+    rf'(?i)(?:log(?:ger)?|LOG)\s*\.\s*(?:debug|trace)\s*\('
+    rf'[^;]*?(?<!\w)(?:{_PII_VAR_NAMES})\b',
+    re.MULTILINE,
+)
+# 하위 호환용 통합 패턴 (DTO 스캔 등 컨텍스트 체크용)
 _L_LOG_PII_RE = re.compile(
     rf'(?i)(?:log(?:ger)?|LOG)\s*\.\s*(?:trace|debug|info|warn|error|fatal)\s*\('
     rf'[^;]*?(?<!\w)(?:{_PII_VAR_NAMES})\b',
     re.MULTILINE,
 )
 
-# SLF4J / Logback 파라미터 바인딩: log.info("val={}", piiVar)
+# SLF4J / Logback 파라미터 바인딩: log.info("val={}", piiVar) — 레벨별 분리
+_L_LOG_PARAM_BIND_HIGH_RE = re.compile(
+    rf'(?i)(?:log(?:ger)?|LOG)\s*\.\s*(?:info|warn|error|fatal)\s*\('
+    rf'[^,)]*["\'][^"\']*\{{\}}'
+    rf'[^)]*(?<!\w)(?:{_PII_VAR_NAMES})\b',
+    re.MULTILINE,
+)
+_L_LOG_PARAM_BIND_LOW_RE = re.compile(
+    rf'(?i)(?:log(?:ger)?|LOG)\s*\.\s*(?:debug|trace)\s*\('
+    rf'[^,)]*["\'][^"\']*\{{\}}'
+    rf'[^)]*(?<!\w)(?:{_PII_VAR_NAMES})\b',
+    re.MULTILINE,
+)
+# 하위 호환용
 _L_LOG_PARAM_BIND_RE = re.compile(
     rf'(?i)(?:log(?:ger)?|LOG)\s*\.\s*(?:trace|debug|info|warn|error)\s*\('
-    rf'[^,)]*["\'][^"\']*\{{\}}'   # "...{}" 포맷 문자열
+    rf'[^,)]*["\'][^"\']*\{{\}}'
     rf'[^)]*(?<!\w)(?:{_PII_VAR_NAMES})\b',
     re.MULTILINE,
 )
@@ -182,14 +215,16 @@ _C_WEAK_DIGEST_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Cipher: DES, 3DES, RC4, ARCFOUR, ECB 모드
-# ★ RSA/ECB/OAEPWith... — OAEP 패딩은 RSA에서 안전 → 제외 (FP 방지)
+# Cipher: DES, 3DES, RC4, ARCFOUR, ECB 모드, SEED/ECB
+# ★ RSA/ECB/OAEPPadding 및 RSA/ECB/OAEPWith... — OAEP 패딩은 안전 → 제외 (FP 방지)
+# ★ SEED/ECB — 국산 SEED 알고리즘도 ECB 모드 사용 시 패턴 노출 취약점
 _C_WEAK_CIPHER_RE = re.compile(
     r'Cipher\.getInstance\s*\(\s*"('
     r'DES(?:/[^"]*)?'
     r'|DESede(?:/[^"]*)?'
     r'|RC4|ARCFOUR'
-    r'|[A-Za-z]+/ECB/(?!OAEP)[^"]*'  # ECB 모드 (OAEP 패딩 제외)
+    r'|SEED/ECB(?:/[^"]*)?'           # 국산 SEED + ECB 모드
+    r'|[A-Za-z]+/ECB/(?!OAEP)[^"]*'  # ECB 모드 (OAEP 계열 패딩 전체 제외)
     r')"\s*\)',
     re.IGNORECASE,
 )
@@ -415,9 +450,8 @@ def _iter_sources(source_dir: Path, exts=(".java", ".kt", ".groovy")):
 
 
 def _iter_props(source_dir: Path):
-    """프로퍼티/YAML 파일 이터레이터"""
-    for pat in ("application*.properties", "application*.yml", "application*.yaml",
-                "bootstrap*.properties", "bootstrap*.yml"):
+    """프로퍼티/YAML 파일 이터레이터 (모든 *.properties / *.yml / *.yaml 포함)"""
+    for pat in ("*.properties", "*.yml", "*.yaml"):
         for fp in source_dir.rglob(pat):
             if _is_excluded(fp):
                 continue
@@ -590,19 +624,24 @@ def scan_hardcoded_secrets(source_dir: Path) -> list[DPFinding]:
 
         for m in _S_PROP_PASS_RE.finditer(content):
             ln = _line_of(content, m.start())
-            val = m.group(1)
-            # 플레이스홀더 / ENC() / 환경변수 참조 제외
-            if val.startswith(("${", "ENC(", "#{", "@{")):
+            val = m.group(1).strip('\'"')
+            # 정규식 룩어헤드로 이미 대부분 걸러지지만 방어적 이중 체크
+            if val.startswith(("${", "ENC(", "#{", "@{", "&", "*")):
                 continue
-            if re.match(r'^[<>\$\#@\{\[]', val):
+            if re.match(r'^[<>\$\#@\{\[&\*]', val):
+                continue
+            # 너무 짧거나 변수명/키워드처럼 보이는 값은 제외 (false positive 방지)
+            if len(val) < 4 or val.lower() in ("true", "false", "null", "none", ""):
                 continue
             _add("HARDCODED_SECRET",
                  "High",
-                 "프로퍼티 파일 내 비밀번호/시크릿 평문",
-                 f"application 설정 파일에 비밀번호/시크릿이 평문으로 저장.",
+                 "설정 파일 내 비밀번호/시크릿/토큰 평문",
+                 (f"설정 파일({fp.name})에 password/secret/token 값이 환경변수 참조나 "
+                  f"암호화(ENC(...)) 없이 평문으로 저장됨."),
                  rel, ln, "****" + " (마스킹)",
                  "CWE-312", "A02:2021 Cryptographic Failures",
-                 "Spring Cloud Config Vault 또는 Jasypt 암호화(@Value ENC(...)) 적용.",
+                 "Spring Cloud Config Vault 또는 Jasypt 암호화(ENC(...)) 적용. "
+                 "또는 ${ENV_VAR} 환경변수 참조로 교체.",
                  needs_review=True)
 
     return findings
@@ -613,8 +652,20 @@ def scan_hardcoded_secrets(source_dir: Path) -> list[DPFinding]:
 # ============================================================
 
 def scan_sensitive_logging(source_dir: Path) -> list[DPFinding]:
+    """민감정보 로깅 탐지.
+
+    [그룹화] 동일 파일 내 복수 로그 취약점은 파일당 1개 Finding으로 묶음.
+    vulnerable_lines 배열에 해당 라인 번호 전체를 기록하여 리포트 도배 방지.
+    [레벨 차등화]
+      info/warn/error/fatal → result="취약", severity="High"  (상용 환경 노출 위험)
+      debug/trace           → result="정보", severity="Low"   (개발/검증계 노출 위험)
+      System.out            → result="정보", severity="Info"
+    """
     findings: list[DPFinding] = []
     counter = [0]
+
+    # file_rel → bucket("high"/"low"/"sysout"/"masked") → [(line_no, snippet), ...]
+    file_hits: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
 
     for fp in _iter_sources(source_dir):
         content = _read(fp)
@@ -625,73 +676,142 @@ def scan_sensitive_logging(source_dir: Path) -> list[DPFinding]:
 
         for i, line in enumerate(lines_list, 1):
             stripped = line.strip()
-            # 주석 줄 제외
             if stripped.startswith(("//", "*", "/*", "#")):
                 continue
 
-            matched_pattern = None
-            if _L_LOG_PII_RE.search(line):
-                matched_pattern = "log_pii"
-            elif _L_LOG_PARAM_BIND_RE.search(line):
-                matched_pattern = "log_bind"
-            elif _L_SYSOUT_PII_RE.search(line):
-                matched_pattern = "sysout"
-
-            if not matched_pattern:
+            # 패턴 매칭 — 레벨 구분
+            if _L_SYSOUT_PII_RE.search(line):
+                bucket = "sysout"
+            elif _L_LOG_PII_HIGH_RE.search(line) or _L_LOG_PARAM_BIND_HIGH_RE.search(line):
+                bucket = "high"
+            elif _L_LOG_PII_LOW_RE.search(line) or _L_LOG_PARAM_BIND_LOW_RE.search(line):
+                bucket = "low"
+            else:
                 continue
 
-            # 마스킹 유틸 사용 시 안전 — 같은 줄에 mask 함수 호출 확인
+            # 같은 줄에 마스킹 유틸 → masked 버킷으로
             if _L_MASKING_SAFE_RE.search(line):
+                file_hits[rel]["masked"].append((i, stripped[:120]))
                 continue
 
-            # 앞뒤 2줄 컨텍스트에서 마스킹 사용 여부 추가 확인
+            # 앞뒤 2줄 컨텍스트 마스킹 → 버킷 강등
             ctx_start = max(0, i - 3)
             ctx_end   = min(len(lines_list), i + 2)
             ctx = "\n".join(lines_list[ctx_start:ctx_end])
             if _L_MASKING_SAFE_RE.search(ctx):
-                # 가까운 마스킹 처리 존재 → 정보로 하향
-                counter[0] += 1
-                findings.append(DPFinding(
-                    finding_id=_make_id("SENSITIVE_LOGGING", counter[0]),
-                    category="SENSITIVE_LOGGING",
-                    severity="Info",
-                    title="민감정보 로깅 (마스킹 유틸 근접 사용 확인)",
-                    description="로그 구문에 PII 변수가 포함되나 근접 컨텍스트에서 마스킹 유틸 호출 확인. 실제 마스킹 적용 여부 수동 확인 필요.",
-                    file=rel, line=i,
-                    code_snippet=stripped[:120],
-                    cwe_id="CWE-532",
-                    owasp_category="A09:2021 Security Logging and Monitoring Failures",
-                    recommendation="마스킹 유틸이 해당 변수에 적용되었는지 확인. log.info(\"val={}\", MaskingUtils.mask(pii)) 형태 권장.",
-                    result="정보",
-                    needs_review=True,
-                ))
+                file_hits[rel]["masked"].append((i, stripped[:120]))
                 continue
 
-            sev = "Info" if matched_pattern == "sysout" else "High"
-            title = ("System.out PII 직접 출력" if matched_pattern == "sysout"
-                     else "민감정보(PII) 평문 로깅")
-            desc = ("System.out.println으로 PII 변수가 직접 출력됨."
-                    if matched_pattern == "sysout"
-                    else "로그 구문에 PII 변수(주민번호, 비밀번호, CI/DI 등)가 "
-                         "마스킹 없이 직접 출력됨. 로그 파일 접근자에게 개인정보 노출 가능.")
+            file_hits[rel][bucket].append((i, stripped[:120]))
+
+    # ── 파일 단위 Finding 생성 ────────────────────────────────────
+    _REC = (
+        "1. 민감 필드를 로그에서 제외하거나 MaskingUtils.mask() 적용.\n"
+        "2. 운영 환경 로그 레벨을 INFO 이상으로 설정하고 DEBUG 로그 비활성화.\n"
+        "3. 로그 집계 시스템(ELK 등)의 접근 제어 강화."
+    )
+
+    for rel, buckets in file_hits.items():
+        # High — info/warn/error/fatal 평문 노출 (취약)
+        if "high" in buckets:
+            hits = buckets["high"]
+            line_nos = [t[0] for t in hits]
+            first_ln, first_snip = hits[0]
             counter[0] += 1
             findings.append(DPFinding(
                 finding_id=_make_id("SENSITIVE_LOGGING", counter[0]),
                 category="SENSITIVE_LOGGING",
-                severity=sev,
-                title=title,
-                description=desc,
-                file=rel, line=i,
-                code_snippet=stripped[:120],
+                severity="Critical",
+                title=f"민감정보(PII) 평문 로깅 — {len(hits)}건 ({rel.split('/')[-1]})",
+                description=(
+                    f"info/warn/error/fatal 레벨 로그에 PII 변수(mbrId, cardNo 등)가 "
+                    f"마스킹 없이 출력됨. 상용 환경 로그 파일 접근자에게 개인정보 노출 가능. "
+                    f"({len(hits)}개 라인 — 상세 위치는 vulnerable_lines 참조)"
+                ),
+                file=rel, line=first_ln,
+                code_snippet=first_snip,
                 cwe_id="CWE-532",
                 owasp_category="A09:2021 Security Logging and Monitoring Failures",
-                recommendation=(
-                    "1. 민감 필드를 로그에서 제외하거나 MaskingUtils.mask() 적용.\n"
-                    "2. 운영 환경 로그 레벨을 INFO 이상으로 설정하고 DEBUG 로그 비활성화.\n"
-                    "3. 로그 집계 시스템(ELK 등)의 접근 제어 강화."
-                ),
-                result="취약" if matched_pattern != "sysout" else "정보",
+                recommendation=_REC,
+                result="취약",
                 needs_review=False,
+                evidence={"vulnerable_lines": line_nos, "sample_count": len(hits)},
+            ))
+
+        # Low — debug/trace 노출 (정보)
+        if "low" in buckets:
+            hits = buckets["low"]
+            line_nos = [t[0] for t in hits]
+            first_ln, first_snip = hits[0]
+            counter[0] += 1
+            findings.append(DPFinding(
+                finding_id=_make_id("SENSITIVE_LOGGING", counter[0]),
+                category="SENSITIVE_LOGGING",
+                severity="Medium",
+                title=f"민감정보 로깅 (debug/trace, 수동확인) — {len(hits)}건 ({rel.split('/')[-1]})",
+                description=(
+                    f"debug/trace 레벨 로그에 PII 변수가 포함됨. "
+                    f"상용 환경에서는 출력되지 않으나 개발·검증계 로그 노출 위험. "
+                    f"({len(hits)}개 라인 — 상세 위치는 vulnerable_lines 참조)"
+                ),
+                file=rel, line=first_ln,
+                code_snippet=first_snip,
+                cwe_id="CWE-532",
+                owasp_category="A09:2021 Security Logging and Monitoring Failures",
+                recommendation="개발계 로그에서도 PII 마스킹 적용 권장. 운영 프로파일 로그 레벨 확인.",
+                result="정보",
+                needs_review=True,
+                evidence={"vulnerable_lines": line_nos, "sample_count": len(hits)},
+            ))
+
+        # Sysout — System.out PII (정보)
+        if "sysout" in buckets:
+            hits = buckets["sysout"]
+            line_nos = [t[0] for t in hits]
+            first_ln, first_snip = hits[0]
+            counter[0] += 1
+            findings.append(DPFinding(
+                finding_id=_make_id("SENSITIVE_LOGGING", counter[0]),
+                category="SENSITIVE_LOGGING",
+                severity="Info",
+                title=f"System.out PII 직접 출력 — {len(hits)}건 ({rel.split('/')[-1]})",
+                description=(
+                    f"System.out.println으로 PII 변수가 직접 출력됨. "
+                    f"({len(hits)}개 라인 — 상세 위치는 vulnerable_lines 참조)"
+                ),
+                file=rel, line=first_ln,
+                code_snippet=first_snip,
+                cwe_id="CWE-532",
+                owasp_category="A09:2021 Security Logging and Monitoring Failures",
+                recommendation="System.out 제거 후 SLF4J Logger로 교체. PII는 마스킹 후 출력.",
+                result="정보",
+                needs_review=True,
+                evidence={"vulnerable_lines": line_nos, "sample_count": len(hits)},
+            ))
+
+        # Masked — 마스킹 컨텍스트 근접 (정보, 수동확인)
+        if "masked" in buckets:
+            hits = buckets["masked"]
+            line_nos = [t[0] for t in hits]
+            first_ln, first_snip = hits[0]
+            counter[0] += 1
+            findings.append(DPFinding(
+                finding_id=_make_id("SENSITIVE_LOGGING", counter[0]),
+                category="SENSITIVE_LOGGING",
+                severity="Info",
+                title=f"민감정보 로깅 (마스킹 유틸 근접 확인 필요) — {len(hits)}건 ({rel.split('/')[-1]})",
+                description=(
+                    "로그 구문에 PII 변수가 포함되나 근접 컨텍스트에서 마스킹 유틸 호출 확인. "
+                    "실제 마스킹이 해당 변수에 적용되었는지 수동 확인 필요."
+                ),
+                file=rel, line=first_ln,
+                code_snippet=first_snip,
+                cwe_id="CWE-532",
+                owasp_category="A09:2021 Security Logging and Monitoring Failures",
+                recommendation='log.info("val={}", MaskingUtils.mask(pii)) 형태로 마스킹 인수가 직접 전달되는지 확인.',
+                result="정보",
+                needs_review=True,
+                evidence={"vulnerable_lines": line_nos, "sample_count": len(hits)},
             ))
 
     return findings
@@ -706,19 +826,19 @@ def scan_weak_crypto(source_dir: Path) -> list[DPFinding]:
     counter = [0]
 
     CRYPTO_CHECKS = [
-        (_C_WEAK_DIGEST_RE,      "High",   "취약한 해시 알고리즘 사용",
+        (_C_WEAK_DIGEST_RE,      "Medium", "취약한 해시 알고리즘 사용",
          "MD5/SHA-1은 충돌 공격에 취약한 알고리즘입니다. 패스워드 해시나 무결성 검증에 사용 시 즉시 취약.",
          "CWE-327", "A02:2021 Cryptographic Failures",
          "SHA-256 이상(SHA-256/384/512) 또는 bcrypt/Argon2(패스워드용)로 교체."),
-        (_C_WEAK_CIPHER_RE,      "High",   "취약한 대칭 암호화 알고리즘/모드 사용",
+        (_C_WEAK_CIPHER_RE,      "Medium", "취약한 대칭 암호화 알고리즘/모드 사용",
          "DES/3DES/RC4는 알려진 취약점이 있으며, ECB 모드는 패턴 노출 취약점이 있습니다.",
          "CWE-327", "A02:2021 Cryptographic Failures",
          "AES-256-GCM 또는 AES-256-CBC(PKCS5Padding)로 교체. ECB 모드는 GCM으로 대체."),
-        (_C_WEAK_KEYGEN_RE,      "High",   "취약한 KeyGenerator 알고리즘",
+        (_C_WEAK_KEYGEN_RE,      "Medium", "취약한 KeyGenerator 알고리즘",
          "DES/RC4 KeyGenerator 사용. 생성된 키는 취약한 암호화에만 사용 가능.",
          "CWE-327", "A02:2021 Cryptographic Failures",
          "AES KeyGenerator(256비트)로 교체."),
-        (_C_DIGEST_UTILS_MD5_RE, "High",   "DigestUtils/Hashing MD5 직접 사용",
+        (_C_DIGEST_UTILS_MD5_RE, "Medium", "DigestUtils/Hashing MD5 직접 사용",
          "Apache Commons / Guava의 MD5 유틸 직접 호출. 동일한 취약점.",
          "CWE-327", "A02:2021 Cryptographic Failures",
          "SHA-256 유틸 또는 HMAC-SHA256으로 교체."),
@@ -785,7 +905,7 @@ def scan_jwt_issues(source_dir: Path) -> list[DPFinding]:
             findings.append(DPFinding(
                 finding_id=_make_id("JWT_INCOMPLETE", counter[0]),
                 category="JWT_INCOMPLETE",
-                severity="High",
+                severity="Critical",
                 title="JWT 서명 검증 없는 파싱 (parseUnsecuredClaims)",
                 description=(
                     "parseUnsecuredClaims() 또는 parseClaimsJwt()는 서명 검증을 수행하지 않습니다. "
@@ -827,7 +947,7 @@ def scan_jwt_issues(source_dir: Path) -> list[DPFinding]:
             findings.append(DPFinding(
                 finding_id=_make_id("JWT_INCOMPLETE", counter[0]),
                 category="JWT_INCOMPLETE",
-                severity="High",
+                severity="Critical",
                 title="JWT Parser 서명 키 미설정",
                 description=(
                     "Jwts.parser() 생성 후 setSigningKey() 없이 파싱 시도. "
@@ -1044,7 +1164,7 @@ def scan_cors_config(source_dir: Path) -> tuple[list[DPFinding], dict]:
                     findings.append(DPFinding(
                         finding_id=_make_id("CORS_MISCONFIG", counter[0]),
                         category="CORS_MISCONFIG",
-                        severity="High",
+                        severity="Medium",
                         title="CORS allowedOrigins(*) + allowCredentials(true) 동시 설정",
                         description=(
                             "allowedOrigins(\"*\")와 allowCredentials(true)를 동시에 설정하면 "
@@ -1091,7 +1211,7 @@ def scan_cors_config(source_dir: Path) -> tuple[list[DPFinding], dict]:
                 findings.append(DPFinding(
                     finding_id=_make_id("CORS_MISCONFIG", counter[0]),
                     category="CORS_MISCONFIG",
-                    severity="High",
+                    severity="Medium",
                     title="Origin 헤더 그대로 반영 (CORS Origin 우회)",
                     description=(
                         "request.getHeader(\"Origin\") 값을 "

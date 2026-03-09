@@ -1,7 +1,7 @@
 {
   "version": "3.0",
   "prefix": "",
-  "next_test_number": 18,
+  "next_test_number": 20,
   "root_page": {
     "source": "README.md",
     "type": "doc"
@@ -401,6 +401,127 @@
               "confluence_page_id": "737058018"
             }
           ]
+        },
+        {
+          "title": "테스트18 - OCB Community API 전체 정적 진단 (2026-03-06)",
+          "entries": [
+            {
+              "source": "state/ocb_community_진단보고서_v2.md",
+              "title": "테스트18 - OCB Community API 통합 진단 보고서",
+              "type": "main_report",
+              "task_sources": {
+                "api": "state/ocb_community_api_inventory.json",
+                "injection": "state/ocb_community_injection_v463_final.json",
+                "xss": "state/ocb_community_xss_v463_run2.json",
+                "data_protection": "state/ocb_community_task25_final.json"
+              }
+            },
+            {
+              "source": "state/ocb_community_api_inventory.json",
+              "title": "테스트18 - API 인벤토리 결과",
+              "type": "api_inventory"
+            },
+            {
+              "source": "state/ocb_community_injection_v463_final.json",
+              "supplemental_sources": ["state/ocb_community_task22_injection_v3.json"],
+              "title": "테스트18 - 인젝션 취약점 진단 결과",
+              "type": "finding"
+            },
+            {
+              "source": "state/ocb_community_xss_v463_run2.json",
+              "supplemental_sources": ["state/ocb_community_task23_llm.json"],
+              "title": "테스트18 - XSS 취약점 진단 결과",
+              "type": "finding"
+            },
+            {
+              "source": "state/ocb_community_task24_llm.json",
+              "title": "테스트18 - 파일 처리 진단 결과",
+              "type": "finding"
+            },
+            {
+              "source": "state/ocb_community_task25_final.json",
+              "title": "테스트18 - 데이터 보호 진단 결과",
+              "type": "finding"
+            }
+          ]
+        },
+        {
+          "title": "테스트19 - OCB Sugar Stage 정적 진단 (2026-03-09)",
+          "groups": [
+            {
+              "title": "테스트19-A — msg-sugar",
+              "entries": [
+                {
+                  "source": "state/ocb_sugar_stage_진단보고서_v1.md",
+                  "title": "테스트19-A - OCB Sugar Stage (msg-sugar) 진단 보고서",
+                  "type": "main_report",
+                  "task_sources": {
+                    "api": "state/ocb_sugar_stage_api_inventory.json",
+                    "injection": "state/ocb_sugar_stage_injection.json",
+                    "xss": "state/ocb_sugar_stage_xss.json",
+                    "file_handling": "state/ocb_sugar_stage_task24.json",
+                    "data_protection": "state/ocb_sugar_stage_task25.json"
+                  }
+                },
+                {
+                  "source": "state/ocb_sugar_stage_injection.json",
+                  "supplemental_sources": ["state/ocb_sugar_stage_task22_llm.json"],
+                  "title": "테스트19-A - 인젝션 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/ocb_sugar_stage_xss.json",
+                  "supplemental_sources": ["state/ocb_sugar_stage_task23_llm.json"],
+                  "title": "테스트19-A - XSS 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/ocb_sugar_stage_task24.json",
+                  "title": "테스트19-A - 파일 처리 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/ocb_sugar_stage_task25_final.json",
+                  "title": "테스트19-A - 데이터 보호 진단 결과",
+                  "type": "finding"
+                }
+              ]
+            },
+            {
+              "title": "테스트19-B — sugar-admin",
+              "entries": [
+                {
+                  "source": "state/ocb_sugar_admin_진단보고서_v1.md",
+                  "title": "테스트19-B - OCB Sugar Stage (sugar-admin) 진단 보고서",
+                  "type": "main_report",
+                  "task_sources": {
+                    "api": "state/ocb_sugar_admin_api_inventory.json",
+                    "injection": "state/ocb_sugar_admin_injection.json",
+                    "xss": "state/ocb_sugar_admin_xss.json",
+                    "data_protection": "state/ocb_sugar_admin_task25.json"
+                  }
+                },
+                {
+                  "source": "state/ocb_sugar_admin_injection.json",
+                  "supplemental_sources": ["state/ocb_sugar_admin_task22_llm.json"],
+                  "title": "테스트19-B - 인젝션 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/ocb_sugar_admin_xss.json",
+                  "supplemental_sources": ["state/ocb_sugar_admin_task23_llm.json"],
+                  "title": "테스트19-B - XSS 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/ocb_sugar_admin_task25_final.json",
+                  "title": "테스트19-B - 데이터 보호 진단 결과",
+                  "type": "finding"
+                }
+              ]
+            }
+          ],
+          "entries": []
         },
         {
           "title": "테스트17 - MSG Sugar API 신규 정적 진단 (2026-03-05)",

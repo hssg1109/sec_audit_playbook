@@ -3364,6 +3364,22 @@ def judge_endpoint(trace_result: dict, endpoint: dict) -> dict:
     return best
 
 
+def _judgment_to_severity(judgment: dict) -> str:
+    """진단 결과 dict → Risk 등급 문자열 변환 (공식 취약점 등급 기준)
+    - [실제] SQL Injection 확인 → Risk 5 (Critical)
+    - [잠재] 취약 구조 (수동확인) → Risk 4 (High)
+    - 양호 / 정보 → Risk 2 (Low)
+    """
+    if judgment.get("result") != "취약":
+        return "Risk 2"
+    dt = judgment.get("diagnosis_type", "")
+    if "[실제]" in dt:
+        return "Risk 5"
+    elif "[잠재]" in dt:
+        return "Risk 4"
+    return "Risk 5"  # 기본 취약 → Risk 5
+
+
 # ============================================================
 #  6. OS Command / SSI 전역 스캔
 # ============================================================
@@ -3408,11 +3424,12 @@ def scan_global_patterns(source_dir: Path, context_lines: int = 3) -> dict:
     return {
         "os_command_injection": {
             "total": len(cmd_findings),
-            "findings": [asdict(f) for f in cmd_findings],
+            # result/severity 필드 주입 — 통계 집계 누락 방지 + 공식 등급 반영
+            "findings": [{**asdict(f), "result": "정보", "severity": "Risk 5"} for f in cmd_findings],
         },
         "ssi_injection": {
             "total": len(ssi_findings),
-            "findings": [asdict(f) for f in ssi_findings],
+            "findings": [{**asdict(f), "result": "정보", "severity": "Risk 5"} for f in ssi_findings],
         },
     }
 
@@ -3507,6 +3524,7 @@ def run_diagnosis(source_dir: Path, inventory_path: Path,
             repository_calls=trace.get("repository_calls", []),
             db_operations=[asdict(op) for op in trace.get("db_operations", [])],
             result=judgment["result"],
+            severity=_judgment_to_severity(judgment),
             filter_type=judgment.get("filter_type", "N/A"),
             filter_detail=judgment.get("filter_detail", "N/A"),
             diagnosis_type=judgment.get("diagnosis_type", ""),
