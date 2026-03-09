@@ -464,6 +464,11 @@
                   }
                 },
                 {
+                  "source": "state/ocb_sugar_stage_api_inventory.json",
+                  "title": "테스트19-A - API 인벤토리 결과",
+                  "type": "api_inventory"
+                },
+                {
                   "source": "state/ocb_sugar_stage_injection.json",
                   "supplemental_sources": ["state/ocb_sugar_stage_task22_llm.json"],
                   "title": "테스트19-A - 인젝션 취약점 진단 결과",
@@ -500,6 +505,11 @@
                     "xss": "state/ocb_sugar_admin_xss.json",
                     "data_protection": "state/ocb_sugar_admin_task25.json"
                   }
+                },
+                {
+                  "source": "state/ocb_sugar_admin_api_inventory.json",
+                  "title": "테스트19-B - API 인벤토리 결과",
+                  "type": "api_inventory"
                 },
                 {
                   "source": "state/ocb_sugar_admin_injection.json",
