@@ -489,6 +489,11 @@
                   "source": "state/ocb_sugar_stage_task25_final.json",
                   "title": "테스트19-A - 데이터 보호 진단 결과",
                   "type": "finding"
+                },
+                {
+                  "source": "state/ocb_sugar_stage_종합보고서.md",
+                  "title": "테스트19-A - OCB Sugar Stage (msg-sugar) 종합 보고서 (API 리스팅 포함)",
+                  "type": "doc"
                 }
               ]
             },

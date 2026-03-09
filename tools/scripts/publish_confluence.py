@@ -303,11 +303,85 @@ def md_to_xhtml(md_text):
             )
         return re.sub(r'\[\[ANCHOR:([^\]]+)\]\]', repl, xhtml)
 
+    def _strip_html_tags(html_str: str) -> str:
+        """Remove HTML tags, leaving plain text for Confluence macro parameter."""
+        return re.sub(r'<[^>]+>', '', html_str)
+
+    def _preprocess_expand_blocks(text: str, store: dict) -> str:
+        """Iteratively replace innermost <details><summary>...</summary>...</details>
+        blocks with [[EXPAND:N]] placeholder tokens (bottom-up for nested blocks).
+
+        The pattern uses a negative lookahead (?!<details>) to ensure only truly
+        innermost blocks (those whose body contains no further <details> tag) are
+        matched in each pass, guaranteeing correct bottom-up expansion.
+        """
+        counter = [0]
+        # Group 1: title — stops at first </summary> (no lookahead-through allowed).
+        # Group 2: body  — stops if a nested <details> opener is encountered,
+        #   ensuring only truly innermost blocks are matched each pass.
+        pattern = re.compile(
+            r'<details>\s*<summary>'
+            r'((?:(?!</summary>).)*?)'   # group 1: title (no </summary> inside)
+            r'</summary>'
+            r'((?:(?!<details>).)*?)'    # group 2: body  (no <details> inside)
+            r'</details>',
+            re.DOTALL | re.IGNORECASE,
+        )
+
+        def _replace(m):
+            title_html = m.group(1).strip()
+            content_md = m.group(2).strip()
+            key = f"[[EXPAND:{counter[0]}]]"
+            counter[0] += 1
+            store[key] = (_strip_html_tags(title_html), content_md)
+            return key
+
+        while True:
+            new_text = pattern.sub(_replace, text)
+            if new_text == text:
+                break
+            text = new_text
+        return text
+
+    # expand_store is shared by closures below so nested tokens resolve correctly.
+    expand_store: dict = {}
+
+    def _convert_body(content_md: str) -> str:
+        """Convert body markdown (may contain [[EXPAND:N]] tokens) to XHTML.
+        Uses the shared expand_store so nested expand blocks are resolved."""
+        try:
+            body = _md_to_xhtml_lib(content_md)
+        except ImportError:
+            body = _md_to_xhtml_fallback(content_md)
+        body = _postprocess_anchors(body)
+        body = _postprocess_expand_blocks(body)
+        return body
+
+    def _postprocess_expand_blocks(xhtml: str) -> str:
+        """Replace [[EXPAND:N]] tokens with Confluence Expand structured macros.
+        Uses the shared expand_store (closure) so nested tokens are resolved."""
+        def _replace(m):
+            key = m.group(0)
+            title, content_md = expand_store[key]
+            body_xhtml = _convert_body(content_md)
+            title_escaped = html_escape(title)
+            return (
+                f'<ac:structured-macro ac:name="expand">'
+                f'<ac:parameter ac:name="title">{title_escaped}</ac:parameter>'
+                f'<ac:rich-text-body>{body_xhtml}</ac:rich-text-body>'
+                f'</ac:structured-macro>'
+            )
+        return re.sub(r'\[\[EXPAND:\d+\]\]', _replace, xhtml)
+
     md_text = _preprocess_anchors(md_text)
+    md_text = _preprocess_expand_blocks(md_text, expand_store)
     try:
-        return _postprocess_anchors(_md_to_xhtml_lib(md_text))
+        xhtml = _md_to_xhtml_lib(md_text)
     except ImportError:
-        return _postprocess_anchors(_md_to_xhtml_fallback(md_text))
+        xhtml = _md_to_xhtml_fallback(md_text)
+    xhtml = _postprocess_anchors(xhtml)
+    xhtml = _postprocess_expand_blocks(xhtml)
+    return xhtml
 
 # ---------------------------------------------------------------------------
 # JSON -> XHTML helpers
