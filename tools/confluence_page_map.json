@@ -562,7 +562,15 @@
               "page_id": 739224605
             }
           ],
-          "entries": [],
+          "entries": [
+            {
+              "source": "state/ocb_sugar_stage_combined_report.md",
+              "title": "테스트19 - OCB Sugar Stage 통합 진단 보고서 (msg-sugar + sugar-admin)",
+              "type": "main_report",
+              "task_sources": {},
+              "page_id": 739227307
+            }
+          ],
           "page_id": 739224599
         },
         {
