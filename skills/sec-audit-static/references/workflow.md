@@ -23,9 +23,9 @@ Phase 3: LLM 수동분석 보완 (자동스캔 결과를 보완·갱신)
   └─ Task 3-5: 데이터보호 수동분석 → <prefix>_task25_final.json
       └─ 하드코딩 시크릿 Prod/테스트 판별, PII 로깅 마스킹 검증 (케이스 A/B/C)
 
-Phase 4: 보고서 생성 + Confluence 게시
-  ├─ generate_finding_report.py (마크다운 통합 보고서)
-  └─ publish_confluence.py
+Phase 4: 보고서 생성 + Confluence 게시 [필수]
+  ├─ generate_finding_report.py --anchor-style md2cf --page-map tools/confluence_page_map.json
+  └─ publish_confluence.py (dry-run 확인 후 실행)
       ├─ main_report: 진단보고서.md (task_sources로 JSON 참조, API 인벤토리 요약 포함)
       ├─ api_inventory: <prefix>_api_inventory.json  ← API별 실제 입력값(DTO 필드 전개) 상세
       ├─ finding: <prefix>_injection.json

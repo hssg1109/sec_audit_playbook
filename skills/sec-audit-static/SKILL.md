@@ -73,13 +73,16 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
   - Use LLM persona and criteria defined in `references/manual_review_prompt.md`.
   - Update result with `diagnosis_method: "수동진단(LLM)"` and `manual_review_note`.
 
-**Phase 4**: Reporting.
+**Phase 4**: Reporting + Confluence 게시 (필수).
 - Merge: `tools/scripts/merge_results.py`
 - Redact: `tools/scripts/redact.py`
 - Validate: `tools/scripts/validate_task_output.py` against `references/output_schemas.md`
-- Report: `tools/scripts/generate_finding_report.py --source-label <label>`
-  - For Confluence: `--anchor-style md2cf`
-- Publish (optional): `tools/scripts/publish_confluence.py`
+- Report: `tools/scripts/generate_finding_report.py --source-label <label> --anchor-style md2cf --page-map tools/confluence_page_map.json`
+  - `--anchor-style md2cf` 는 항상 필수 (Confluence 앵커/HTML 테이블 포맷)
+  - `--page-map` 지정 시 supplemental_sources LLM 보완 findings 자동 병합
+- Publish: `tools/scripts/publish_confluence.py` (필수 — dry-run 확인 후 실행)
+  - `confluence_page_map.json`에 해당 진단 항목이 등록되어 있어야 함
+  - `workflow.md` Phase 4 참조: main_report / api_inventory / finding / supplemental 구조
 
 ### Step 4: Output validation
 - Every task output **must** include `metadata.source_repo_url`, `metadata.source_repo_path`, `metadata.source_modules`.

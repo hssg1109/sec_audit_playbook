@@ -92,6 +92,61 @@ RISK_MAP = {
 
 ANCHOR_STYLE = "confluence"
 
+# LLM 출력 category 문자열용 추가 키워드 → item_key 매핑
+# (영문/한국어 혼용, 슬래시 구분 포맷 등 대응)
+# 검색 순서: 긴 패턴 우선 (os command > command 등)
+SUBCATEGORY_EXTRA_KEYWORDS: dict[str, list[tuple[str, str]]] = {
+    "injection": [
+        ("os command", "os_command"),
+        (" command",   "os_command"),
+        ("groovy",     "os_command"),
+        ("rce",        "os_command"),
+        ("stored rce", "os_command"),
+        ("nosql",      "nosql"),
+        ("ssti",       "ssti"),
+        ("ssi",        "ssi"),
+        ("sql",        "sql"),
+    ],
+    "xss": [
+        ("open redirect", "redirect"),
+        ("filter misconfig", "persistent"),
+        ("filter bypass",   "persistent"),
+        ("persistent",  "persistent"),
+        ("stored",      "persistent"),
+        ("reflected",   "reflected"),
+        ("dom-based",   "dom"),
+        ("dom based",   "dom"),
+        ("redirect",    "redirect"),
+    ],
+    "file_handling": [
+        ("path traversal", "path_traversal"),
+        ("경로 탐색",        "path_traversal"),
+        ("lfi",         "lfi"),
+        ("rfi",         "lfi"),
+        ("upload",      "upload"),
+        ("download",    "download"),
+    ],
+    "data_protection": [
+        ("하드코딩",      "hardcoded"),
+        ("시크릿",        "hardcoded"),
+        ("자격증명",      "hardcoded"),
+        ("hardcoded",  "hardcoded"),
+        ("secret",     "hardcoded"),
+        ("credential", "hardcoded"),
+        ("민감정보 로깅", "info_leak"),
+        ("로깅",         "info_leak"),
+        ("logging",    "info_leak"),
+        ("민감정보",     "info_leak"),
+        ("pii",        "info_leak"),
+        ("취약 암호화",  "info_leak"),
+        ("암호화",       "info_leak"),
+        ("weak crypto","info_leak"),
+        ("cors",       "cors"),
+        ("jwt",        "jwt"),
+        ("csrf",       "csrf"),
+    ],
+}
+
 
 # Task 순서 정의 (트리 + 매트릭스 공유)
 _TASK_ORDER: list[tuple[str, str, str]] = [
@@ -315,12 +370,26 @@ def load_findings(filepath: Path, source_dir: Path,
         title_lower = f.get("title", "").lower()
         cat_lower = f.get("category", "").lower()
         subcategory = ""
-        # Prefer longer keys first to avoid substring collisions (e.g., nosql vs sql)
-        for key in sorted(cat_info["items"].keys(), key=len, reverse=True):
-            name = cat_info["items"][key]
-            if key in title_lower or key in cat_lower:
-                subcategory = name
-                break
+        # 1) JSON subcategory 필드 직접 사용 (있을 때)
+        raw_sub = f.get("subcategory", "")
+        if raw_sub:
+            subcategory = raw_sub
+        # 2) CATEGORY_INFO item key 기반 매핑 (영문 키 → 표시 명칭)
+        if not subcategory:
+            for key in sorted(cat_info["items"].keys(), key=len, reverse=True):
+                name = cat_info["items"][key]
+                if key in title_lower or key in cat_lower:
+                    subcategory = name
+                    break
+        # 3) SUBCATEGORY_EXTRA_KEYWORDS 기반 매핑 (LLM 한국어/혼용 category 대응)
+        if not subcategory:
+            combined = title_lower + " " + cat_lower
+            for keyword, item_key in SUBCATEGORY_EXTRA_KEYWORDS.get(category, []):
+                if keyword in combined:
+                    subcategory = cat_info["items"].get(item_key, "")
+                    if subcategory:
+                        break
+        # 4) fallback: 첫 번째 항목
         if not subcategory:
             subcategory = list(cat_info["items"].values())[0]
 

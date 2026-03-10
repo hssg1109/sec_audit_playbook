@@ -373,14 +373,44 @@ def md_to_xhtml(md_text):
             )
         return re.sub(r'\[\[EXPAND:\d+\]\]', _replace, xhtml)
 
+    # Confluence XML namespace tags (ac:*, ri:*) must survive the markdown→XHTML
+    # pass unchanged. Extract them into a passthrough store before conversion.
+    passthrough_store: dict = {}
+    passthrough_counter = [0]
+    # Match any block-level Confluence macro tag (single-line or multi-line)
+    _ac_pattern = re.compile(r'<(?:ac:|ri:)\S[^>]*>(?:.*?</(?:ac:|ri:)\S+>)?', re.DOTALL)
+
+    def _preprocess_passthrough(text: str) -> str:
+        def _repl(m):
+            key = f"[[PASSTHROUGH:{passthrough_counter[0]}]]"
+            passthrough_counter[0] += 1
+            passthrough_store[key] = m.group(0)
+            return key
+        return _ac_pattern.sub(_repl, text)
+
+    def _postprocess_passthrough(xhtml: str) -> str:
+        def _repl(m):
+            return passthrough_store.get(m.group(0), m.group(0))
+        # After markdown conversion the token may be inside <p>…</p>; unwrap it.
+        def _repl_unwrap(m):
+            raw = passthrough_store.get(m.group(1), m.group(1))
+            return raw
+        xhtml = re.sub(r'<p>\[\[PASSTHROUGH:(\d+)\]\]</p>', _repl_unwrap, xhtml)
+        xhtml = re.sub(r'\[\[PASSTHROUGH:(\d+)\]\]',
+                       lambda m: passthrough_store.get(f"[[PASSTHROUGH:{m.group(1)}]]", m.group(0)),
+                       xhtml)
+        return xhtml
+
     md_text = _preprocess_anchors(md_text)
     md_text = _preprocess_expand_blocks(md_text, expand_store)
+    md_text = _preprocess_passthrough(md_text)
     try:
         xhtml = _md_to_xhtml_lib(md_text)
     except ImportError:
         xhtml = _md_to_xhtml_fallback(md_text)
     xhtml = _postprocess_anchors(xhtml)
     xhtml = _postprocess_expand_blocks(xhtml)
+    xhtml = _postprocess_passthrough(xhtml)
     return xhtml
 
 # ---------------------------------------------------------------------------
