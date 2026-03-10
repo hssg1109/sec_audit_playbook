@@ -401,6 +401,30 @@ def md_to_xhtml(md_text):
                        xhtml)
         return xhtml
 
+    def _postprocess_escape_foreign_ns(xhtml: str) -> str:
+        """Escape XML namespace-prefixed tags that Confluence does not recognise.
+
+        Confluence XHTML accepts only ac: and ri: namespace prefixes.
+        Tags like <c:out>, <fmt:message>, <spring:url> (JSTL/Spring) would
+        cause a 400 "Undeclared namespace prefix" error.  Escape them so they
+        render as visible text rather than XML elements.
+        """
+        # Match opening, closing, and self-closing tags with a namespace prefix
+        # that is NOT ac: or ri: (Confluence built-ins).
+        # Runs outside <code> blocks — those are already protected by CDATA or
+        # the Confluence code macro which treats content as text.
+        pattern = re.compile(
+            r'<(/?)(?!ac:|ri:|!|/?\s*>)([a-zA-Z][a-zA-Z0-9]*):([^>]*?)(/?)>',
+        )
+        def _escape_tag(m):
+            slash_open  = m.group(1)
+            ns          = m.group(2)
+            rest        = m.group(3)
+            slash_close = m.group(4)
+            raw = f"<{slash_open}{ns}:{rest}{slash_close}>"
+            return html_escape(raw)
+        return pattern.sub(_escape_tag, xhtml)
+
     md_text = _preprocess_anchors(md_text)
     md_text = _preprocess_expand_blocks(md_text, expand_store)
     md_text = _preprocess_passthrough(md_text)
@@ -411,6 +435,7 @@ def md_to_xhtml(md_text):
     xhtml = _postprocess_anchors(xhtml)
     xhtml = _postprocess_expand_blocks(xhtml)
     xhtml = _postprocess_passthrough(xhtml)
+    xhtml = _postprocess_escape_foreign_ns(xhtml)
     return xhtml
 
 # ---------------------------------------------------------------------------
@@ -2419,39 +2444,17 @@ def _json_to_xhtml_main_report(md_content: str, task_sources: dict,
                                 base_dir: str) -> str:
     """통합 보고서 렌더러 (type=main_report).
 
-    역할:
-      - 진단 대상 개요 (md 파일의 섹션 1)
-      - 종합 결과 요약  (JSON 데이터 기반 — 세부 보고서와 동일 소스)
-      - API 인벤토리   (API JSON 기반)
-      - 진단 한계      (md 파일의 섹션 8)
-      ※ 인젝션/XSS 세부 내용은 포함하지 않음 (각 Task 보고서 페이지 참조)
+    generate_finding_report.py 로 생성된 Markdown 파일을 그대로 XHTML로 변환한다.
+    (--anchor-style md2cf 포맷의 ## summary-table, HTML 인라인 테이블 포함)
+
+    이후 하위 Task 보고서 페이지 링크(children 매크로)를 추가한다.
     """
-    api_data       = _load_json_safe(task_sources.get("api", ""), base_dir)
-    injection_data = _load_json_safe(task_sources.get("injection", ""), base_dir)
-    xss_data       = _load_json_safe(task_sources.get("xss", ""), base_dir)
-    dp_data        = _load_json_safe(task_sources.get("data_protection", ""), base_dir)
+    # MD 파일 전체를 XHTML로 변환 (md2cf anchor 스타일 포함)
+    xhtml = md_to_xhtml(md_content)
 
-    parts = []
-
-    # 1. 개요·한계 섹션 (md 에서 추출)
-    overview_md = _md_strip_detail_sections(md_content)
-    if overview_md:
-        parts.append(md_to_xhtml(overview_md))
-
-    # 2. 종합 결과 요약 (JSON 기반 — 단일 소스)
-    parts.append("<h2>종합 진단 결과 요약</h2>")
-    parts.append("<p><em>아래 수치는 각 Task 세부 보고서 데이터와 동일한 소스에서 계산됩니다.</em></p>")
-    parts.append(_build_main_summary_table(injection_data, xss_data, dp_data))
-
-    # 3. API 인벤토리
-    if api_data:
-        total_ep = len(api_data.get("endpoints", []))
-        parts.append(f"<h2>API 인벤토리 — 총 {total_ep}개 엔드포인트</h2>")
-        parts.append(_build_main_api_inventory(api_data))
-
-    # 4. Task 보고서 링크 안내
-    parts.append(
-        "<h2>세부 진단 결과</h2>"
+    # 하위 Task 보고서 링크 안내 추가
+    children_macro = (
+        "<h2>세부 진단 결과 (하위 페이지)</h2>"
         "<p>인젝션·XSS 등 각 항목별 상세 내용(카테고리 분류, Call Graph, "
         "코드 증적)은 하위 Task 보고서 페이지를 참조하십시오.</p>"
         '<ac:structured-macro ac:name="children">'
@@ -2459,7 +2462,7 @@ def _json_to_xhtml_main_report(md_content: str, task_sources: dict,
         '</ac:structured-macro>'
     )
 
-    return "\n".join(parts)
+    return xhtml + "\n" + children_macro
 
 
 # ---------------------------------------------------------------------------
