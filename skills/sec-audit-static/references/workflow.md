@@ -16,11 +16,21 @@ Phase 2: 정적 분석 (자동스캔)
 
 Phase 3: LLM 수동분석 보완 (자동스캔 결과를 보완·갱신)
   ├─ Task 3-2: 인젝션 수동분석    → <prefix>_task22_llm.json
-  │   └─ 자동스캔 "정보/needs_review" 판정 확정, 전역 패턴(OS Command/GroovyShell 등) 판정
+  │   ├─ [필수] 자동스캔 "정보/needs_review" endpoint 전수 판정
+  │   │   ├─ diagnosis_type 그룹별 외부 서비스/DAO 소스 직접 확인
+  │   │   ├─ MyBatis/iBatis XML 전수 스캔: ${} 위험패턴 여부
+  │   │   └─ 판정 결과 → sqli_endpoint_review 블록 저장
+  │   └─ 전역 패턴(OS Command/GroovyShell 등) 판정
   ├─ Task 3-3: XSS 수동분석       → <prefix>_task23_llm.json
-  │   └─ 전역 XSS 필터 취약점, View XSS 심층 확인
-  ├─ Task 3-4: 파일처리 수동분석  → <prefix>_task24_llm.json (해당 시)
-  └─ Task 3-5: 데이터보호 수동분석 → <prefix>_task25_final.json
+  │   ├─ [필수] 자동스캔 "정보" endpoint 전수 판정
+  │   │   ├─ 잠재적위협(Persistent): controller_type 확인 → REST_JSON이면 양호, 전역필터 finding 커버 확인
+  │   │   ├─ 수동확인필요(HTML_VIEW 미탐지): 실제 반환타입 확인 (Protobuf/JSON=양호, JSP render=JSP 이스케이핑 확인)
+  │   │   ├─ 수동확인필요(Reflected text/html): 파라미터→JSP 출력 taint 추적, escapeHtml 적용 여부
+  │   │   └─ 판정 결과 → xss_endpoint_review 블록 저장
+  │   └─ 전역 XSS 필터 취약점 finding 생성
+  ├─ Task 3-4: 파일처리 수동분석  → <prefix>_task24_llm.json
+  │   └─ needs_review 항목 IDOR/우회기법/무해화/LFI 심층 확인
+  └─ Task 3-5: 데이터보호 수동분석 → <prefix>_task25_llm.json
       └─ 하드코딩 시크릿 Prod/테스트 판별, PII 로깅 마스킹 검증 (케이스 A/B/C)
 
 Phase 4: 보고서 생성 + Confluence 게시 [필수]
@@ -32,7 +42,10 @@ Phase 4: 보고서 생성 + Confluence 게시 [필수]
       │   └─ supplemental_sources: [<prefix>_task22_llm.json]  ← 한 페이지로 통합
       ├─ finding: <prefix>_xss.json
       │   └─ supplemental_sources: [<prefix>_task23_llm.json]  ← 한 페이지로 통합
-      └─ finding: <prefix>_task25_final.json
+      ├─ finding: <prefix>_task24.json
+      │   └─ supplemental_sources: [<prefix>_task24_llm.json]  ← 한 페이지로 통합
+      └─ finding: <prefix>_task25.json
+          └─ supplemental_sources: [<prefix>_task25_llm.json]  ← 한 페이지로 통합
 ```
 
 ### 단일 finding 페이지 원칙
@@ -93,8 +106,11 @@ python3 tools/scripts/scan_data_protection.py <source_dir> \
 입력: <prefix>_xss.json (자동스캔)
 출력: <prefix>_task23_llm.json  ← supplemental (별도 finding 페이지 X)
 
+입력: <prefix>_task24.json (자동스캔)
+출력: <prefix>_task24_llm.json  ← supplemental (별도 finding 페이지 X)
+
 입력: <prefix>_task25.json (자동스캔)
-출력: <prefix>_task25_final.json  ← 데이터 보호는 단일 finding 페이지
+출력: <prefix>_task25_llm.json  ← supplemental (별도 finding 페이지 X)
 ```
 
 각 task의 상세 분석 기준:
@@ -118,7 +134,8 @@ python3 tools/scripts/scan_data_protection.py <source_dir> \
         "api": "state/<prefix>_api_inventory.json",
         "injection": "state/<prefix>_injection.json",
         "xss": "state/<prefix>_xss.json",
-        "data_protection": "state/<prefix>_task25_final.json"
+        "file_handling": "state/<prefix>_task24.json",
+        "data_protection": "state/<prefix>_task25.json"
       }
     },
     {
@@ -139,7 +156,14 @@ python3 tools/scripts/scan_data_protection.py <source_dir> \
       "type": "finding"
     },
     {
-      "source": "state/<prefix>_task25_final.json",
+      "source": "state/<prefix>_task24.json",
+      "supplemental_sources": ["state/<prefix>_task24_llm.json"],
+      "title": "테스트NN - 파일 처리 진단 결과",
+      "type": "finding"
+    },
+    {
+      "source": "state/<prefix>_task25.json",
+      "supplemental_sources": ["state/<prefix>_task25_llm.json"],
       "title": "테스트NN - 데이터 보호 진단 결과",
       "type": "finding"
     }

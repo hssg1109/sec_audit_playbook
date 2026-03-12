@@ -425,6 +425,26 @@ def md_to_xhtml(md_text):
             return html_escape(raw)
         return pattern.sub(_escape_tag, xhtml)
 
+    def _postprocess_anchor_links(xhtml: str) -> str:
+        """Convert raw <a href="#anchor-name">text</a> fragment links to
+        Confluence ac:link anchor macros so in-page scroll navigation works.
+
+        Confluence does not honour raw HTML href="#..." for anchors defined
+        via ac:anchor macros.  The proper storage-format equivalent is:
+          <ac:link ac:anchor="name">
+            <ac:plain-text-link-body><![CDATA[text]]></ac:plain-text-link-body>
+          </ac:link>
+        """
+        def repl(m):
+            anchor = html_escape(m.group(1))
+            text = m.group(2)
+            return (
+                f'<ac:link ac:anchor="{anchor}">'
+                f'<ac:plain-text-link-body><![CDATA[{text}]]></ac:plain-text-link-body>'
+                f'</ac:link>'
+            )
+        return re.sub(r'<a\b[^>]*\shref="#([^"]+)"[^>]*>([^<]*)</a>', repl, xhtml)
+
     md_text = _preprocess_anchors(md_text)
     md_text = _preprocess_expand_blocks(md_text, expand_store)
     md_text = _preprocess_passthrough(md_text)
@@ -436,6 +456,7 @@ def md_to_xhtml(md_text):
     xhtml = _postprocess_expand_blocks(xhtml)
     xhtml = _postprocess_passthrough(xhtml)
     xhtml = _postprocess_escape_foreign_ns(xhtml)
+    xhtml = _postprocess_anchor_links(xhtml)
     return xhtml
 
 # ---------------------------------------------------------------------------
@@ -1036,95 +1057,231 @@ def _json_to_xhtml_vuln(data):
     return "\n".join(parts)
 
 
+def _render_sqli_endpoint_review(review: dict) -> str:
+    """sqli_endpoint_review 블록을 XHTML 섹션으로 렌더링."""
+    parts = []
+    total = review.get("total_info_endpoints", 0)
+    overall = review.get("overall_sqli_judgment", "")
+    rationale = review.get("rationale", "")
+    reviewed_at = review.get("reviewed_at", "")
+
+    overall_color = "green" if overall == "양호" else ("red" if overall == "취약" else "orange")
+    parts.append(
+        f'<h2>🔍 LLM 수동분석 — SQL 인젝션 정보 엔드포인트 검토 결과</h2>'
+        f'<p>검토 엔드포인트: <strong>{total}건</strong> | '
+        f'전체 판정: <strong style="color:{overall_color}">{html_escape(overall)}</strong>'
+        + (f' | 검토일: {html_escape(reviewed_at[:10])}' if reviewed_at else '') + '</p>'
+    )
+    if rationale:
+        parts.append(
+            '<ac:structured-macro ac:name="note"><ac:rich-text-body>'
+            f'<p><strong>판정 근거:</strong> {html_escape(rationale)}</p>'
+            '</ac:rich-text-body></ac:structured-macro>'
+        )
+
+    for gj in review.get("group_judgments", []):
+        group_name = gj.get("group", "")
+        judgment = gj.get("judgment", "")
+        j_color = "green" if judgment == "양호" else ("red" if judgment == "취약" else "orange")
+        parts.append(
+            f'<h3>{html_escape(group_name)} — '
+            f'<span style="color:{j_color}">{html_escape(judgment)}</span></h3>'
+        )
+
+        # services_reviewed (외부의존성 그룹)
+        svc_rows = []
+        for s in gj.get("services_reviewed", []):
+            r = s.get("result", "")
+            rc = "green" if r == "양호" else ("red" if r == "취약" else "orange")
+            svc_rows.append([
+                html_escape(s.get("service", "")),
+                html_escape(s.get("dao", "")),
+                html_escape(s.get("finding", "")),
+                f'<span style="color:{rc}"><strong>{html_escape(r)}</strong></span>',
+            ])
+        if svc_rows:
+            parts.append(_table(["서비스", "DAO / 매퍼", "검토 근거", "판정"], svc_rows))
+
+        # daos_reviewed (XML 미발견 그룹)
+        dao_rows = []
+        for d in gj.get("daos_reviewed", []):
+            r = d.get("result", "")
+            rc = "green" if r == "양호" else ("red" if r == "취약" else "orange")
+            dao_rows.append([
+                html_escape(d.get("dao", "")),
+                html_escape(d.get("xml", "")),
+                html_escape(d.get("finding", "")),
+                f'<span style="color:{rc}"><strong>{html_escape(r)}</strong></span>',
+            ])
+        if dao_rows:
+            parts.append(_table(["DAO", "XML 매퍼", "검토 근거", "판정"], dao_rows))
+
+    return "\n".join(parts)
+
+
+def _render_xss_endpoint_review(review: dict) -> str:
+    """xss_endpoint_review 블록을 XHTML 섹션으로 렌더링."""
+    parts = []
+    total = review.get("total_info_endpoints", 0)
+    overall = review.get("overall_xss_info_judgment", "")
+    reviewed_at = review.get("reviewed_at", "")
+
+    overall_color = "green" if "양호" in overall else ("red" if "취약" in overall else "orange")
+    parts.append(
+        f'<h2>🔍 LLM 수동분석 — XSS 정보 엔드포인트 검토 결과</h2>'
+        f'<p>검토 엔드포인트: <strong>{total}건</strong> | '
+        f'전체 판정: <strong style="color:{overall_color}">{html_escape(overall)}</strong>'
+        + (f' | 검토일: {html_escape(reviewed_at[:10])}' if reviewed_at else '') + '</p>'
+    )
+
+    for gj in review.get("group_judgments", []):
+        group_name = gj.get("group", "")
+        judgment = gj.get("judgment", "")
+        j_color = "green" if judgment == "양호" else ("red" if judgment == "취약" else "orange")
+        rationale = gj.get("rationale", "")
+        parts.append(
+            f'<h3>{html_escape(group_name)} — '
+            f'<span style="color:{j_color}">{html_escape(judgment)}</span></h3>'
+        )
+        if rationale:
+            parts.append(f'<p>{html_escape(rationale)}</p>')
+
+        # controllers_reviewed (HTML_VIEW 미탐지 그룹)
+        ctrl_rows = []
+        for c in gj.get("controllers_reviewed", []):
+            r = c.get("result", "")
+            rc = "green" if r == "양호" else ("red" if r == "취약" else "orange")
+            ctrl_rows.append([
+                html_escape(c.get("controller", "")),
+                html_escape(c.get("return_type", "")),
+                html_escape(c.get("finding", "")),
+                f'<span style="color:{rc}"><strong>{html_escape(r)}</strong></span>',
+            ])
+        if ctrl_rows:
+            parts.append(_table(["컨트롤러", "반환 타입", "검토 근거", "판정"], ctrl_rows))
+
+        # endpoints_reviewed (Reflected XSS 그룹)
+        ep_rows = []
+        for e in gj.get("endpoints_reviewed", []):
+            r = e.get("result", "")
+            rc = "green" if r == "양호" else ("red" if r == "취약" else "orange")
+            ep_rows.append([
+                html_escape(e.get("endpoint", "")),
+                html_escape(e.get("finding", "")),
+                f'<span style="color:{rc}"><strong>{html_escape(r)}</strong></span>',
+            ])
+        if ep_rows:
+            parts.append(_table(["엔드포인트", "검토 근거", "판정"], ep_rows))
+
+    return "\n".join(parts)
+
+
 def _json_to_xhtml_supp_findings(data: dict) -> str:
     """LLM 수동분석 보완 JSON(findings 배열)을 자동스캔 finding 페이지에 통합하는
     섹션 렌더러. 자동스캔 XHTML 끝에 추가된다.
 
     - 섹션 제목: '🔍 LLM 수동분석 보완 (Phase 3)'
     - finding 카드: id / severity / description / evidence / recommendation
-    - 비-finding 보조 데이터(endpoint_summary, scan_scanner_findings 등)는 요약만 표시
+    - sqli_endpoint_review / xss_endpoint_review: LLM 정보 엔드포인트 검토 결과 테이블
     """
     findings = data.get("findings", [])
-    if not findings:
+    sqli_review = data.get("sqli_endpoint_review")
+    xss_review = data.get("xss_endpoint_review")
+
+    if not findings and not sqli_review and not xss_review:
         return ""
 
     task_id = data.get("task_id", "")
-    parts = [
-        '<ac:structured-macro ac:name="info">'
-        '<ac:rich-text-body>'
-        '<p><strong>🔍 LLM 수동분석 보완 (Phase 3)</strong> — '
-        f'자동스캔 이후 수동 심층진단으로 확정된 취약점 {len(findings)}건입니다. '
-        '아래 항목은 자동스캔 결과를 보완하며, 위 스캔 결과와 함께 최종 판정으로 간주합니다.</p>'
-        '</ac:rich-text-body></ac:structured-macro>'
-    ]
+    parts = []
 
-    # 심각도 요약 테이블
-    sev_count = {}
-    for f in findings:
-        sev = f.get("severity", "Unknown")
-        sev_count[sev] = sev_count.get(sev, 0) + 1
-    if sev_count:
-        s_rows = [[_severity_badge(sev), str(cnt)]
-                  for sev in ["Critical", "High", "Medium", "Low", "Info"]
-                  if (cnt := sev_count.get(sev, 0))]
-        parts.append(_table(["심각도", "건수"], s_rows))
-
-    for f in findings:
-        sev  = f.get("severity", "")
-        fid  = html_escape(str(f.get("id", "")))
-        title = html_escape(str(f.get("title", "")))
-        result = f.get("result", "")
-        result_badge = (
-            "<strong style='color:red'>취약</strong>" if result == "취약"
-            else f"<strong style='color:orange'>{html_escape(result)}</strong>"
-            if result else ""
+    if findings:
+        parts.append(
+            '<ac:structured-macro ac:name="info">'
+            '<ac:rich-text-body>'
+            '<p><strong>🔍 LLM 수동분석 보완 (Phase 3)</strong> — '
+            f'자동스캔 이후 수동 심층진단으로 확정된 취약점 {len(findings)}건입니다. '
+            '아래 항목은 자동스캔 결과를 보완하며, 위 스캔 결과와 함께 최종 판정으로 간주합니다.</p>'
+            '</ac:rich-text-body></ac:structured-macro>'
         )
-        parts.append(f"<h3>{fid} — {title} {_severity_badge(sev)}"
-                     + (f" [{result_badge}]" if result_badge else "") + "</h3>")
 
-        cat = f.get("category", "")
-        if cat:
-            parts.append(f"<p><strong>카테고리:</strong> {html_escape(cat)}</p>")
-        desc = f.get("description", "")
-        if desc:
-            parts.append(f"<p><strong>설명:</strong> {html_escape(desc)}</p>")
+        # 심각도 요약 테이블
+        sev_count: dict[str, int] = {}
+        for f in findings:
+            sev = f.get("severity", "Unknown")
+            sev_count[sev] = sev_count.get(sev, 0) + 1
+        if sev_count:
+            s_rows = [[_severity_badge(sev), str(cnt)]
+                      for sev in ["Critical", "High", "Medium", "Low", "Info"]
+                      if (cnt := sev_count.get(sev, 0))]
+            parts.append(_table(["심각도", "건수"], s_rows))
 
-        affected = f.get("affected_endpoint", "")
-        if affected:
-            parts.append(f"<p><strong>영향 범위:</strong> {html_escape(affected)}</p>")
-
-        evidence = f.get("evidence", {})
-        if evidence:
-            efile  = html_escape(str(evidence.get("file", "")))
-            elines = html_escape(str(evidence.get("lines", "")))
-            if efile:
-                parts.append(f"<p><strong>증거:</strong> <code>{efile}:{elines}</code></p>")
-            snippet = evidence.get("code_snippet", "")
-            if snippet:
-                lang = "java" if efile.endswith((".java", ".kt", ".xml")) else "text"
-                parts.append(_code_macro(snippet, lang))
-
-        note = f.get("manual_review_note", "")
-        if note:
-            parts.append(
-                '<ac:structured-macro ac:name="note">'
-                f'<ac:rich-text-body><p><strong>수동 검토 메모:</strong> '
-                f'{html_escape(note)}</p></ac:rich-text-body></ac:structured-macro>'
+        for f in findings:
+            sev  = f.get("severity", "")
+            fid  = html_escape(str(f.get("id", "")))
+            title = html_escape(str(f.get("title", "")))
+            result = f.get("result", "")
+            result_badge = (
+                "<strong style='color:red'>취약</strong>" if result == "취약"
+                else f"<strong style='color:orange'>{html_escape(result)}</strong>"
+                if result else ""
             )
+            parts.append(f"<h3>{fid} — {title} {_severity_badge(sev)}"
+                         + (f" [{result_badge}]" if result_badge else "") + "</h3>")
 
-        cwe   = f.get("cwe_id", "")
-        owasp = f.get("owasp_category", "")
-        if cwe or owasp:
-            parts.append(f"<p><strong>CWE:</strong> {html_escape(cwe)} | "
-                         f"<strong>OWASP:</strong> {html_escape(owasp)}</p>")
+            cat = f.get("category", "")
+            if cat:
+                parts.append(f"<p><strong>카테고리:</strong> {html_escape(cat)}</p>")
+            desc = f.get("description", "")
+            if desc:
+                parts.append(f"<p><strong>설명:</strong> {html_escape(desc)}</p>")
 
-        rec = f.get("recommendation", "")
-        if rec:
-            parts.append(
-                '<ac:structured-macro ac:name="info">'
-                f'<ac:rich-text-body><p><strong>권고사항:</strong> '
-                f'{html_escape(rec)}</p></ac:rich-text-body></ac:structured-macro>'
-            )
+            affected = f.get("affected_endpoint", "")
+            if affected:
+                parts.append(f"<p><strong>영향 범위:</strong> {html_escape(affected)}</p>")
+
+            evidence = f.get("evidence", {})
+            if evidence:
+                if isinstance(evidence, list):
+                    # list 형태 evidence: 텍스트 줄 목록
+                    ev_text = "\n".join(str(e) for e in evidence)
+                    parts.append(_code_macro(ev_text, "text"))
+                else:
+                    efile  = html_escape(str(evidence.get("file", "")))
+                    elines = html_escape(str(evidence.get("lines", "")))
+                    if efile:
+                        parts.append(f"<p><strong>증거:</strong> <code>{efile}:{elines}</code></p>")
+                    snippet = evidence.get("code_snippet", "")
+                    if snippet:
+                        lang = "java" if efile.endswith((".java", ".kt", ".xml")) else "text"
+                        parts.append(_code_macro(snippet, lang))
+
+            note = f.get("manual_review_note", "")
+            if note:
+                parts.append(
+                    '<ac:structured-macro ac:name="note">'
+                    f'<ac:rich-text-body><p><strong>수동 검토 메모:</strong> '
+                    f'{html_escape(note)}</p></ac:rich-text-body></ac:structured-macro>'
+                )
+
+            cwe   = f.get("cwe_id", "")
+            owasp = f.get("owasp_category", "")
+            if cwe or owasp:
+                parts.append(f"<p><strong>CWE:</strong> {html_escape(cwe)} | "
+                             f"<strong>OWASP:</strong> {html_escape(owasp)}</p>")
+
+            rec = f.get("recommendation", "")
+            if rec:
+                parts.append(
+                    '<ac:structured-macro ac:name="info">'
+                    f'<ac:rich-text-body><p><strong>권고사항:</strong> '
+                    f'{html_escape(rec)}</p></ac:rich-text-body></ac:structured-macro>'
+                )
+
+    # LLM 정보 엔드포인트 검토 결과 섹션
+    if sqli_review:
+        parts.append(_render_sqli_endpoint_review(sqli_review))
+    if xss_review:
+        parts.append(_render_xss_endpoint_review(xss_review))
 
     return "\n".join(parts)
 
@@ -1347,7 +1504,7 @@ def _llm_alert_box(llm_findings: list, match_keywords: list) -> str:
     )
 
 
-def _json_to_xhtml_enhanced_injection(data, llm_findings=None):
+def _json_to_xhtml_enhanced_injection(data, llm_findings=None, llm_supp=None):
     """Convert scan_injection_enhanced.py output to developer-friendly XHTML.
 
     Structure:
@@ -1381,35 +1538,79 @@ def _json_to_xhtml_enhanced_injection(data, llm_findings=None):
     info_n = sqli.get("정보", 0)
     safe_n = sqli.get("양호", 0)
 
-    parts.append("<h3>진단 요약</h3>")
-    sum_rows = [
-        ["총 분석 엔드포인트", f"<strong>{total}</strong>건"],
-        [
-            f'{_severity_badge("High").replace("High", "취약")} SQL Injection',
-            f"<strong>{vuln_n}</strong>건"
-        ],
-        [
-            f'{_severity_badge("Medium").replace("Medium", "정보")} 수동 검토 필요',
-            f"<strong>{info_n}</strong>건"
-        ],
-        [
-            f'{_severity_badge("Info").replace("Info", "양호")} 안전',
-            f"<strong>{safe_n}</strong>건"
-        ],
-        ["OS Command Injection", f"{os_cmd.get('total', 0)}건 (하단 참조)"],
-    ]
-    # SSI Injection — global_findings에서 실제 건수 반영
+    # SSI 건수 (이후 테이블에서 재사용)
     ssi_total = 0
     gf = data.get("global_findings", {})
     if isinstance(gf, dict):
         ssi_total = gf.get("ssi_injection", {}).get("total", 0)
-    if ssi_total:
-        sum_rows.append(["SSI / SpEL Injection", f"<strong style='color:orange'>{ssi_total}건 ⚠️ (하단 참조)</strong>"])
-    else:
-        sum_rows.append(["SSI / SpEL Injection", "0건"])
-    parts.append(_table(["항목", "결과"], sum_rows))
 
-    # LLM 수동분석 보완 — 판정 갱신 alert box (summary 바로 아래)
+    # ── (1) 자동 분석 결과 ──────────────────────────────────────
+    parts.append("<h3>(1) 자동 분석 결과</h3>")
+    auto_rows = [
+        [
+            "SQL 인젝션",
+            f"<strong style='color:green'>{safe_n}</strong>건" if safe_n else "0건",
+            f"<strong style='color:orange'>{info_n}</strong>건" if info_n else "0건",
+            f"<strong style='color:red'>{vuln_n}</strong>건" if vuln_n else "0건",
+        ],
+        [
+            "OS Command 인젝션",
+            "0건",
+            f"<strong style='color:orange'>{os_cmd.get('total', 0)}</strong>건" if os_cmd.get('total', 0) else "0건",
+            "0건",
+        ],
+        [
+            "SSI/SSTI 인젝션",
+            "1건 (스캔 완료)" if ssi_total == 0 else "0건",
+            f"<strong style='color:orange'>{ssi_total}</strong>건" if ssi_total else "0건",
+            "0건",
+        ],
+    ]
+    parts.append(_table(["진단 항목", "🟢 양호", "🟡 정보 (수동검토)", "🔴 취약"], auto_rows))
+
+    # ── (2) LLM 수동 검토 최종 결과 ────────────────────────────
+    if llm_supp:
+        sqli_rev = llm_supp.get("sqli_endpoint_review", {})
+        sqli_overall = sqli_rev.get("overall_sqli_judgment", "")
+        if sqli_overall == "양호":
+            llm_sql_safe = safe_n + info_n
+            llm_sql_info = 0
+            llm_sql_vuln = vuln_n
+        else:
+            llm_sql_safe = safe_n
+            llm_sql_info = info_n
+            llm_sql_vuln = vuln_n
+
+        gfa = llm_supp.get("global_findings_analysis", {})
+        os_entries = gfa.get("os_command", []) if isinstance(gfa.get("os_command"), list) else []
+        llm_os_safe = sum(1 for e in os_entries if "양호" in str(e.get("judgment", "")))
+        llm_os_info = sum(1 for e in os_entries if str(e.get("judgment", "")).startswith("정보"))
+        llm_os_vuln = sum(1 for e in os_entries if str(e.get("judgment", "")).startswith("취약"))
+
+        llm_rows = [
+            [
+                "SQL 인젝션",
+                f"<strong style='color:green'>{llm_sql_safe}</strong>건" if llm_sql_safe else "0건",
+                f"<strong style='color:orange'>{llm_sql_info}</strong>건" if llm_sql_info else "0건",
+                f"<strong style='color:red'>{llm_sql_vuln}</strong>건" if llm_sql_vuln else "0건",
+            ],
+            [
+                "OS Command 인젝션",
+                f"<strong style='color:green'>{llm_os_safe}</strong>건" if llm_os_safe else "0건",
+                f"<strong style='color:orange'>{llm_os_info}</strong>건" if llm_os_info else "0건",
+                f"<strong style='color:red'>{llm_os_vuln}</strong>건" if llm_os_vuln else "0건",
+            ],
+            [
+                "SSI/SSTI 인젝션",
+                "1건 (스캔 완료)" if ssi_total == 0 else "0건",
+                f"<strong style='color:orange'>{ssi_total}</strong>건" if ssi_total else "0건",
+                "0건",
+            ],
+        ]
+        parts.append("<h3>(2) LLM 수동 검토 최종 결과</h3>")
+        parts.append(_table(["진단 항목", "🟢 양호 (확정)", "🟡 정보", "🔴 취약"], llm_rows))
+
+    # LLM 수동분석 보완 — 판정 갱신 alert box
     if llm_findings:
         alert = _llm_alert_box(
             llm_findings,
@@ -1652,7 +1853,7 @@ def _render_xss_ep_detail(ep: dict) -> str:
     return "".join(parts)
 
 
-def _json_to_xhtml_enhanced_xss(data, llm_findings=None):
+def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
     """Convert scan_xss.py output (v1.1+) to developer-friendly XHTML.
 
     Structure — XSS 유형별(per-type) 섹션:
@@ -1684,64 +1885,156 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None):
     per_type   = summary.get("per_type", {})
     diagnoses  = data.get("endpoint_diagnoses", [])
 
-    parts.append("<h3>진단 요약</h3>")
-    # 전체 카운트
-    sum_rows = [
-        ["총 분석 엔드포인트", f"<strong>{total_ep}</strong>건"],
-        [
-            f'{_severity_badge("High").replace("High", "취약")} XSS 취약',
-            f"<strong>{xss_counts.get('취약', 0)}</strong>건",
-        ],
-        [
-            f'{_severity_badge("Medium").replace("Medium", "정보")} 수동 검토 필요',
-            f"<strong>{xss_counts.get('정보', 0)}</strong>건",
-        ],
-        [
-            f'{_severity_badge("Info").replace("Info", "양호")} 안전',
-            f"<strong>{xss_counts.get('양호', 0)}</strong>건",
-        ],
-    ]
-    parts.append(_table(["항목", "결과"], sum_rows))
-
-    # per-type 유형별 요약 테이블
-    _type_labels = [
-        ("reflected_xss",  "Reflected XSS"),
-        ("persistent_xss", "Persistent XSS"),
-        ("redirect_xss",   "Redirect (Open Redirect)"),
-        ("view_xss",       "View XSS (Server Template)"),
-        ("dom_xss",        "DOM XSS (전역 스캔)"),
-    ]
-    dom_scan   = meta.get("dom_xss_scan", {}) if meta else {}
-    dom_total  = len(dom_scan.get("findings", [])) if isinstance(dom_scan, dict) else 0
-    dom_files  = dom_scan.get("js_files_scanned", dom_scan.get("total_files_scanned", 0)) \
+    dom_scan  = meta.get("dom_xss_scan", {}) if meta else {}
+    dom_total = len(dom_scan.get("findings", [])) if isinstance(dom_scan, dict) else 0
+    dom_files = dom_scan.get("js_files_scanned", dom_scan.get("total_files_scanned", 0)) \
         if isinstance(dom_scan, dict) else 0
 
-    type_summary_rows = []
-    for tkey, tlabel in _type_labels:
-        if tkey == "dom_xss":
-            if dom_total:
-                status = f"<strong style='color:red'>취약 {dom_total}건</strong>"
-            else:
-                status = f"양호 (스캔 {dom_files}파일, 패턴 미발견)"
-            type_summary_rows.append([tlabel, status, f"{dom_total}건", "0건"])
-        else:
-            td = per_type.get(tkey, {})
-            if isinstance(td, str):
-                type_summary_rows.append([tlabel, "전역 스캔 참조", "-", "-"])
-                continue
-            vuln_n = td.get("취약", 0)
-            good_n = td.get("양호", 0)
-            na_n   = td.get("해당없음", 0)
-            if vuln_n:
-                status = f"<strong style='color:red'>취약 {vuln_n}건</strong>"
-            elif good_n:
-                status = f"양호 {good_n}건" + (f" / 해당없음 {na_n}건" if na_n else "")
-            else:
-                status = f"해당없음 {na_n}건"
-            type_summary_rows.append([tlabel, status, f"{vuln_n}건", f"{td.get('정보', 0)}건"])
-    parts.append(_table(["XSS 유형", "판정", "취약", "정보"], type_summary_rows))
+    def _pt_row(tkey: str, tlabel: str) -> list:
+        td = per_type.get(tkey, {})
+        if not isinstance(td, dict):
+            return [tlabel, "0건", "0건", "0건"]
+        s = td.get("양호", 0) + td.get("해당없음", 0)
+        i = td.get("정보", 0)
+        v = td.get("취약", 0)
+        return [
+            tlabel,
+            f"<strong style='color:green'>{s}</strong>건" if s else "0건",
+            f"<strong style='color:orange'>{i}</strong>건" if i else "0건",
+            f"<strong style='color:red'>{v}</strong>건" if v else "0건",
+        ]
 
-    # LLM 수동분석 보완 — 판정 갱신 alert box (summary 바로 아래)
+    # ── (1) 자동 분석 결과 ──────────────────────────────────────
+    parts.append("<h3>(1) 자동 분석 결과</h3>")
+    auto_rows = [
+        _pt_row("reflected_xss",  "Reflected XSS"),
+        _pt_row("persistent_xss", "Persistent XSS"),
+        _pt_row("redirect_xss",   "Open Redirect"),
+        _pt_row("view_xss",       "View XSS"),
+        [
+            "DOM-based XSS",
+            f"양호 (스캔 {dom_files}파일)" if not dom_total else "0건",
+            "0건",
+            f"<strong style='color:red'>{dom_total}</strong>건" if dom_total else "0건",
+        ],
+    ]
+    parts.append(_table(["진단 항목", "🟢 양호", "🟡 정보 (수동검토)", "🔴 취약"], auto_rows))
+
+    # ── (2) LLM 수동 검토 최종 결과 ────────────────────────────
+    if llm_supp:
+        xss_rev = llm_supp.get("xss_endpoint_review", {})
+        # group_judgments 인덱싱
+        xss_gj_map: dict[str, dict] = {}
+        for gj in xss_rev.get("group_judgments", []):
+            gname = gj.get("group", "")
+            if "잠재적위협" in gname:
+                xss_gj_map["persistent"] = gj
+            elif "HTML_VIEW" in gname or "HTML_view" in gname.lower():
+                xss_gj_map["view"] = gj
+            elif "Reflected" in gname or "text/html" in gname:
+                xss_gj_map["reflected_manual"] = gj
+
+        def _llm_pt_row(tkey: str, tlabel: str, gj_key: str) -> list:
+            gj = xss_gj_map.get(gj_key, {})
+            td = per_type.get(tkey, {}) if isinstance(per_type.get(tkey), dict) else {}
+            auto_s = td.get("양호", 0) + td.get("해당없음", 0)
+            auto_i = td.get("정보", 0)
+            auto_v = td.get("취약", 0)
+            if not gj:
+                s, i, v = auto_s, auto_i, auto_v
+            else:
+                eps = gj.get("endpoints_reviewed", []) + gj.get("controllers_reviewed", [])
+                judgment = gj.get("judgment", "")
+                if eps and gj_key == "view" and judgment == "양호":
+                    # View XSS: 컨트롤러 수준 양호 확인 → auto_i(정보 EP) 모두 양호로 처리
+                    # (controllers_reviewed 수 ≠ endpoint 수이므로 auto_i를 safe에 포함)
+                    s = auto_s + auto_i
+                    i = 0
+                    v = auto_v
+                elif eps:
+                    s = sum(1 for e in eps if e.get("result") == "양호") + auto_s
+                    i = sum(1 for e in eps if e.get("result") == "정보")
+                    v = sum(1 for e in eps if e.get("result") == "취약") + auto_v
+                elif judgment == "양호":
+                    s = auto_s + auto_i
+                    i = 0
+                    v = auto_v
+                else:
+                    s, i, v = auto_s, auto_i, auto_v
+            return [
+                tlabel,
+                f"<strong style='color:green'>{s}</strong>건" if s else "0건",
+                f"<strong style='color:orange'>{i}</strong>건" if i else "0건",
+                f"<strong style='color:red'>{v}</strong>건" if v else "0건",
+            ]
+
+        # XSS 전역 필터 결함 건수 집계
+        filter_findings = [f for f in (llm_findings or [])
+                           if "filter" in f.get("category", "").lower()]
+        filter_vuln = sum(1 for f in filter_findings if f.get("result") == "취약")
+        filter_info = sum(1 for f in filter_findings if f.get("result") == "정보")
+        filter_safe = sum(1 for f in filter_findings if f.get("result") == "양호")
+
+        llm_rows = [
+            [
+                "XSS 전역 필터 보안성",
+                f"<strong style='color:green'>{filter_safe}</strong>건" if filter_safe else "0건",
+                f"<strong style='color:orange'>{filter_info}</strong>건" if filter_info else "0건",
+                f"<strong style='color:red'>{filter_vuln}</strong>건" if filter_vuln else "0건",
+            ],
+            _llm_pt_row("persistent_xss", "Persistent XSS", "persistent"),
+            _llm_pt_row("view_xss",       "View XSS",       "view"),
+            _llm_pt_row("reflected_xss",  "Reflected XSS",  "reflected_manual"),
+            _pt_row("redirect_xss", "Open Redirect"),
+            [
+                "DOM-based XSS",
+                f"양호 (스캔 {dom_files}파일)" if not dom_total else "0건",
+                "0건",
+                f"<strong style='color:red'>{dom_total}</strong>건" if dom_total else "0건",
+            ],
+        ]
+        parts.append("<h3>(2) LLM 수동 검토 최종 결과</h3>")
+        parts.append(_table(["진단 항목", "🟢 양호 (확정)", "🟡 정보", "🔴 취약"], llm_rows))
+
+        # XSS 전역 필터 보안성 — 상세 섹션
+        if filter_findings:
+            parts.append("<h3>🔴 XSS 전역 필터 보안성</h3>")
+            parts.append(
+                "<p>전역 XSS 필터 설정 및 구현 결함. 모든 API 엔드포인트의 XSS 방어에 영향.</p>"
+            )
+            for f in filter_findings:
+                fid    = html_escape(str(f.get("id", "")))
+                title  = html_escape(str(f.get("title", "")))
+                result = f.get("result", "")
+                sev    = f.get("severity", "")
+                desc   = html_escape(str(f.get("description", "")))
+                rec    = html_escape(str(f.get("recommendation", "")))
+                color  = "red" if result == "취약" else ("darkorange" if result == "정보" else "green")
+                parts.append(
+                    f"<h4>{_severity_badge(sev)} [{fid}] {title} "
+                    f"<span style='color:{color}'>({result})</span></h4>"
+                )
+                if desc:
+                    parts.append(f"<p>{desc}</p>")
+                # code evidence
+                ev = f.get("evidence", {})
+                if isinstance(ev, dict):
+                    snippet = ev.get("code_snippet", "")
+                    efile   = ev.get("file", "")
+                    eline   = ev.get("line", "")
+                    if efile:
+                        parts.append(f"<p><strong>위치:</strong> <code>{html_escape(str(efile))}"
+                                     + (f":{eline}" if eline else "") + "</code></p>")
+                    if snippet:
+                        parts.append(_confluence_code_block(snippet, "java"))
+                if rec:
+                    parts.append(
+                        f'<ac:structured-macro ac:name="tip">'
+                        f'<ac:rich-text-body><p><strong>권고:</strong> {rec}</p></ac:rich-text-body>'
+                        f'</ac:structured-macro>'
+                    )
+
+    # LLM 수동분석 보완 — 판정 갱신 alert box
     if llm_findings:
         alert = _llm_alert_box(
             llm_findings,
@@ -2087,13 +2380,14 @@ def _json_to_xhtml_final(data):
     return "\n".join(parts)
 
 
-def json_to_xhtml(data, json_type, source_path="", llm_findings=None):
+def json_to_xhtml(data, json_type, source_path="", llm_findings=None, llm_supp=None):
     """Route JSON data to the appropriate XHTML renderer based on type.
 
     json_type is one of: "finding", "final_report", "api_inventory"
     source_path helps disambiguate finding sub-types.
     llm_findings: LLM supplemental findings list (from supplemental_sources), passed to
                   enhanced renderers so they can display an alert box in the summary section.
+    llm_supp: full supplemental data dict (for sqli_endpoint_review / xss_endpoint_review).
     """
     if json_type == "final_report":
         return _json_to_xhtml_final(data)
@@ -2104,11 +2398,11 @@ def json_to_xhtml(data, json_type, source_path="", llm_findings=None):
 
     # scan_xss.py format auto-detection (endpoint_diagnoses + per_type in summary)
     if "endpoint_diagnoses" in data and data.get("summary", {}).get("per_type"):
-        return _json_to_xhtml_enhanced_xss(data, llm_findings=llm_findings)
+        return _json_to_xhtml_enhanced_xss(data, llm_findings=llm_findings, llm_supp=llm_supp)
 
     # scan_injection_enhanced.py format auto-detection (endpoint_diagnoses key)
     if "endpoint_diagnoses" in data:
-        return _json_to_xhtml_enhanced_injection(data, llm_findings=llm_findings)
+        return _json_to_xhtml_enhanced_injection(data, llm_findings=llm_findings, llm_supp=llm_supp)
 
     # finding type - disambiguate by source file name or task_id
     basename = os.path.basename(source_path)
@@ -2507,20 +2801,32 @@ def resolve_content(entry, base_dir):
     # supplemental_sources: finding 타입에서만 LLM 수동분석 보완 섹션을 추가로 렌더링.
     # 먼저 모든 supplemental JSON의 findings를 수집해 enhanced renderer에 전달한다.
     llm_findings: list = []
+    llm_supp_data: dict = {}
     if entry_type == "finding":
         for supp_path in entry.get("supplemental_sources", []):
             supp_data = _load_json_safe(supp_path, base_dir)
-            if supp_data and supp_data.get("findings"):
-                llm_findings.extend(supp_data["findings"])
+            if supp_data:
+                llm_findings.extend(supp_data.get("findings", []))
+                if not llm_supp_data and (
+                    supp_data.get("sqli_endpoint_review")
+                    or supp_data.get("xss_endpoint_review")
+                ):
+                    llm_supp_data = supp_data
 
-    xhtml = json_to_xhtml(data, entry_type, source, llm_findings=llm_findings or None)
+    xhtml = json_to_xhtml(
+        data, entry_type, source,
+        llm_findings=llm_findings or None,
+        llm_supp=llm_supp_data or None,
+    )
 
     # supplemental_sources 섹션(「LLM 수동분석 보완」)을 페이지 하단에 추가
     if entry_type == "finding":
         for supp_path in entry.get("supplemental_sources", []):
             supp_data = _load_json_safe(supp_path, base_dir)
-            if supp_data and supp_data.get("findings"):
-                xhtml += "\n" + _json_to_xhtml_supp_findings(supp_data)
+            if supp_data:
+                rendered = _json_to_xhtml_supp_findings(supp_data)
+                if rendered:
+                    xhtml += "\n" + rendered
 
     return xhtml, None
 

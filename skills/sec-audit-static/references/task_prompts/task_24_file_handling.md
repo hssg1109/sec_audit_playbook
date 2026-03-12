@@ -1,14 +1,17 @@
-## Task: 2-4 파일 처리 검토
+## Task: 2-4 파일 처리 검토 (LLM 수동분석 보완)
 
 **역할**: 당신은 보안 진단 전문가입니다.
-**입력 파일**: state/task_21_result.json (API 인벤토리)
-**출력 파일**: state/task_24_result.json
-**출력 스키마**: references/schemas/finding_schema.json
+**입력 파일**: `state/<prefix>_task24.json` (scan_file_processing.py 자동스캔 결과)
+**출력 파일**: `state/<prefix>_task24_llm.json` (LLM 수동분석 보완 — supplemental)
+**게시 방식**: 별도 Confluence 페이지 X → `<prefix>_task24.json` finding 페이지의 `supplemental_sources`로 통합
+
+> ⚠️ **이 JSON은 자동스캔 페이지에 통합 렌더링된다.** 독립 보고서가 아님.
+> `confluence_page_map.json`의 file_handling finding 항목에 `supplemental_sources` 배열로 추가할 것.
 
 ---
 
 ### 컨텍스트
-Task 2-1에서 추출한 API 인벤토리를 기반으로 **파일 업로드**, **파일 다운로드**, **Path Traversal**, **LFI/RFI** 취약점을 정적 분석합니다.
+`scan_file_processing.py` 1차 자동스캔 결과에서 **파일 업로드**, **파일 다운로드**, **Path Traversal**, **LFI/RFI** 취약점의 `needs_review: true` 항목 및 자동 탐지 한계 구간(권한 검증·우회 기법·무해화)에 대해 LLM이 심층 분석합니다.
 
 ---
 
@@ -126,6 +129,9 @@ API 목록 → Controller → Service → 파일 처리 로직
 
 ### 출력 형식
 
+자동스캔 결과(`<prefix>_task24.json`)에서 수동 확정이 필요한 항목만 findings로 출력합니다.
+자동스캔 JSON에 이미 있는 `endpoint_diagnoses`는 포함하지 않으며, **보완 findings만** 작성합니다:
+
 ```json
 {
   "task_id": "2-4",
@@ -135,8 +141,8 @@ API 목록 → Controller → Service → 파일 처리 로직
       "id": "FILE-001",
       "title": "취약점 제목",
       "severity": "High",
-      "category": "File Handling / Path Traversal",
-      "description": "상세 설명",
+      "category": "File Handling / IDOR",
+      "description": "상세 설명 — 자동스캔이 탐지하지 못한 권한 검증 누락 또는 우회 기법",
       "affected_endpoint": "/api/download",
       "evidence": {
         "file": "src/controller/FileController.java",
@@ -145,6 +151,10 @@ API 목록 → Controller → Service → 파일 처리 로직
       },
       "cwe_id": "CWE-22",
       "owasp_category": "A01:2021 Broken Access Control",
+      "diagnosis_method": "수동진단(LLM)",
+      "result": "취약",
+      "needs_review": false,
+      "manual_review_note": "코드 직접 확인 근거",
       "recommendation": "조치 방안"
     }
   ],
@@ -153,24 +163,16 @@ API 목록 → Controller → Service → 파일 처리 로직
 }
 ```
 
+**주의**: `endpoint_diagnoses` 키는 출력하지 않는다 (자동스캔 JSON과 중복).
+findings 배열이 비어 있으면(`[]`) 파일을 저장하되 `supplemental_sources`에서 자동으로 무시된다.
+
 ---
 
 ### 금지사항
 - 웹쉘 코드 작성 금지
 - 추측 금지 (코드 근거 필수)
 - 민감정보 포함 금지
-- API 인벤토리에 없는 파일을 임의로 탐색 금지
-
----
-
-## 자동화 스크립트 연동
-
-`scan_file_processing.py`로 1차 자동 탐지 후, `needs_review: true` 항목에 대해
-아래 수동진단 프롬프트를 사용해 LLM 심층 분석을 수행합니다.
-
-```bash
-python tools/scripts/scan_file_processing.py <source_dir> -o state/<prefix>_task24.json
-```
+- 스크립트가 이미 판정한 "양호" 항목은 재검토 불필요
 
 ---
 

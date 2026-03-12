@@ -101,6 +101,12 @@
 | ✅ | DTO Taint 단절 해결 — DTO 접근자 패턴 + `conservative_fallback` | 2026-03-06 | v4.9.3 | `_propagate_taint_by_index` Strategy 2 추가 |
 | ✅ | `manual_review_prompt.md` SQL Injection Taint 역추적 프롬프트 추가 | 2026-03-06 | v4.9.3 | DTO/Map 래핑, 동적 SQL ID 생성 2대 역추적 시나리오 + `taint_path` 스키마 |
 | ✅ | 미사용 파일 17개 정리 (docs/ 10개, references/ 2개, scripts/ 4개 + old docx 4개) | 2026-03-06 | v4.9.4 | 구세대 절차 문서 제거, 대체된 스크립트 삭제 |
+| ✅ | severity 공식 등급 표준화 (SENSITIVE_LOGGING Critical, WEAK_CRYPTO Medium 등) + `docs/sec-audit-static/` 신규 생성 | 2026-03-09 | v4.9.5 | 7개 task 절차 문서 초기 생성 |
+| ✅ | Confluence 앵커 링크 수정 — `ac:link ac:anchor` 변환 + md2cf 모드 `[[ANCHOR:name]]` 누락 버그 수정 | 2026-03-11 | v4.9.6 | `generate_finding_report.py` + `publish_confluence.py` |
+| ✅ | `scan_xss.py` Persistent XSS 판정 로직 수정 (REST/JSON 반환타입 오류 제거) | 2026-03-11 | v4.10.0 | DB 저장 경로와 응답 타입은 무관 — 2계층 분석으로 191건 취약 확정 |
+| ✅ | `scan_xss.py` P1: 전역 XSS 필터 결함 탐지 3종 (Fail-Open, 불충분한 블랙리스트, getInputStream 미필터) | 2026-03-11 | v4.10.0 | `_P3_FAILOPEN_RE`, `_count_blacklist_items`, `_getinputstream_missing_filter` 신규 |
+| ✅ | `scan_xss.py` P2: HTML_VIEW 오탐 제거 (DTO/Collection 반환타입, `@RequestBody` 파라미터 강제 REST_JSON 분류) | 2026-03-11 | v4.10.0 | `_P1_PROTO_API_RT_RE` 확장 + `has_request_body_param` 감지 |
+| ✅ | Task 2-5 데이터보호 진단 병합/고도화 — HARDCODED_SECRET 23→8건, SENSITIVE_LOGGING 197→2건 | 2026-03-12 | v4.10.1 | `task25_llm.json` + task_prompt Step 5/6 + docs 갱신 |
 
 ---
 

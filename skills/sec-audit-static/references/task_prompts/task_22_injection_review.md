@@ -37,11 +37,17 @@ python3 tools/scripts/scan_injection_enhanced.py <source_dir> \
 
 #### 2단계: LLM 검증 (이 프롬프트의 역할)
 
-스크립트 결과 JSON을 로드하여 아래 항목만 검토합니다:
+스크립트 결과 JSON을 로드하여 아래 항목을 검토합니다:
 
-1. **`needs_review: true` 항목 심층 분석**
-   - 스크립트가 자동 판정하지 못한 endpoint
-   - 해당 endpoint의 Controller → Service → Repository 코드를 직접 읽고 판정
+1. **`needs_review: true` / `result: 정보` 항목 심층 분석 [필수]**
+   - 스크립트가 자동 판정하지 못한 endpoint (외부 의존성 / XML 미발견 등)
+   - **diagnosis_type 그룹별 대표 서비스/DAO 소스코드를 직접 읽고 판정 확정**
+   - 절차:
+     1. `endpoint_diagnoses`에서 `result: 정보` 항목을 `diagnosis_type`별로 그룹화
+     2. 각 그룹의 외부 서비스/DAO → MyBatis XML/JPA/iBatis 직접 확인
+     3. `${}` (위험) vs `#{}` / `:param` (안전) 바인딩 판정
+     4. 판정 결과를 `sqli_endpoint_review` 블록으로 저장
+   - **전체 매퍼 XML `${}` 패턴 전수 스캔** (`find` + `grep -n '\${' *.xml`) 으로 빠른 일괄 확인 가능
 
 2. **취약 판정 검증**
    - 스크립트가 "취약"으로 판정한 항목의 정확성 확인
@@ -55,14 +61,32 @@ python3 tools/scripts/scan_injection_enhanced.py <source_dir> \
 
 ### 파일 탐색 전략 (토큰 최적화)
 
-> **`needs_review` 항목과 취약 항목의 관련 파일만 읽습니다.**
+> **`needs_review` / `정보` 항목과 취약 항목의 관련 파일만 읽습니다.**
 
-1. 스크립트 결과 JSON에서 `needs_review: true` 또는 `result: 취약` 항목 필터
-2. 해당 endpoint의 `process_file`, `service_calls`, `repository_calls` 확인
-3. 필요한 파일만 직접 읽어 코드 검증
+1. 스크립트 결과 JSON에서 `result: 정보` 또는 `result: 취약` 항목 필터
+2. `diagnosis_type`별 그룹화 → 그룹 대표 서비스/DAO 식별
+3. 외부 모듈 소스 경로 탐색 (`find testbed/ -name "ServiceName*"`)
+4. **MyBatis/iBatis XML 전수 스캔** (빠른 일괄 확인):
+   ```bash
+   python3 -c "
+   import glob
+   files = glob.glob('testbed/**/*.xml', recursive=True)
+   mapper_files = [f for f in files if 'mapper' in f.lower() or '/mapper/' in f]
+   for f in mapper_files:
+       lines = [(i+1,l.strip()) for i,l in enumerate(open(f).read().splitlines()) if '\${' in l and not l.strip().startswith('<!--')]
+       if lines:
+           print(f.split('/')[-1] + ':')
+           for no,l in lines[:3]: print(f'  L{no}: {l}')
+   "
+   ```
+5. JPA Repository 패턴: `findBy*` 파생 쿼리 + `@Query(:param)` 바인딩 → 안전
+6. iBatis `SqlMapClientTemplate.queryForObject("id", param)`: XML의 `#{}` 확인
 
 ```
-스크립트 결과 → 검토 대상 필터 → 관련 파일만 읽기 → 판정 확정
+정보 endpoint → diagnosis_type 그룹화 → 대표 서비스 소스 확인
+  └→ mapper XML 전수 스캔: ${}=위험, #{}=안전
+  └→ JPA findBy*/JPQL :param → 안전
+  └→ 판정 결과 → sqli_endpoint_review 블록으로 저장
 ```
 
 ---
@@ -154,6 +178,38 @@ python3 tools/scripts/scan_injection_enhanced.py <source_dir> \
 {
   "task_id": "2-2",
   "status": "completed",
+  "sqli_endpoint_review": {
+    "reviewed_at": "ISO8601 datetime",
+    "total_info_endpoints": 0,
+    "group_judgments": [
+      {
+        "group": "외부 의존성 호출 (N건)",
+        "judgment": "양호|정보|취약",
+        "services_reviewed": [
+          {
+            "service": "ServiceName (N건)",
+            "dao": "DaoClass → mapper.xml (MyBatis/iBatis/JPA)",
+            "finding": "#{} 바인딩 확인 / ${}위험패턴 N건 / JPA 파생쿼리",
+            "result": "양호|정보|취약"
+          }
+        ]
+      },
+      {
+        "group": "XML 미발견 패턴 추정 (N건)",
+        "judgment": "양호|정보|취약",
+        "daos_reviewed": [
+          {
+            "dao": "DaoName (N건 참조)",
+            "xml": "mapper-file.xml",
+            "finding": "${}패턴 N건 / #{} 바인딩만",
+            "result": "양호|정보|취약"
+          }
+        ]
+      }
+    ],
+    "overall_sqli_judgment": "양호|정보|취약",
+    "rationale": "판정 근거 요약"
+  },
   "findings": [
     {
       "id": "INJ-001",

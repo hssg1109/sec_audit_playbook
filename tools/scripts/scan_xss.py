@@ -173,8 +173,15 @@ _P1_ERROR_REFLECT = re.compile(
 # Protobuf: 명시적 Protobuf 타입
 # Message: Protobuf GeneratedMessage 파생 클래스
 # ResponseEntity: Spring HTTP 응답 래퍼 (내부 타입 불문)
+# [P2] DTO/Response 접미사 타입 — @Controller이어도 JSON 직렬화 반환이므로 HTML_VIEW FP 제거
+# [P2] 컬렉션 타입(List/Map/Set 등) — _extract_return_type이 제네릭 제거 후 베이스만 반환하므로
+#       "List", "Map" 등 단순 타입명 매칭으로 JSON 직렬화 여부 판별
 _P1_PROTO_API_RT_RE = re.compile(
-    r'Protos\b|Protobuf\b|Message\b|ResponseEntity\b',
+    r'Protos\b|Protobuf\b|Message\b|ResponseEntity\b'
+    # [P2] DTO/Response/VO 접미사 클래스 (FooDto, FooResponse, FooVO 등)
+    r'|(?:Dto|Response|Res|Vo|VO|Result)$'
+    # [P2] Java/Kotlin 컬렉션 베이스 타입 (제네릭 제거 후: List, Map, Set 등)
+    r'|\b(?:List|ArrayList|Map|Set|LinkedHashMap|Collection|Optional|Page|Slice)\b',
     re.IGNORECASE,
 )
 
@@ -308,6 +315,36 @@ _P3_BLACKLIST_REPLACE_RE = re.compile(
 # 안전하지 않은 replace: HTML 특수문자를 빈 문자열로 제거 (화이트리스트 아님)
 _P3_UNSAFE_REPLACE_RE = re.compile(
     r'\.replace\s*\(\s*(?:"<"|\'<\'|">"|\'>\'")\s*,\s*(?:""|\'\')',
+    re.IGNORECASE,
+)
+
+# ── P1 고도화: 전역 필터 구체적 결함 탐지 패턴 ──────────────────────────────
+# Fail-Open 패턴: Optional.orElse(true) — 설정 미존재 시 XSS 필터 기본 비활성화
+_P3_FAILOPEN_RE = re.compile(
+    r'\.orElse\s*\(\s*(?:true|Boolean\.TRUE)\s*\)',
+    re.MULTILINE,
+)
+
+# 블랙리스트 항목 임계값: 이 값 미만이면 불충분 필터로 간주 (P1 기준)
+_P3_BLACKLIST_THRESHOLD = 8
+
+# 블랙리스트 정적 선언 탐지: Arrays.asList / List.of 내 문자열 항목 수 집계
+_P3_BLACKLIST_LIST_RE = re.compile(
+    r'(?:Arrays\.asList|List\.of)\s*\(([\s\S]*?)\)',
+    re.MULTILINE,
+)
+
+# getInputStream() 오버라이드 탐지 — Wrapper 클래스에서 재정의 여부
+_P3_GETINPUTSTREAM_OVERRIDE_RE = re.compile(
+    r'(?:public|protected)\s+\w+\s+getInputStream\s*\(\s*\)',
+    re.MULTILINE,
+)
+
+# getInputStream 오버라이드 본문 내 XSS 필터 호출 패턴
+_P3_GETINPUTSTREAM_FILTER_CALL_RE = re.compile(
+    r'(?:clean|strip|filter|sanitize|escape)Xss\s*\('
+    r'|XssFilterUtil\s*\.\s*\w+'
+    r'|cleanXss\s*\(',
     re.IGNORECASE,
 )
 
@@ -804,6 +841,8 @@ def classify_controller(ctrl_content: str, handler_method: str,
     produces_json     = bool(_P1_PRODUCES_JSON.search(method_region))
     produces_html     = bool(_P1_PRODUCES_HTML.search(method_region))
     gson_unsafe       = bool(_P1_GSON_UNSAFE.search(ctrl_content))
+    # [P2] @RequestBody 파라미터 탐지 — @Controller이어도 RequestBody 수신 시 REST 엔드포인트
+    has_request_body_param = bool(re.search(r'@RequestBody\b', method_region))
 
     # text/html 강제 설정 (메서드 본문 내)
     rest_html_ct  = bool(_P1_REST_HTML_CT.search(method_body)) if method_body else False
@@ -813,7 +852,8 @@ def classify_controller(ctrl_content: str, handler_method: str,
     base_rt    = return_type
 
     # ---- 분류 결정 ----
-    if is_rest_class or has_response_body or produces_json:
+    # [P2] @RequestBody 수신 시 — @Controller이어도 REST 엔드포인트 (HTML View 반환 불가)
+    if is_rest_class or has_response_body or produces_json or (has_request_body_param and not produces_html):
         if produces_html or rest_html_ct:
             ct = "REST_HTML_RISK"
         else:
@@ -1160,6 +1200,45 @@ def _check_lucy_multipart_order(source_dir: Path) -> dict:
     }
 
 
+# ── P1 고도화 헬퍼 ─────────────────────────────────────────────────────────
+
+def _count_blacklist_items(content: str) -> int:
+    """커스텀 XSS 필터 파일에서 Arrays.asList / List.of 블랙리스트 항목 수 집계.
+
+    XSS_TARGETS = Arrays.asList("getClass", "(", "<") → 3 반환
+    항목 수가 _P3_BLACKLIST_THRESHOLD 미만이면 불충분 필터로 판정한다.
+    """
+    max_count = 0
+    for m in _P3_BLACKLIST_LIST_RE.finditer(content):
+        items_str = m.group(1)
+        # 따옴표로 감싸진 문자열 항목만 카운트
+        items = re.findall(r'"[^"]*"|\'[^\']*\'', items_str)
+        max_count = max(max_count, len(items))
+    return max_count
+
+
+def _getinputstream_missing_filter(content: str) -> bool:
+    """HttpServletRequestWrapper 상속 클래스에서 getInputStream() 오버라이드가 있는데
+    해당 메서드 본문에 XSS 필터 직접 호출이 누락된 경우 True 반환.
+
+    ※ 필터링이 생성자에서 이루어져도, getInputStream() 본문에 명시적 호출이 없으면
+    미래 리팩토링 시 필터 우회 위험이 존재하므로 정보성 결함으로 간주.
+    """
+    if not _P3_GETINPUTSTREAM_OVERRIDE_RE.search(content):
+        return False
+    # getInputStream() 오버라이드 존재 → 본문 내 필터 호출 여부 확인
+    m = re.search(
+        r'(?:public|protected)\s+\w+\s+getInputStream\s*\(\s*\)'
+        r'\s*(?:throws[^{]*)?\{([\s\S]*?)\n\s*\}',
+        content, re.MULTILINE,
+    )
+    if not m:
+        # 본문 추출 실패 → 보수적 판단: 결함 의심
+        return True
+    body = m.group(1)
+    return not bool(_P3_GETINPUTSTREAM_FILTER_CALL_RE.search(body))
+
+
 def build_global_filter_status(source_dir: Path) -> dict:
     """Phase 3 (v2.4.0): web.xml / *Config.java / *Filter.java / *XSS*.java 에서
     전역 XSS 필터 탐지 후 종합 판정. Step 3 커스텀 필터 탐지 추가.
@@ -1183,6 +1262,10 @@ def build_global_filter_status(source_dir: Path) -> dict:
     custom_method_files:  list = []
     has_blacklist_pattern = False
     filter_files: list = []
+    # P1 고도화: 커스텀 필터 구체적 결함 추적
+    failopen_files: list = []                       # orElse(true) Fail-Open 탐지
+    insufficient_blacklist_files: list = []         # (파일, 항목수) 블랙리스트 부족
+    getinputstream_no_filter_files: list = []       # getInputStream() 오버라이드+필터 누락
 
     glob_patterns = [
         "web.xml", "*Config*.java", "*Filter*.java",
@@ -1243,6 +1326,24 @@ def build_global_filter_status(source_dir: Path) -> dict:
             if hit and rel not in filter_files:
                 filter_files.append(rel)
 
+            # P1 고도화: 커스텀 필터 결함 상세 탐지
+            # (커스텀 래퍼 또는 커스텀 메서드가 발견된 파일에 한해 실행)
+            is_custom_filter_file = (
+                _P3_CUSTOM_WRAPPER_RE.search(content)
+                or _P3_CUSTOM_CLEAN_METHOD_RE.search(content)
+            )
+            if is_custom_filter_file:
+                # 결함 1: Fail-Open (orElse(true)) — 설정 없으면 필터 비활성화
+                if _P3_FAILOPEN_RE.search(content) and rel not in failopen_files:
+                    failopen_files.append(rel)
+                # 결함 2: 블랙리스트 항목 수 부족 (< 임계값)
+                bl_count = _count_blacklist_items(content)
+                if 0 < bl_count < _P3_BLACKLIST_THRESHOLD:
+                    insufficient_blacklist_files.append((rel, bl_count))
+                # 결함 3: getInputStream() 오버라이드 + 필터 로직 누락
+                if _getinputstream_missing_filter(content) and rel not in getinputstream_no_filter_files:
+                    getinputstream_no_filter_files.append(rel)
+
     # Lucy multipart bypass 검증
     lucy_multipart = None
     if found_lucy:
@@ -1256,11 +1357,41 @@ def build_global_filter_status(source_dir: Path) -> dict:
             if has_blacklist_pattern else
             " 필터 로직 안전성(루프 결함, 우회 가능성) 수동 점검 필요."
         )
+        # P1: 결함 심각도 결정
+        p1_defect_severity = (
+            "critical" if failopen_files else
+            "high"     if getinputstream_no_filter_files else
+            "medium"   if insufficient_blacklist_files else
+            "low"
+        )
+        # P1: 결함 요약 메시지 생성
+        p1_defect_notes = []
+        if failopen_files:
+            p1_defect_notes.append(
+                f"[결함-1] Fail-Open (orElse(true)) — {failopen_files[:2]}: "
+                "설정값 미존재 시 XSS 필터 기본 비활성화"
+            )
+        if insufficient_blacklist_files:
+            for _f, _c in insufficient_blacklist_files[:2]:
+                p1_defect_notes.append(
+                    f"[결함-2] 블랙리스트 {_c}항목 (임계값 {_P3_BLACKLIST_THRESHOLD} 미만) — {_f}"
+                )
+        if getinputstream_no_filter_files:
+            p1_defect_notes.append(
+                f"[결함-3] getInputStream() 오버라이드 시 필터 호출 누락 — "
+                f"{getinputstream_no_filter_files[:2]}"
+            )
         custom_filter_info = {
             "detected":           True,
             "wrapper_files":      custom_wrapper_files[:5],
             "method_files":       custom_method_files[:5],
             "has_blacklist":      has_blacklist_pattern,
+            # P1 신규 필드
+            "failopen_files":               failopen_files[:3],
+            "insufficient_blacklist_files": [(f, c) for f, c in insufficient_blacklist_files[:3]],
+            "getinputstream_no_filter":     getinputstream_no_filter_files[:3],
+            "defect_severity":              p1_defect_severity,
+            "p1_defect_notes":              p1_defect_notes,
             "manual_review_note": (
                 "[정보 - 커스텀 XSS 필터 발견: 블랙리스트 방식 여부 수동 점검 필요]"
                 + blacklist_warning
@@ -2032,9 +2163,29 @@ def check_persistent_xss(endpoint: dict,
             "taint_result": taint_result,
         }
 
-    # Step 3: 커스텀 필터 발견 — 안전성 불명확 → 정보 분류
+    # Step 3: 커스텀 필터 발견 — P1 결함 탐지 결과에 따라 취약/정보 분기
     if filter_level == "custom_wrapper":
-        custom_info = filter_status.get("custom_filter_info", {})
+        custom_info = filter_status.get("custom_filter_info") or {}
+        p1_notes    = custom_info.get("p1_defect_notes", [])
+        has_failopen   = bool(custom_info.get("failopen_files"))
+        has_insuf_bl   = bool(custom_info.get("insufficient_blacklist_files"))
+        has_is_gap     = bool(custom_info.get("getinputstream_no_filter"))
+
+        # P1: 구체적 결함 확인 → 취약 승급
+        # Fail-Open 또는 블랙리스트 항목 부족은 필터가 사실상 무효임을 의미
+        if has_failopen or has_insuf_bl or has_is_gap:
+            defect_summary = "; ".join(p1_notes) if p1_notes else "커스텀 필터 결함 확인"
+            return {
+                "risk": "취약",
+                "reason": (
+                    f"커스텀 XSS 필터 결함 정적 확인 — {defect_summary}. "
+                    "HTTP 입력값이 실질적으로 XSS 필터링되지 않아 Stored XSS 유입 위험. "
+                    "DB 저장 후 관리자/타 시스템 HTML 렌더링 시 실행 가능."
+                ),
+                "taint_result":       taint_result,
+                "custom_filter_info": custom_info,
+            }
+        # 결함 미탐지 → 기존 정보 분류 유지
         return {
             "risk":   "정보",
             "reason": (
@@ -2882,7 +3033,12 @@ def run_xss_diagnosis(source_dir: Path,
             "scanned_at":               datetime.now().isoformat(),
             "script_version":           _SCRIPT_VERSION,
         },
-        "endpoint_diagnoses": [asdict(d) for d in diagnoses],
+        "endpoint_diagnoses": [
+            # 양호 결과는 phase_details/evidence 제거해 파일 크기 절감
+            {k: v for k, v in asdict(d).items()
+             if d.result != "양호" or k not in ("phase_details", "evidence")}
+            for d in diagnoses
+        ],
         "summary": {
             "total_endpoints": total,
             "xss":             stats,

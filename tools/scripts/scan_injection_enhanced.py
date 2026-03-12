@@ -20,6 +20,7 @@ import json
 import re
 import sys
 import argparse
+import functools
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -163,12 +164,18 @@ class EndpointDiagnosis:
 #  2. Kotlin/Java 파서 유틸리티
 # ============================================================
 
-def read_file_safe(filepath: Path) -> str:
-    """파일 안전 읽기"""
+@functools.lru_cache(maxsize=1024)
+def _read_file_cached(abs_path: str) -> str:
+    """절대 경로 기반 파일 읽기 (LRU 캐시)"""
     try:
-        return filepath.read_text(encoding="utf-8", errors="replace")
+        return Path(abs_path).read_text(encoding="utf-8", errors="replace")
     except (IOError, UnicodeDecodeError):
         return ""
+
+
+def read_file_safe(filepath: Path) -> str:
+    """파일 안전 읽기 (LRU 캐시 적용, 전역 dict 메모리 누수 방지)"""
+    return _read_file_cached(str(filepath.absolute()))
 
 
 def extract_class_name(content: str) -> Optional[str]:
@@ -274,6 +281,85 @@ def extract_constructor_deps(content: str) -> list:
     return deps
 
 
+def _find_method_node(node, method_name: str, method_node_types: set):
+    """tree-sitter 노드 트리에서 지정 이름의 메서드 노드를 재귀 탐색.
+
+    [한계 — Overloading] 동일 이름의 메서드가 여러 개인 경우 트리에서
+    가장 먼저 발견된 노드를 반환한다. 파라미터 개수/타입까지 비교하는
+    정밀 매칭은 차후 고도화 예정.
+    """
+    if node.type in method_node_types:
+        for child in node.children:
+            if child.type == 'identifier' and child.text.decode('utf-8') == method_name:
+                return node
+    for child in node.children:
+        result = _find_method_node(child, method_name, method_node_types)
+        if result is not None:
+            return result
+    return None
+
+
+# [보완 2] tree-sitter Language/Parser 전역 Lazy 캐시.
+# 언어별 Language·Parser 객체 생성 비용(수십 ms)을 최초 1회로 한정.
+# key: lang str ('java'|'kotlin') → value: (Language, Parser) tuple
+_TS_PARSERS: dict = {}
+
+
+def _get_ts_parser(lang: str):
+    """tree-sitter 파서를 Lazy 초기화하고 캐싱된 인스턴스를 반환.
+
+    최초 호출 시에만 Language/Parser 객체를 생성하며, 이후 호출은
+    _TS_PARSERS 딕셔너리에서 즉시 반환하여 초기화 오버헤드를 제거한다.
+    ImportError는 그대로 전파하여 caller의 regex fallback이 동작하도록 한다.
+    """
+    if lang in _TS_PARSERS:
+        return _TS_PARSERS[lang]
+
+    from tree_sitter import Language, Parser  # ImportError → caller가 catch
+
+    if lang == 'java':
+        import tree_sitter_java as ts_lang_mod
+    elif lang == 'kotlin':
+        import tree_sitter_kotlin as ts_lang_mod
+    else:
+        raise ValueError(f"Unsupported lang for AST parsing: {lang}")
+
+    language = Language(ts_lang_mod.language())
+    parser = Parser(language)
+    _TS_PARSERS[lang] = (language, parser)
+    return language, parser
+
+
+def extract_method_body_ast(content: str, method_name: str, lang: str = 'java') -> str:
+    """tree-sitter AST 기반 메서드 본문 추출 (Java/Kotlin 지원).
+
+    tree-sitter 패키지 미설치 또는 파싱 실패 시 RuntimeError를 발생시켜
+    caller가 정규식 fallback을 선택할 수 있도록 한다.
+
+    설치:
+        pip install tree-sitter tree-sitter-java tree-sitter-kotlin
+
+    [성능] _get_ts_parser()를 통해 Language/Parser 객체를 Lazy 캐싱하므로
+    수천 번 호출되어도 초기화 비용은 언어당 최초 1회만 발생한다.
+    """
+    if lang == 'java':
+        method_node_types = {'method_declaration', 'constructor_declaration'}
+    elif lang == 'kotlin':
+        method_node_types = {'function_declaration'}
+    else:
+        raise ValueError(f"Unsupported lang for AST parsing: {lang}")
+
+    _language, parser = _get_ts_parser(lang)  # Lazy 캐시 사용
+    content_bytes = content.encode('utf-8')
+    tree = parser.parse(content_bytes)
+
+    node = _find_method_node(tree.root_node, method_name, method_node_types)
+    if node is None:
+        raise RuntimeError(f"Method '{method_name}' not found in AST ({lang})")
+
+    return content_bytes[node.start_byte:node.end_byte].decode('utf-8')
+
+
 def extract_method_body(content: str, method_name: str) -> str:
     """메서드 본문 추출 (중괄호 매칭)
 
@@ -281,7 +367,22 @@ def extract_method_body(content: str, method_name: str) -> str:
     fun foo(params): ReturnType = expr  (중괄호 없는 expression body)
     파라미터 내부 { (어노테이션/람다 기본값)와 실제 본문 { 를 구분하기 위해
     먼저 파라미터 목록의 닫는 ) 위치를 탐색한 후 본문 시작을 결정한다.
+
+    [하이브리드 전략] tree-sitter AST 파싱을 우선 시도하고,
+    패키지 미설치(ImportError) 또는 파싱 실패 시 정규식 로직으로 Fallback.
     """
+    # --- AST 우선 시도 (Kotlin → Java 순서, 기존 regex 우선순위와 동일) ---
+    for _lang in ('kotlin', 'java'):
+        try:
+            result = extract_method_body_ast(content, method_name, lang=_lang)
+            if result:
+                return result
+        except (ImportError, ModuleNotFoundError):
+            break  # tree-sitter 미설치 → 즉시 regex fallback
+        except Exception:
+            continue  # 해당 언어 파싱 실패 → 다음 언어 시도
+
+    # --- Regex Fallback ---
     # fun methodName( 또는 def methodName(
     pattern = rf'fun\s+{re.escape(method_name)}\s*\('
     match = re.search(pattern, content)
@@ -2787,11 +2888,88 @@ def _extract_call_args(body: str, method_name: str) -> list:
     args_str = m.group(1).strip()
     if not args_str:
         return []
-    # Depth-aware comma split
+    # ----------------------------------------------------------------
+    # Depth-aware + Quote-aware comma split (State Machine v2)
+    #
+    # 지원하는 문자열 리터럴:
+    #   - 단일 따옴표: "...", '...'  (\ 이스케이프 인식)
+    #   - Kotlin 삼중 따옴표: """..."""  (Raw String — 이스케이프 없음)
+    #
+    # [보완 1] 삼중 따옴표 처리 원리:
+    #   일반 따옴표 상태 머신은 `for ch` 단일 문자 순회로 충분하지만,
+    #   """의 시작·종료는 3문자 단위를 동시에 확인해야 한다.
+    #   → 인덱스 기반 while 루프로 교체하여 전방 탐색(lookahead)을 지원한다.
+    # ----------------------------------------------------------------
     args: list = []
     current: list = []
     depth = 0
-    for ch in args_str:
+    in_string = False
+    triple_quote = False   # True이면 """ 모드 (Kotlin Raw String)
+    string_char = ''
+    escape_next = False
+
+    i = 0
+    n = len(args_str)
+    while i < n:
+        ch = args_str[i]
+
+        # ── 문자열 내부 처리 ──────────────────────────────────────
+        if in_string:
+            if triple_quote:
+                # """ Raw String: 이스케이프 없음. 닫는 """ 3문자 동시 확인.
+                if ch == '"' and args_str[i:i + 3] == '"""':
+                    current.extend(['"', '"', '"'])
+                    in_string = False
+                    triple_quote = False
+                    i += 3
+                else:
+                    current.append(ch)
+                    i += 1
+            else:
+                # 일반 문자열: \ 이스케이프 처리
+                if escape_next:
+                    escape_next = False
+                    current.append(ch)
+                    i += 1
+                elif ch == '\\':
+                    escape_next = True
+                    current.append(ch)
+                    i += 1
+                elif ch == string_char:
+                    in_string = False
+                    current.append(ch)
+                    i += 1
+                else:
+                    current.append(ch)
+                    i += 1
+            continue
+
+        # ── 문자열 시작 감지 ──────────────────────────────────────
+        if ch == '"':
+            if args_str[i:i + 3] == '"""':
+                # Kotlin 삼중 따옴표 시작
+                in_string = True
+                triple_quote = True
+                string_char = '"'
+                current.extend(['"', '"', '"'])
+                i += 3
+            else:
+                # 일반 큰따옴표
+                in_string = True
+                triple_quote = False
+                string_char = '"'
+                current.append(ch)
+                i += 1
+            continue
+        if ch == "'":
+            in_string = True
+            triple_quote = False
+            string_char = "'"
+            current.append(ch)
+            i += 1
+            continue
+
+        # ── 일반 상태: 괄호 depth 추적 및 인자 분리 ──────────────
         if ch in ('(', '[', '{', '<'):
             depth += 1
             current.append(ch)
@@ -2805,6 +2983,8 @@ def _extract_call_args(body: str, method_name: str) -> list:
             current = []
         else:
             current.append(ch)
+        i += 1
+
     token = ''.join(current).strip()
     if token:
         args.append(token)
@@ -3567,7 +3747,12 @@ def run_diagnosis(source_dir: Path, inventory_path: Path,
             "scanned_at": datetime.now().isoformat(),
             "script_version": "4.6.0",
         },
-        "endpoint_diagnoses": [asdict(d) for d in diagnoses],
+        "endpoint_diagnoses": [
+            # 양호 결과는 service_calls/repository_calls/db_operations 제거해 파일 크기 절감
+            {k: v for k, v in asdict(d).items()
+             if d.result != "양호" or k not in ("service_calls", "repository_calls", "db_operations")}
+            for d in diagnoses
+        ],
         "global_findings": global_findings,
         "summary": {
             "total_endpoints": len(diagnoses),

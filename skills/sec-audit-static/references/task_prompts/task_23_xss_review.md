@@ -10,6 +10,34 @@
 
 ---
 
+### 진단 프로세스 (2단계)
+
+> 토큰 절약을 위해 **스크립트 자동 진단 → LLM 검증** 2단계로 진행합니다.
+
+#### 1단계: 스크립트 자동 진단 (사전 실행)
+
+```bash
+python3 tools/scripts/scan_xss.py <source_dir> \
+    --api-inventory state/{prefix}_api_inventory.json \
+    -o state/{prefix}_xss.json
+```
+
+#### 2단계: LLM 검증 (이 프롬프트의 역할)
+
+스크립트 결과 JSON을 로드하여 아래 항목을 검토합니다:
+
+1. **`result: 정보` endpoint 심층 분석 [필수]**
+   - `xss_category`별로 분류:
+     - `잠재적위협` (Persistent XSS 후보): `controller_type` 확인 → REST_JSON이면 Content-Type:application/json → 브라우저 HTML 해석 차단 → Reflected 경로 **양호**. 단 XSS 필터 결함이 있으면 DB 저장 시 필터 미작동 → 전역 필터 finding으로 커버 여부 확인.
+     - `수동확인필요` (HTML_VIEW 미탐지): 실제 컨트롤러 소스 확인 → `ResponseEntity<Protobuf/JSON>` 반환이면 View XSS **양호**. `@ResponseBody` + `produces="text/html"` JSP 렌더링이면 JSP 출력 이스케이핑 확인.
+     - `수동확인필요` (Reflected XSS text/html): 파라미터가 JSP 출력에 직접 반영되는지 추적. `StringEscapeUtils.escapeHtml()` / `<c:out>` 적용 여부 확인.
+
+2. **판정 결과 저장**: `xss_endpoint_review` 블록으로 저장
+
+3. **XSS 필터 충분성 검증** (전역 필터 결함 finding 생성)
+
+---
+
 ### 컨텍스트
 Task 2-1에서 추출한 API 인벤토리를 기반으로 **Persistent XSS**, **Reflected XSS**, **Redirect XSS**, **View XSS**, **DOM XSS** 취약점을 정적 분석합니다.
 
@@ -209,6 +237,45 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 {
   "task_id": "2-3",
   "status": "completed",
+  "xss_endpoint_review": {
+    "reviewed_at": "ISO8601 datetime",
+    "total_info_endpoints": 0,
+    "group_judgments": [
+      {
+        "group": "잠재적위협 — Persistent XSS 후보 (N건)",
+        "judgment": "양호|정보|취약",
+        "rationale": "REST_JSON → Content-Type:application/json → Reflected XSS 경로 차단. Persistent 경로는 전역 XSS 필터 결함 finding(XSS-FILTER-*)으로 커버.",
+        "endpoints_confirmed": "N건 양호 / M건 정보 / K건 취약"
+      },
+      {
+        "group": "수동확인필요 — HTML_VIEW 미탐지 (N건)",
+        "judgment": "양호|정보|취약",
+        "controllers_reviewed": [
+          {
+            "controller": "ControllerName",
+            "endpoints": ["GET /path"],
+            "return_type": "ResponseEntity<Protobuf> | JSP | String",
+            "finding": "Protobuf 반환 → View XSS 해당없음 / JSP render → 이스케이핑 확인",
+            "result": "양호|정보|취약"
+          }
+        ]
+      },
+      {
+        "group": "수동확인필요 — Reflected XSS text/html (N건)",
+        "judgment": "양호|정보|취약",
+        "endpoints_reviewed": [
+          {
+            "endpoint": "GET /path",
+            "controller": "ControllerName.method()",
+            "finding": "JSP escapeHtml 적용 / 파라미터 DB 재조회 후 반영 / 미구현(throw NotImplementedException)",
+            "result": "양호|정보|취약"
+          }
+        ]
+      }
+    ],
+    "overall_xss_info_judgment": "양호|정보|취약",
+    "rationale": "판정 근거 요약"
+  },
   "findings": [
     {
       "id": "XSS-001",

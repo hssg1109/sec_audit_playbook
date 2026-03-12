@@ -499,7 +499,10 @@
                   "page_id": 739224650
                 },
                 {
-                  "source": "state/ocb_sugar_stage_task25_final.json",
+                  "source": "state/ocb_sugar_stage_task25.json",
+                  "supplemental_sources": [
+                    "state/ocb_sugar_stage_task25_llm.json"
+                  ],
                   "title": "테스트19-A - 데이터 보호 진단 결과",
                   "type": "finding",
                   "page_id": 739224654
