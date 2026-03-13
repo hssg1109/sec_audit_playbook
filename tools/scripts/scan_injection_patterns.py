@@ -263,14 +263,8 @@ OS_CMD_PATTERNS = [
         "file_glob": ["*.kt", "*.java"],
         "category": "OS Command Injection / Java",
     },
-    {
-        "id": "CMD_GETRUNTIME",
-        "name": "Runtime.getRuntime() 사용",
-        "desc": "Runtime.getRuntime() 호출 (진단가이드 §2.1.1) - exec() 동반 여부 확인 필요",
-        "pattern": r'(?:Runtime\.getRuntime|getRuntime\s*\(\s*\))',
-        "file_glob": ["*.kt", "*.java"],
-        "category": "OS Command Injection / Java",
-    },
+    # CMD_GETRUNTIME 폐기: Runtime.getRuntime() 단독 탐지는 addShutdownHook 등 정상 JVM 생명주기 코드
+    # 오탐(FP) 유발. CMD_RUNTIME_EXEC(Runtime.getRuntime().exec())가 실제 위협을 정확하게 탐지함.
     # 2.1.2 Node.js 명령실행 (진단가이드 §2.1.2)
     # 주의: 브라우저(클라이언트) JS의 eval()은 OS Command Injection이 아님 (DOM-based XSS 영역)
     # → file_content_check로 서버사이드 Node.js 파일만 대상으로 한정
@@ -336,10 +330,11 @@ OS_CMD_PATTERNS = [
     # 취약 (Direct RCE):
     #   HTTP request → GroovyShell.parse()/evaluate() 코드 영역에 직접 전달
     #   예: shell.evaluate(request.getParameter("script"))
-    # 정보 (Stored RCE):
+    # 취약 (Stored RCE / 잠재적 취약) — 이전 "정보"에서 상향:
     #   DB/Config → GroovyShell 코드 영역 전달 (관리자/DB 침해 시 RCE)
     #   예: shell.evaluate(entity.getScript())  ← DB 엔티티 필드
     #   replaceAll() 등 syntax 치환은 보안 필터가 아님 → RCE 차단 불가
+    #   악용 경로(DB 침해 → Groovy RCE)가 확실히 존재 → 취약으로 분류, 심각도 Medium
     # 양호:
     #   classpath 고정 파일만 parse + SecureASTCustomizer 샌드박싱
     #   사용자 입력은 Binding 변수(값)로만 전달, 코드 영역 미도달

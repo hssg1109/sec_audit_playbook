@@ -10,6 +10,55 @@
 
 ---
 
+## [v4.11.0] - 2026-03-13
+
+### Added — T-01: 보고서 상단 서비스 설명 + 자산 구조 표 자동 삽입
+
+#### generate_finding_report.py — `--asset-info` 옵션 신규 추가
+
+- `--asset-info state/<prefix>_task11.json` 옵션 전달 시 보고서 상단에 자동 삽입:
+  - **1.1 서비스 정보** 표: 서비스 설명, 용도, 프레임워크, 기술 스택, 레포, 담당자(기획/개발)
+  - **1.2 자산 구조** 표: 환경(상용/개발/알파)별 도메인, 포트, 노출 범위
+  - asset-info 있으면 기존 섹션 번호(1.1/1.2) → 1.3/1.4로 동적 조정 (충돌 방지)
+- 옵션 미전달 시 기존 동작 완전 유지 (하위 호환)
+- `task_11_result.json` 스키마: `findings[].asset_type`, `domain`, `ip`, `tech_stack`, `framework` 등 활용
+
+#### skills/sec-audit-static/references/workflow.md
+
+- Phase 4 섹션에 `[권장] --asset-info state/<prefix>_task11.json` 사용법 추가
+
+#### skills/sec-audit-static/references/task_prompts/task_11_asset_identification.md
+
+- "Phase 4 보고서 연계" 섹션 신규 추가: `--asset-info` 사용 예시 및 삽입 내용 명세
+
+---
+
+### Added — T-09: Bitbucket 소스코드 자동 다운로드 파이프라인
+
+#### tools/scripts/fetch_bitbucket.py (신규)
+
+- WSL2 환경에서 PowerShell 경유로 사내망 Bitbucket(`code.skplanet.com`) 접근
+- 주요 기능:
+  - `--list-projects` / `--list-repos`: 접근 가능 프로젝트·repo 목록 출력
+  - `--project` / `--repo`: 프로젝트 전체 또는 특정 repo만 clone
+  - `--branch`: 브랜치 지정 (미지정 시 기본 브랜치 자동 감지)
+  - `--shallow`: `--depth 1` shallow clone (빠른 다운로드)
+  - `--dry-run`: 실제 clone 없이 대상 목록만 출력
+- 인증: `CUSTOMER_BB_TOKEN` (계정 단위 HTTP Access Token, `.env`에서 로드)
+  - 계정 단위 토큰 발급: `http://code.skplanet.com/plugins/servlet/access-tokens/manage`
+  - 300+ 프로젝트 접근 가능 확인
+- 결과: `state/<prefix>_fetch_manifest.json` (총계 + repo별 상태/커밋 기록)
+- WSL 경로 변환: `_wsl_to_unc()` → `//wsl.localhost/Ubuntu/...` UNC 경로로 Windows git 경유 clone
+
+---
+
+### Changed — Confluence page_map.json 구조 개편 (테스트 1-20 → old 하위)
+
+- 테스트 목록 하위 테스트1~20 페이지를 "old" 그룹(`page_id: 739228158`) 하위로 이동
+- 향후 게시 시 테스트 1-20은 항상 old 하위에 위치하도록 `groups` 중첩 구조 반영
+
+---
+
 ## [v4.10.1] - 2026-03-12
 
 ### Added — Task 2-5 데이터보호 진단 병합/고도화 절차 공식화

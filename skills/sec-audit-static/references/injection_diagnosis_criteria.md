@@ -134,7 +134,7 @@ fun buildQuery(): String {
 | 판정 | 스크립트 소스 | 설명 | 조건 |
 |------|-------------|------|------|
 | **취약** (Direct RCE) | HTTP request parameter | 사용자 입력이 parse()/evaluate()의 코드 영역에 직접 전달 | `shell.evaluate(request.getParameter("script"))` |
-| **정보** (Stored RCE) | DB entity / Config | DB 또는 설정 파일의 스크립트 필드 → 관리자/DB 침해 시 RCE | `shell.evaluate(entity.getScript())` |
+| **취약** (Stored RCE / 잠재적 취약) | DB entity / Config | DB 또는 설정 파일의 스크립트 필드 → 관리자/DB 침해 시 RCE. 악용 경로가 실재하므로 취약으로 분류. | `shell.evaluate(entity.getScript())` |
 | **양호** | classpath 고정 파일 | 정적 리소스만 parse + 사용자 입력은 Binding 변수(값)로만 전달 | `shell.parse(classpathSource)` + `setBinding()` |
 
 ### 8.2 판정 세부 기준
@@ -143,11 +143,12 @@ fun buildQuery(): String {
 - HTTP `@RequestParam`/`@RequestBody` 값 → `GroovyShell.parse()` 또는 `.evaluate()` 인자로 전달
 - URL 경로 변수 → 스크립트 코드 문자열에 결합
 
-**정보 판정 조건** (Stored RCE):
+**취약 판정 조건 (Stored RCE / 잠재적 취약)**:
 - DB Entity의 `script` 필드 → `shell.evaluate(condition)` 경로 존재
 - `replaceAll()` 등 syntax 치환은 **보안 필터가 아님** → RCE 차단 불가
 - 이중 파싱 구조: 1차 parse(classpath) → run() → 결과 문자열에 `it.script` 포함 → 2차 parse
-- 개선 권고: `SecureASTCustomizer`로 허용 클래스/메서드 화이트리스트 적용
+- DB 침해(관리자 권한 탈취 또는 SQL Injection) 시 임의 코드 실행 경로가 확실히 존재 → **취약**으로 분류
+- 심각도: Medium (DB 침해 선행 필요) / 필수 조치: `SecureASTCustomizer` 샌드박스 적용
 
 **양호 판정 조건** (모두 충족 시):
 - 스크립트 소스가 classpath 리소스 파일(`classpath:xxx.groovy`)만 사용
@@ -176,7 +177,7 @@ Controller → GameHandler → GameGroovyService.cacheAndRun()
 
 - HTTP 파라미터(`deviceId`, `uuid`)는 조건 비교 '값'으로만 사용, '코드' 영역 미도달
 - `GameTargetingScriptEntity.script`는 DB에서 조회 → **Stored RCE** (DB 침해 필요)
-- 판정: **정보** (Direct RCE 불가, Stored RCE 가능)
+- 판정: **취약 / 잠재적 취약** (Direct RCE 불가, Stored RCE 경로 실재 → Medium)
 
 ## 9. 교차 검증 필수 조건
 

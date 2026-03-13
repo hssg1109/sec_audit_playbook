@@ -229,7 +229,7 @@ def _md_to_xhtml_fallback(md_text):
             name = line[len("[[ANCHOR:"):-2]
             name = html_escape(name)
             html_parts.append(
-                f'<ac:structured-macro ac:name="anchor">'
+                f'<ac:structured-macro ac:name="anchor" ac:schema-version="1">'
                 f'<ac:parameter ac:name="name">{name}</ac:parameter>'
                 f'</ac:structured-macro>'
             )
@@ -297,11 +297,15 @@ def md_to_xhtml(md_text):
         def repl(match):
             name = html_escape(match.group(1))
             return (
-                f'<ac:structured-macro ac:name="anchor">'
+                f'<ac:structured-macro ac:name="anchor" ac:schema-version="1">'
                 f'<ac:parameter ac:name="name">{name}</ac:parameter>'
                 f'</ac:structured-macro>'
             )
-        return re.sub(r'\[\[ANCHOR:([^\]]+)\]\]', repl, xhtml)
+        # First unwrap from <p> tags (markdown library wraps block-level tokens)
+        xhtml = re.sub(r'<p>\[\[ANCHOR:([^\]]+)\]\]</p>', repl, xhtml)
+        # Then handle any remaining inline occurrences
+        xhtml = re.sub(r'\[\[ANCHOR:([^\]]+)\]\]', repl, xhtml)
+        return xhtml
 
     def _strip_html_tags(html_str: str) -> str:
         """Remove HTML tags, leaving plain text for Confluence macro parameter."""
@@ -445,6 +449,49 @@ def md_to_xhtml(md_text):
             )
         return re.sub(r'<a\b[^>]*\shref="#([^"]+)"[^>]*>([^<]*)</a>', repl, xhtml)
 
+    # Standard HTML tags allowed in XHTML — must NOT be escaped.
+    _KNOWN_HTML_TAGS = frozenset({
+        'a', 'abbr', 'acronym', 'address', 'article', 'aside', 'b', 'blockquote',
+        'br', 'caption', 'cite', 'code', 'col', 'colgroup', 'dd', 'del', 'details',
+        'dfn', 'div', 'dl', 'dt', 'em', 'figcaption', 'figure', 'footer', 'h1', 'h2',
+        'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hr', 'html', 'i', 'img', 'ins',
+        'kbd', 'li', 'main', 'mark', 'nav', 'ol', 'p', 'pre', 'q', 's', 'samp',
+        'section', 'small', 'span', 'strong', 'sub', 'summary', 'sup', 'table',
+        'tbody', 'td', 'tfoot', 'th', 'thead', 'time', 'title', 'tr', 'tt', 'u',
+        'ul', 'var', 'wbr',
+    })
+
+    def _postprocess_escape_unknown_tags(xhtml: str) -> str:
+        """Escape any XML tag whose name is not a known HTML element and not an
+        ac:/ri: Confluence namespace tag.
+
+        This catches Java generic type notation that leaked into paragraph text,
+        e.g.  ResponseEntity<String> → ResponseEntity&lt;String&gt;
+        Confluence code macros use CDATA so their content is never reached here.
+        """
+        # Match opening/closing/self-closing tags: <TagName ...> </TagName> <TagName/>
+        tag_re = re.compile(
+            r'<(/?)([A-Za-z][A-Za-z0-9_]*)(\s[^>]*)?(/)?>',
+            re.DOTALL,
+        )
+        def _escape_if_unknown(m):
+            slash_open  = m.group(1)   # "/" for closing tag, else ""
+            tag_name    = m.group(2)
+            attrs       = m.group(3) or ""
+            slash_close = m.group(4) or ""
+            tag_lower   = tag_name.lower()
+            # Keep known HTML tags and ac:/ri: namespace tags (already handled
+            # by _postprocess_escape_foreign_ns for ns: prefixes).
+            if tag_lower in _KNOWN_HTML_TAGS:
+                return m.group(0)
+            # Keep anything that looks like a Confluence/XML namespace (contains colon).
+            if ':' in tag_name:
+                return m.group(0)
+            # Escape everything else (Java generics, Spring tags without ns, etc.)
+            raw = f"<{slash_open}{tag_name}{attrs}{slash_close}>"
+            return html_escape(raw)
+        return tag_re.sub(_escape_if_unknown, xhtml)
+
     md_text = _preprocess_anchors(md_text)
     md_text = _preprocess_expand_blocks(md_text, expand_store)
     md_text = _preprocess_passthrough(md_text)
@@ -456,6 +503,7 @@ def md_to_xhtml(md_text):
     xhtml = _postprocess_expand_blocks(xhtml)
     xhtml = _postprocess_passthrough(xhtml)
     xhtml = _postprocess_escape_foreign_ns(xhtml)
+    xhtml = _postprocess_escape_unknown_tags(xhtml)
     xhtml = _postprocess_anchor_links(xhtml)
     return xhtml
 
