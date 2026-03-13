@@ -56,6 +56,26 @@
 }
 ```
 
+### Phase 4 보고서 연계
+
+Task 1-1 결과(`task_11_result.json`)는 Phase 4 보고서 생성 시 `--asset-info` 옵션으로 전달하면
+보고서 상단에 **서비스 설명 및 자산 구조 표**가 자동 삽입됩니다:
+
+```bash
+python3 tools/scripts/generate_finding_report.py <source_dir> \
+    <finding_jsons...> \
+    --service "<서비스명>" \
+    --source-label "<레포URL 또는 경로>" \
+    --asset-info state/<prefix>_task11.json \   # ← 서비스 설명 + 자산 구조 자동 삽입
+    --anchor-style md2cf \
+    --page-map tools/confluence_page_map.json \
+    --output state/<prefix>_진단보고서.md
+```
+
+**삽입 내용:**
+- `1.1 서비스 정보` 표: 서비스 설명, 용도, 프레임워크, 기술 스택, 레포, 담당자(기획/개발)
+- `1.2 자산 구조` 표: 환경(상용/개발/알파)별 도메인, 포트, 노출 범위
+
 ### 금지사항
 - 실제 IP 주소는 반드시 마스킹 (REDACTION_RULES.md 참조)
 - 추측으로 자산 추가 금지 (Excel과 소스코드에 확인된 것만)

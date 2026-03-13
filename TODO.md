@@ -31,7 +31,7 @@
 | # | 항목 | 우선순위 | 복잡도 | 상태 | 관련 컴포넌트 | 시작일 | 완료일 | 참고/링크 |
 |---|------|---------|--------|------|--------------|--------|--------|-----------|
 | T-07 | **Task 2-3~2-5 진단 자동화 고도화**<br>XSS / 파일처리 / 데이터보호 진단을<br>SQL Injection 수준의 자동화로 끌어올림<br>• `scan_xss.py` v2.4.0: ✅ Reflected Taint Flow 검증, DOM 라이브러리 제외, 커스텀 필터 탐지<br>• `scan_file_processing.py` v1.0: ✅ Upload/Download/LFI/RFI 자동 탐지 완성<br>• `scan_data_protection.py` v1.1.0: ✅ CORS/Secrets/JWT/Crypto/Logging 7개 모듈 + FP 3종 수정 | 🔴 | L | ✅ 완료 | `tools/scripts/`<br>`skills/sec-audit-static/references/task_prompts/` | 2026-02-25 | 2026-03-06 | v4.7.0~v4.9.0 |
-| T-01 | 보고서 상단에 서비스 설명 및 자산 구조 명시<br>(URL, IP, Repo, 담당자) | 🔴 | M | ⬜ 대기 | `publish_confluence.py`<br>`generate_finding_report.py` | - | - | - |
+| T-01 | 보고서 상단에 서비스 설명 및 자산 구조 명시<br>(URL, IP, Repo, 담당자) | 🔴 | M | ✅ 완료 | `generate_finding_report.py`<br>`task_11_asset_identification.md` | 2026-03-13 | 2026-03-13 | `--asset-info state/<prefix>_task11.json` 옵션 추가. 서비스 정보 표 + 환경별 자산 구조 표 자동 삽입. |
 | T-02 | 보안진단 완료 후 PoC/테스트 코드 자동 생성<br>(JUnit / Fuzz / ZAP 활용, 검증용) | 🔴 | XL | ⬜ 대기 | `scan_injection_enhanced.py`<br>`skills/sec-audit-static/` | - | - | - |
 | T-03 | 검증 절차 자동화<br>1차: AI 진단 → 보고서 자동 생성<br>2차: 인력 검토 → Confirm<br>오탐/과탐 체크 워크플로우 | 🔴 | L | ⬜ 대기 | 전체 파이프라인 | - | - | - |
 | T-04 | Diff 기반 seed 설정 + RAG 형식 프롬프트 연동<br>(변경된 코드 diff를 RAG로 구성하여 진단 프롬프트에 추가) | 🟡 | L | ⬜ 대기 | `scan_injection_enhanced.py`<br>`skills/` 프롬프트 | - | - | [참고: hoyeon](https://github.com/team-attention/hoyeon) |

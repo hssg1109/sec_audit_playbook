@@ -35,6 +35,7 @@ Phase 3: LLM 수동분석 보완 (자동스캔 결과를 보완·갱신)
 
 Phase 4: 보고서 생성 + Confluence 게시 [필수]
   ├─ generate_finding_report.py --anchor-style md2cf --page-map tools/confluence_page_map.json
+  │   └─ [권장] --asset-info state/<prefix>_task11.json  ← 서비스 설명 + 자산 구조 표 자동 삽입
   └─ publish_confluence.py (dry-run 확인 후 실행)
       ├─ main_report: 진단보고서.md (task_sources로 JSON 참조, API 인벤토리 요약 포함)
       ├─ api_inventory: <prefix>_api_inventory.json  ← API별 실제 입력값(DTO 필드 전개) 상세

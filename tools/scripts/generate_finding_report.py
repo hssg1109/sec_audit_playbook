@@ -431,6 +431,30 @@ def load_findings(filepath: Path, source_dir: Path,
                 if isinstance(sample, str) and sample.strip():
                     code_snippet = sample
 
+        # evidence.instances 처리 (LLM 분석 결과 포맷 — {file, lines, code_snippet, method, taint_path})
+        if not code_snippet and isinstance(evidence, dict):
+            inst_list = evidence.get("instances", [])
+            if isinstance(inst_list, list) and inst_list:
+                combined_parts = []
+                for inst in inst_list:
+                    if not isinstance(inst, dict):
+                        continue
+                    inst_file  = inst.get("file", "")
+                    inst_lines = inst.get("lines", "")
+                    inst_code  = inst.get("code_snippet", "")
+                    inst_method = inst.get("method", "")
+                    if not file_path and inst_file:
+                        file_path = inst_file
+                    if inst_code:
+                        header = f"// {inst_file}" if inst_file else ""
+                        if inst_lines:
+                            header += f" (L{inst_lines})"
+                        if inst_method:
+                            header += f" — {inst_method}"
+                        combined_parts.append(f"{header}\n{inst_code}".strip())
+                if combined_parts:
+                    code_snippet = "\n\n".join(combined_parts)
+
         # file_path 조기 설정 (af_files 기반) — extract_code_evidence() 호출 전에 설정
         if not file_path and af_files:
             file_path = af_files[0]
@@ -485,6 +509,26 @@ def load_findings(filepath: Path, source_dir: Path,
                         "endpoint": "",
                     })
 
+        # evidence.instances → instances list (LLM 포맷)
+        if not instances and isinstance(evidence, dict):
+            inst_list = evidence.get("instances", [])
+            if isinstance(inst_list, list) and inst_list:
+                for inst in inst_list:
+                    if not isinstance(inst, dict):
+                        continue
+                    inst_file = inst.get("file", "")
+                    inst_lines_str = str(inst.get("lines", ""))
+                    inst_line_n = 0
+                    if inst_lines_str:
+                        _lm = re.match(r'^(\d+)', inst_lines_str)
+                        if _lm:
+                            inst_line_n = int(_lm.group(1))
+                    instances.append({
+                        "file": inst_file,
+                        "line": inst_line_n,
+                        "endpoint": inst.get("taint_path", inst.get("method", "")),
+                    })
+
         if not instances and af_files:
             # affected_files 문자열에서 수집한 파일 목록으로 instances 구성
             instances = [{"file": fp, "line": 0, "endpoint": endpoint} for fp in af_files]
@@ -527,6 +571,9 @@ def load_findings(filepath: Path, source_dir: Path,
         _json_result = f.get("result", "").strip()
         if _json_result == "양호" and _severity not in ("high", "critical"):
             _severity = "low"
+        elif _json_result == "취약" and _severity not in ("high", "critical"):
+            # LLM이 "취약"으로 판정한 경우 medium/info → high(취약)로 상향
+            _severity = "high"
 
         findings.append(Finding(
             id=f"{cat_info['number']}-{idx}",
@@ -1228,7 +1275,7 @@ def generate_summary_table(all_findings: dict[str, list[Finding]],
             fid = row[0]
             lines.append(
                 f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]} | "
-                f"{row[5]} | {row[6]} | [{_anchor_link(f'finding-{fid}', '상세')}] |"
+                f"{row[5]} | {row[6]} | {_anchor_link(f'finding-{fid}', '상세')} |"
             )
         lines.append("")
 
@@ -1265,11 +1312,22 @@ def generate_category_detail(category_id: str, findings: list[Finding],
 
     for f in reportable:
         result, risk = RISK_MAP.get(f.severity, ("정보", 4))
-        # 현황 요약 (description 첫 문장)
-        status = f.description.split(".")[0][:50] if f.description else "-"
+        # 현황 요약: description 첫 줄의 첫 문장, 80자 제한
+        _desc_raw = f.description.strip() if f.description else ""
+        # 개행 기준 첫 줄
+        _desc_line = _desc_raw.split('\n')[0] if _desc_raw else ""
+        # '. ' (마침표+공백) 기준 첫 문장, fallback은 전체 첫 줄
+        if '. ' in _desc_line:
+            _sent = _desc_line.split('. ')[0]
+        else:
+            _sent = _desc_line
+        # 80자 초과 시 말줄임
+        status = (_sent[:77] + '...') if len(_sent) > 80 else _sent
+        if not status:
+            status = "-"
 
         lines.append(
-            f"| {f.id} | {f.subcategory} | {status}... | {result} | {risk} | {cat_info['threat']} |"
+            f"| {f.id} | {f.subcategory} | {status} | {result} | {risk} | {cat_info['threat']} |"
         )
 
     lines.append("")
@@ -1448,6 +1506,73 @@ def generate_instance_appendix(all_findings: dict[str, list[Finding]]) -> str:
     return "\n".join(lines)
 
 
+def _render_asset_info_section(asset_info: dict) -> list[str]:
+    """task_11_result.json 데이터를 서비스 설명 + 자산 구조 Markdown으로 변환."""
+    lines = []
+    findings = asset_info.get("findings", [])
+    if not findings:
+        return lines
+
+    first = findings[0]
+
+    # 서비스 설명
+    service_detail = first.get("service_detail") or first.get("asset_name", "")
+    purpose = first.get("purpose", "")
+    framework = first.get("framework", "")
+    tech_stack = first.get("tech_stack", [])
+    build_tool = first.get("build_tool", "")
+    repo_url = first.get("repository_url", "")
+    biz_owner = first.get("biz_owner", "")
+    dev_owner = first.get("dev_owner", "")
+    was_version = first.get("was_version", "")
+    language_version = first.get("language_version", "")
+
+    lines.append("### 1.1 서비스 정보\n")
+    rows = []
+    if service_detail:
+        rows.append(["서비스 설명", service_detail])
+    if purpose:
+        rows.append(["용도", purpose])
+    if framework:
+        rows.append(["프레임워크", framework])
+    if tech_stack:
+        rows.append(["기술 스택", ", ".join(tech_stack)])
+    if build_tool:
+        rows.append(["빌드 도구", build_tool])
+    if language_version:
+        rows.append(["언어 버전", language_version])
+    if was_version:
+        rows.append(["WAS", was_version])
+    if repo_url:
+        rows.append(["소스 레포", repo_url])
+    if biz_owner:
+        rows.append(["기획 담당자", biz_owner])
+    if dev_owner:
+        rows.append(["개발 담당자", dev_owner])
+
+    lines.append("| 항목 | 내용 |")
+    lines.append("|------|------|")
+    for k, v in rows:
+        lines.append(f"| {k} | {v} |")
+    lines.append("")
+
+    # 자산 구조 표 (환경별)
+    lines.append("### 1.2 자산 구조\n")
+    lines.append("| 환경 | 노출 | 도메인 | 포트 | 담당자(개발) |")
+    lines.append("|------|------|--------|------|------------|")
+    for asset in findings:
+        env = asset.get("environment", "")
+        exposure = asset.get("exposure", "")
+        domain_val = asset.get("domain", "")
+        ports = asset.get("ports", [])
+        ports_str = ", ".join(str(p) for p in ports) if ports else ""
+        owner = asset.get("dev_owner", "")
+        lines.append(f"| {env} | {exposure} | {domain_val} | {ports_str} | {owner} |")
+    lines.append("")
+
+    return lines
+
+
 def generate_report(
     source_dir: Path,
     finding_files: list[Path],
@@ -1461,6 +1586,7 @@ def generate_report(
     source_label: str | None = None,
     anchor_style: str | None = None,
     page_map_path: Path | None = None,
+    asset_info_path: Path | None = None,
 ):
     """최종 보고서 생성"""
     global ANCHOR_STYLE
@@ -1468,6 +1594,13 @@ def generate_report(
         ANCHOR_STYLE = anchor_style
 
     today = date.today().strftime("%Y.%m.%d")
+
+    # 자산 정보 로드 (task_11_result.json)
+    asset_info: dict | None = None
+    if asset_info_path and asset_info_path.exists():
+        with open(asset_info_path, encoding="utf-8") as f:
+            asset_info = json.load(f)
+        print(f"  자산정보 로드: {asset_info_path.name}")
 
     # Findings 로드 + 스캔 JSON summary 수집 (endpoint 전수 통계용)
     all_findings: dict[str, list[Finding]] = {}
@@ -1602,9 +1735,12 @@ def generate_report(
             sqli_rev = sp_data.get("sqli_endpoint_review", {})
             if sqli_rev and sqli_rev.get("overall_sqli_judgment") == "양호":
                 auto_sqli = scan_summaries.get("injection", {}).get("sqli", {})
+                # endpoint_summary.정보 값이 있으면 사용 (LLM 최종 잔여 정보 건수)
+                ep_sum = sp_data.get("endpoint_summary", {})
+                llm_info_count = ep_sum.get("정보", 0) if isinstance(ep_sum, dict) else 0
                 llm_matrix_overrides[("injection", "SQL 인젝션")] = {
-                    "safe": auto_sqli.get("양호", 0) + auto_sqli.get("정보", 0),
-                    "info": 0,
+                    "safe": auto_sqli.get("양호", 0) + auto_sqli.get("정보", 0) - llm_info_count,
+                    "info": llm_info_count,
                     "vuln": auto_sqli.get("취약", 0),
                 }
             gfa = sp_data.get("global_findings_analysis", {})
@@ -1749,14 +1885,19 @@ def generate_report(
         report_lines.append(f"**대상 모듈:** {', '.join(target_modules)}\n")
     report_lines.append("")
 
+    # 자산 정보 (task_11_result.json 제공 시)
+    if asset_info:
+        report_lines.extend(_render_asset_info_section(asset_info))
+
     # 진단 결과 요약
-    report_lines.append("### 1.1 진단 결과 통계\n")
+    section_num = "1.3" if asset_info else "1.1"
+    report_lines.append(f"### {section_num} 진단 결과 통계\n")
     report_lines.append(f"- **취약:** {total_vuln}건")
     report_lines.append(f"- **정보:** {total_info}건")
     report_lines.append("")
 
     if total_vuln > 0 or total_info > 0:
-        report_lines.append("### 1.2 주요 식별 취약점\n")
+        report_lines.append(f"### {'1.4' if asset_info else '1.2'} 주요 식별 취약점\n")
         # Task 순서대로 High/Critical 취약점 출력
         for task_label, _task_desc, cat_id in _TASK_ORDER:
             findings = all_findings.get(cat_id, [])
@@ -1775,6 +1916,42 @@ def generate_report(
         all_findings, scan_summaries,
         llm_overrides=llm_matrix_overrides or None,
     ))
+
+    # Persistent XSS 주 finding에 EP 연계 현황 주입 (취약/정보 분류 기준 포함)
+    _pxss_rev = scan_summaries.get("xss", {}).get("persistent_xss_revision", {})
+    if isinstance(_pxss_rev, dict) and _pxss_rev.get("upgraded_to_vuln"):
+        _ep_exp_f = next(
+            (f for f in all_findings.get("xss", [])
+             if f.from_ep_group and f.ep_expansion and f.subcategory == "Persistent XSS"),
+            None
+        )
+        _main_pxss_f = next(
+            (f for f in all_findings.get("xss", [])
+             if f.subcategory == "Persistent XSS"
+             and not f.from_ep_group
+             and RISK_MAP.get(f.severity, ("", 0))[0] != "양호"),
+            None
+        )
+        if _ep_exp_f and _main_pxss_f:
+            _vc = len(_ep_exp_f.ep_expansion.get("vuln_instances", []))
+            _ic = len(_ep_exp_f.ep_expansion.get("info_instances", []))
+            _vuln_reason = _pxss_rev.get("reason", "DB 쓰기 흐름 정적 확인 완료")
+            _info_reason = _pxss_rev.get("info_kept_reason", "DB 쓰기 미확인 — 동적 분석 필요")
+            _ep_note = (
+                f"\n\n---\n\n"
+                f"**📊 연계 API 현황 — 취약 {_vc}건 / 정보 {_ic}건**\n\n"
+                f"이 취약점(finding-{_main_pxss_f.id})에 연계된 API 엔드포인트를 "
+                f"항목별 상세 목록(No. {_main_pxss_f.id} 이후 행)에서 확인할 수 있습니다.\n\n"
+                f"| 분류 | 판정 기준 | 건수 |\n"
+                f"|:---:|:---------|:---:|\n"
+                f"| 🔴 취약 | {_vuln_reason} | **{_vc}건** |\n"
+                f"| 🟡 정보 (수동검토) | {_info_reason} | **{_ic}건** |\n\n"
+                f"> **취약(🔴)**: 전역 XSS 필터 비활성화 상태에서 DB 쓰기 흐름이 정적으로 확인된 엔드포인트. "
+                f"클라이언트 innerHTML 삽입 시 Persistent XSS 직접 트리거 가능.\n\n"
+                f"> **정보(🟡)**: 컨트롤러·서비스 레이어 정적 분석으로 DB 쓰기 경로를 미확인. "
+                f"외부 API 또는 비동기 이벤트 경로를 통한 저장 가능성이 있어 동적 분석 보완이 필요합니다."
+            )
+            _main_pxss_f.description = _main_pxss_f.description + _ep_note
 
     # 카테고리별 상세
     report_lines.append("## 3. 진단 결과 상세\n")
@@ -1868,6 +2045,11 @@ def main():
         help="confluence_page_map.json 경로. supplemental_sources LLM 보완 findings를 통계에 병합한다.",
         default=None,
     )
+    parser.add_argument(
+        "--asset-info",
+        help="자산 식별 결과 JSON 경로 (task_11_result.json). 서비스 설명 및 자산 구조 표를 보고서 상단에 자동 삽입.",
+        default=None,
+    )
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir)
@@ -1905,6 +2087,7 @@ def main():
         args.source_label,
         args.anchor_style,
         page_map_path=Path(args.page_map) if args.page_map else None,
+        asset_info_path=Path(args.asset_info) if args.asset_info else None,
     )
 
 
