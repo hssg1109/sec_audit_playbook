@@ -60,615 +60,683 @@
       "title": "테스트 목록",
       "groups": [
         {
-          "title": "테스트1 - OCB-IAM 간편인증 진단",
-          "entries": [
-            {
-              "source": "state/task_11_result.json",
-              "title": "자산 식별 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/task_21_result.json",
-              "title": "API 인벤토리 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/task_22_result.json",
-              "title": "인젝션 취약점 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/task_23_result.json",
-              "title": "XSS 취약점 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/task_24_result.json",
-              "title": "파일 처리 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/task_25_result.json",
-              "title": "데이터 보호 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/final_report.json",
-              "title": "최종 보안 진단 보고서",
-              "type": "final_report"
-            }
-          ]
-        },
-        {
-          "title": "테스트2 - SKP PlayBook 취약 게시판 진단",
-          "entries": [
-            {
-              "source": "state/skp_playbook_task_21_result.json",
-              "title": "테스트2 - API 인벤토리 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/skp_playbook_task_22_result.json",
-              "title": "테스트2 - 인젝션 취약점 진단 결과",
-              "type": "finding"
-            }
-          ]
-        },
-        {
-          "title": "테스트3 - PCoNA 진단",
-          "entries": [
-            {
-              "source": "state/pcona_task_11_result.json",
-              "title": "자산 식별 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/pcona_task_21_result.json",
-              "title": "API 인벤토리 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/pcona_task_22_result.json",
-              "title": "인젝션 취약점 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/pcona_task_23_result.json",
-              "title": "XSS 취약점 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/pcona_task_24_result.json",
-              "title": "파일 처리 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/pcona_task_25_result.json",
-              "title": "데이터 보호 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/pcona_final_report.json",
-              "title": "최종 보안 진단 보고서",
-              "type": "final_report"
-            }
-          ]
-        },
-        {
-          "title": "테스트4 - pcona-console 보고서 고도화",
-          "entries": [
-            {
-              "source": "state/pcona_진단보고서.md",
-              "title": "PCoNA 관리콘솔 보안진단 보고서",
-              "type": "doc"
-            },
-            {
-              "source": "state/pcona-console_report.md",
-              "title": "PCoNA 관리콘솔 보안진단 보고서",
-              "type": "doc"
-            }
-          ]
-        },
-        {
-          "title": "테스트5 - pcona-console 인젝션 고도화 진단",
-          "entries": [
-            {
-              "source": "state/t5_pcona_task_21_result.json",
-              "title": "API 인벤토리 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/t5_pcona_task_22_enhanced_v2.json",
-              "title": "인젝션 취약점 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/t5_pcona_진단보고서.md",
-              "title": "PCoNA 인젝션 고도화 보고서",
-              "type": "doc"
-            }
-          ]
-        },
-        {
-          "title": "테스트6 - OCB Community API 인젝션 고도화 진단",
-          "entries": [
-            {
-              "source": "state/ocb_community_task22_injection_v3.json",
-              "title": "인젝션 취약점 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/ocb_community_sqli_고도화_보고서.md",
-              "title": "OCB Community SQLi 고도화 보고서",
-              "type": "doc"
-            }
-          ]
-        },
-        {
-          "title": "테스트7 - OCB Community API 진단",
-          "entries": [
-            {
-              "source": "state/ocb_community_api_inventory.json",
-              "title": "테스트7 - API 인벤토리 결과",
-              "type": "api_inventory"
-            }
-          ]
-        },
-        {
-          "title": "테스트8 - MSG Sugar API 진단",
-          "entries": [
-            {
-              "source": "state/msgsugar_api_inventory.json",
-              "title": "테스트8 - API 인벤토리 결과",
-              "type": "api_inventory"
-            },
-            {
-              "source": "state/msgsugar_injection_v45d_run1.json",
-              "title": "테스트8 - 인젝션 취약점 진단 결과",
-              "type": "finding"
-            }
-          ]
-        },
-        {
-          "title": "테스트9 - OCB Community API 인젝션 진단",
-          "entries": [
-            {
-              "source": "state/ocb_community_new_api_inventory.json",
-              "title": "테스트9 - API 인벤토리 결과",
-              "type": "api_inventory"
-            },
-            {
-              "source": "state/ocb_community_injection_v45d_run1.json",
-              "title": "테스트9 - 인젝션 취약점 진단 결과",
-              "type": "finding"
-            }
-          ]
-        },
-        {
-          "title": "테스트10 - PCoNA Console 인젝션 진단 (v4.5.2 정합성 검증)",
-          "entries": [
-            {
-              "source": "state/t5_pcona_api_scan.json",
-              "title": "테스트10 - API 인벤토리 결과",
-              "type": "api_inventory"
-            },
-            {
-              "source": "state/pcona_console_v452_run1.json",
-              "title": "테스트10 - 인젝션 취약점 진단 결과",
-              "type": "finding"
-            }
-          ]
-        },
-        {
-          "title": "테스트11 - event_resource 인젝션 진단 (통합: event + business)",
-          "entries": [
-            {
-              "source": "state/event_resource_api_v2.json",
-              "title": "테스트11 - API 인벤토리 결과",
-              "type": "api_inventory"
-            },
-            {
-              "source": "state/event_resource_sqli_v2.json",
-              "title": "테스트11 - 인젝션 취약점 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/event_resource_진단보고서.md",
-              "title": "테스트11 - event_resource 진단 보고서",
-              "type": "doc"
-            }
-          ]
-        },
-        {
-          "title": "테스트13 - okick-event-server 진단",
-          "entries": [
-            {
-              "source": "state/okick_event_진단보고서.md",
-              "title": "테스트13 - okick-event-server 통합 진단 보고서",
-              "type": "main_report",
-              "task_sources": {
-                "api": "state/okick_event_api_inventory.json",
-                "injection": "state/okick_event_injection_v3.json",
-                "xss": "state/okick_event_xss_v3.json"
-              }
-            },
-            {
-              "source": "state/okick_event_injection_v3.json",
-              "title": "테스트13 - 인젝션 취약점 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/okick_event_xss_v3.json",
-              "title": "테스트13 - XSS 취약점 진단 결과",
-              "type": "finding"
-            }
-          ]
-        },
-        {
-          "title": "테스트14 - okick-reward-server 진단",
-          "entries": [
-            {
-              "source": "state/okick_reward_진단보고서.md",
-              "title": "테스트14 - okick-reward-server 통합 진단 보고서",
-              "type": "main_report",
-              "task_sources": {
-                "api": "state/okick_reward_api_inventory.json",
-                "injection": "state/okick_reward_injection_v3.json",
-                "xss": "state/okick_reward_xss_v3.json"
-              }
-            },
-            {
-              "source": "state/okick_reward_injection_v3.json",
-              "title": "테스트14 - 인젝션 취약점 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/okick_reward_xss_v3.json",
-              "title": "테스트14 - XSS 취약점 진단 결과",
-              "type": "finding"
-            }
-          ]
-        },
-        {
-          "title": "테스트12 - OCB Community API XSS 진단",
-          "entries": [
-            {
-              "source": "state/ocb_community_xss_v2.json",
-              "title": "테스트12 - XSS 취약점 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/ocb_community_xss_보고서.md",
-              "title": "테스트12 - OCB Community XSS 진단 보고서",
-              "type": "doc"
-            }
-          ]
-        },
-        {
-          "title": "테스트16 - MSG Sugar API 통합 진단 (v4.6.3)",
-          "confluence_page_id": "737060297",
-          "entries": [
-            {
-              "source": "state/msgsugar_진단보고서.md",
-              "title": "테스트16 - MSG Sugar API 통합 진단 보고서",
-              "type": "main_report",
-              "confluence_page_id": "737060299",
-              "task_sources": {
-                "api": "state/msgsugar_api_inventory.json",
-                "injection": "state/msgsugar_injection_v463_run1.json",
-                "xss": "state/msgsugar_xss_v232_run1.json"
-              }
-            },
-            {
-              "source": "state/msgsugar_injection_v463_run1.json",
-              "title": "테스트16 - 인젝션 취약점 진단 결과",
-              "type": "finding",
-              "confluence_page_id": "737060301"
-            },
-            {
-              "source": "state/msgsugar_xss_v232_run1.json",
-              "title": "테스트16 - XSS 취약점 진단 결과",
-              "type": "finding",
-              "confluence_page_id": "737060302"
-            }
-          ]
-        },
-        {
-          "title": "테스트15 - OCB Community API 통합 진단 (v4.6.3)",
-          "confluence_page_id": "737058010",
-          "entries": [
-            {
-              "source": "state/ocb_community_진단보고서.md",
-              "title": "테스트15 - OCB Community API 통합 진단 보고서",
-              "type": "main_report",
-              "confluence_page_id": "737058011",
-              "task_sources": {
-                "api": "state/ocb_community_new_api_inventory.json",
-                "injection": "state/ocb_community_injection_v463_final.json",
-                "xss": "state/ocb_community_xss_v463_run1.json"
-              }
-            },
-            {
-              "source": "state/ocb_community_injection_v463_final.json",
-              "title": "테스트15 - 인젝션 취약점 진단 결과",
-              "type": "finding",
-              "confluence_page_id": "737058015"
-            },
-            {
-              "source": "state/ocb_community_xss_v463_run1.json",
-              "title": "테스트15 - XSS 취약점 진단 결과",
-              "type": "finding",
-              "confluence_page_id": "737058018"
-            }
-          ]
-        },
-        {
-          "title": "테스트18 - OCB Community API 전체 정적 진단 (2026-03-06)",
-          "entries": [
-            {
-              "source": "state/ocb_community_진단보고서_v2.md",
-              "title": "테스트18 - OCB Community API 통합 진단 보고서",
-              "type": "main_report",
-              "task_sources": {
-                "api": "state/ocb_community_api_inventory.json",
-                "injection": "state/ocb_community_injection_v463_final.json",
-                "xss": "state/ocb_community_xss_v463_run2.json",
-                "data_protection": "state/ocb_community_task25_final.json"
-              }
-            },
-            {
-              "source": "state/ocb_community_api_inventory.json",
-              "title": "테스트18 - API 인벤토리 결과",
-              "type": "api_inventory"
-            },
-            {
-              "source": "state/ocb_community_injection_v463_final.json",
-              "supplemental_sources": [
-                "state/ocb_community_task22_injection_v3.json"
-              ],
-              "title": "테스트18 - 인젝션 취약점 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/ocb_community_xss_v463_run2.json",
-              "supplemental_sources": [
-                "state/ocb_community_task23_llm.json"
-              ],
-              "title": "테스트18 - XSS 취약점 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/ocb_community_task24_llm.json",
-              "title": "테스트18 - 파일 처리 진단 결과",
-              "type": "finding"
-            },
-            {
-              "source": "state/ocb_community_task25_final.json",
-              "title": "테스트18 - 데이터 보호 진단 결과",
-              "type": "finding"
-            }
-          ]
-        },
-        {
-          "title": "테스트19 - OCB Sugar Stage 정적 진단 (2026-03-09)",
+          "title": "old",
+          "page_id": 739228158,
           "groups": [
             {
-              "title": "테스트19-A — msg-sugar",
+              "title": "테스트1 - OCB-IAM 간편인증 진단",
               "entries": [
                 {
-                  "source": "state/ocb_sugar_stage_진단보고서_v1.md",
-                  "title": "테스트19-A - OCB Sugar Stage (msg-sugar) 진단 보고서",
+                  "source": "state/task_11_result.json",
+                  "title": "자산 식별 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/task_21_result.json",
+                  "title": "API 인벤토리 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/task_22_result.json",
+                  "title": "인젝션 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/task_23_result.json",
+                  "title": "XSS 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/task_24_result.json",
+                  "title": "파일 처리 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/task_25_result.json",
+                  "title": "데이터 보호 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/final_report.json",
+                  "title": "최종 보안 진단 보고서",
+                  "type": "final_report"
+                }
+              ]
+            },
+            {
+              "title": "테스트2 - SKP PlayBook 취약 게시판 진단",
+              "entries": [
+                {
+                  "source": "state/skp_playbook_task_21_result.json",
+                  "title": "테스트2 - API 인벤토리 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/skp_playbook_task_22_result.json",
+                  "title": "테스트2 - 인젝션 취약점 진단 결과",
+                  "type": "finding"
+                }
+              ]
+            },
+            {
+              "title": "테스트3 - PCoNA 진단",
+              "entries": [
+                {
+                  "source": "state/pcona_task_11_result.json",
+                  "title": "자산 식별 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/pcona_task_21_result.json",
+                  "title": "API 인벤토리 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/pcona_task_22_result.json",
+                  "title": "인젝션 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/pcona_task_23_result.json",
+                  "title": "XSS 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/pcona_task_24_result.json",
+                  "title": "파일 처리 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/pcona_task_25_result.json",
+                  "title": "데이터 보호 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/pcona_final_report.json",
+                  "title": "최종 보안 진단 보고서",
+                  "type": "final_report"
+                }
+              ]
+            },
+            {
+              "title": "테스트4 - pcona-console 보고서 고도화",
+              "entries": [
+                {
+                  "source": "state/pcona_진단보고서.md",
+                  "title": "PCoNA 관리콘솔 보안진단 보고서",
+                  "type": "doc"
+                },
+                {
+                  "source": "state/pcona-console_report.md",
+                  "title": "PCoNA 관리콘솔 보안진단 보고서",
+                  "type": "doc"
+                }
+              ]
+            },
+            {
+              "title": "테스트5 - pcona-console 인젝션 고도화 진단",
+              "entries": [
+                {
+                  "source": "state/t5_pcona_task_21_result.json",
+                  "title": "API 인벤토리 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/t5_pcona_task_22_enhanced_v2.json",
+                  "title": "인젝션 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/t5_pcona_진단보고서.md",
+                  "title": "PCoNA 인젝션 고도화 보고서",
+                  "type": "doc"
+                }
+              ]
+            },
+            {
+              "title": "테스트6 - OCB Community API 인젝션 고도화 진단",
+              "entries": [
+                {
+                  "source": "state/ocb_community_task22_injection_v3.json",
+                  "title": "인젝션 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/ocb_community_sqli_고도화_보고서.md",
+                  "title": "OCB Community SQLi 고도화 보고서",
+                  "type": "doc"
+                }
+              ]
+            },
+            {
+              "title": "테스트7 - OCB Community API 진단",
+              "entries": [
+                {
+                  "source": "state/ocb_community_api_inventory.json",
+                  "title": "테스트7 - API 인벤토리 결과",
+                  "type": "api_inventory"
+                }
+              ]
+            },
+            {
+              "title": "테스트8 - MSG Sugar API 진단",
+              "entries": [
+                {
+                  "source": "state/msgsugar_api_inventory.json",
+                  "title": "테스트8 - API 인벤토리 결과",
+                  "type": "api_inventory"
+                },
+                {
+                  "source": "state/msgsugar_injection_v45d_run1.json",
+                  "title": "테스트8 - 인젝션 취약점 진단 결과",
+                  "type": "finding"
+                }
+              ]
+            },
+            {
+              "title": "테스트9 - OCB Community API 인젝션 진단",
+              "entries": [
+                {
+                  "source": "state/ocb_community_new_api_inventory.json",
+                  "title": "테스트9 - API 인벤토리 결과",
+                  "type": "api_inventory"
+                },
+                {
+                  "source": "state/ocb_community_injection_v45d_run1.json",
+                  "title": "테스트9 - 인젝션 취약점 진단 결과",
+                  "type": "finding"
+                }
+              ]
+            },
+            {
+              "title": "테스트10 - PCoNA Console 인젝션 진단 (v4.5.2 정합성 검증)",
+              "entries": [
+                {
+                  "source": "state/t5_pcona_api_scan.json",
+                  "title": "테스트10 - API 인벤토리 결과",
+                  "type": "api_inventory"
+                },
+                {
+                  "source": "state/pcona_console_v452_run1.json",
+                  "title": "테스트10 - 인젝션 취약점 진단 결과",
+                  "type": "finding"
+                }
+              ]
+            },
+            {
+              "title": "테스트11 - event_resource 인젝션 진단 (통합: event + business)",
+              "entries": [
+                {
+                  "source": "state/event_resource_api_v2.json",
+                  "title": "테스트11 - API 인벤토리 결과",
+                  "type": "api_inventory"
+                },
+                {
+                  "source": "state/event_resource_sqli_v2.json",
+                  "title": "테스트11 - 인젝션 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/event_resource_진단보고서.md",
+                  "title": "테스트11 - event_resource 진단 보고서",
+                  "type": "doc"
+                }
+              ]
+            },
+            {
+              "title": "테스트13 - okick-event-server 진단",
+              "entries": [
+                {
+                  "source": "state/okick_event_진단보고서.md",
+                  "title": "테스트13 - okick-event-server 통합 진단 보고서",
                   "type": "main_report",
                   "task_sources": {
-                    "api": "state/ocb_sugar_stage_api_inventory.json",
-                    "injection": "state/ocb_sugar_stage_injection.json",
-                    "xss": "state/ocb_sugar_stage_xss.json",
-                    "file_handling": "state/ocb_sugar_stage_task24.json",
-                    "data_protection": "state/ocb_sugar_stage_task25.json"
-                  },
-                  "page_id": 739224601
+                    "api": "state/okick_event_api_inventory.json",
+                    "injection": "state/okick_event_injection_v3.json",
+                    "xss": "state/okick_event_xss_v3.json"
+                  }
                 },
                 {
-                  "source": "state/ocb_sugar_stage_api_inventory.json",
-                  "title": "테스트19-A - API 인벤토리 결과",
+                  "source": "state/okick_event_injection_v3.json",
+                  "title": "테스트13 - 인젝션 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/okick_event_xss_v3.json",
+                  "title": "테스트13 - XSS 취약점 진단 결과",
+                  "type": "finding"
+                }
+              ]
+            },
+            {
+              "title": "테스트14 - okick-reward-server 진단",
+              "entries": [
+                {
+                  "source": "state/okick_reward_진단보고서.md",
+                  "title": "테스트14 - okick-reward-server 통합 진단 보고서",
+                  "type": "main_report",
+                  "task_sources": {
+                    "api": "state/okick_reward_api_inventory.json",
+                    "injection": "state/okick_reward_injection_v3.json",
+                    "xss": "state/okick_reward_xss_v3.json"
+                  }
+                },
+                {
+                  "source": "state/okick_reward_injection_v3.json",
+                  "title": "테스트14 - 인젝션 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/okick_reward_xss_v3.json",
+                  "title": "테스트14 - XSS 취약점 진단 결과",
+                  "type": "finding"
+                }
+              ]
+            },
+            {
+              "title": "테스트12 - OCB Community API XSS 진단",
+              "entries": [
+                {
+                  "source": "state/ocb_community_xss_v2.json",
+                  "title": "테스트12 - XSS 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/ocb_community_xss_보고서.md",
+                  "title": "테스트12 - OCB Community XSS 진단 보고서",
+                  "type": "doc"
+                }
+              ]
+            },
+            {
+              "title": "테스트16 - MSG Sugar API 통합 진단 (v4.6.3)",
+              "confluence_page_id": "737060297",
+              "entries": [
+                {
+                  "source": "state/msgsugar_진단보고서.md",
+                  "title": "테스트16 - MSG Sugar API 통합 진단 보고서",
+                  "type": "main_report",
+                  "confluence_page_id": "737060299",
+                  "task_sources": {
+                    "api": "state/msgsugar_api_inventory.json",
+                    "injection": "state/msgsugar_injection_v463_run1.json",
+                    "xss": "state/msgsugar_xss_v232_run1.json"
+                  }
+                },
+                {
+                  "source": "state/msgsugar_injection_v463_run1.json",
+                  "title": "테스트16 - 인젝션 취약점 진단 결과",
+                  "type": "finding",
+                  "confluence_page_id": "737060301"
+                },
+                {
+                  "source": "state/msgsugar_xss_v232_run1.json",
+                  "title": "테스트16 - XSS 취약점 진단 결과",
+                  "type": "finding",
+                  "confluence_page_id": "737060302"
+                }
+              ]
+            },
+            {
+              "title": "테스트15 - OCB Community API 통합 진단 (v4.6.3)",
+              "confluence_page_id": "737058010",
+              "entries": [
+                {
+                  "source": "state/ocb_community_진단보고서.md",
+                  "title": "테스트15 - OCB Community API 통합 진단 보고서",
+                  "type": "main_report",
+                  "confluence_page_id": "737058011",
+                  "task_sources": {
+                    "api": "state/ocb_community_new_api_inventory.json",
+                    "injection": "state/ocb_community_injection_v463_final.json",
+                    "xss": "state/ocb_community_xss_v463_run1.json"
+                  }
+                },
+                {
+                  "source": "state/ocb_community_injection_v463_final.json",
+                  "title": "테스트15 - 인젝션 취약점 진단 결과",
+                  "type": "finding",
+                  "confluence_page_id": "737058015"
+                },
+                {
+                  "source": "state/ocb_community_xss_v463_run1.json",
+                  "title": "테스트15 - XSS 취약점 진단 결과",
+                  "type": "finding",
+                  "confluence_page_id": "737058018"
+                }
+              ]
+            },
+            {
+              "title": "테스트18 - OCB Community API 전체 정적 진단 (2026-03-06)",
+              "entries": [
+                {
+                  "source": "state/ocb_community_진단보고서_v2.md",
+                  "title": "테스트18 - OCB Community API 통합 진단 보고서",
+                  "type": "main_report",
+                  "task_sources": {
+                    "api": "state/ocb_community_api_inventory.json",
+                    "injection": "state/ocb_community_injection_v463_final.json",
+                    "xss": "state/ocb_community_xss_v463_run2.json",
+                    "data_protection": "state/ocb_community_task25_final.json"
+                  }
+                },
+                {
+                  "source": "state/ocb_community_api_inventory.json",
+                  "title": "테스트18 - API 인벤토리 결과",
+                  "type": "api_inventory"
+                },
+                {
+                  "source": "state/ocb_community_injection_v463_final.json",
+                  "supplemental_sources": [
+                    "state/ocb_community_task22_injection_v3.json"
+                  ],
+                  "title": "테스트18 - 인젝션 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/ocb_community_xss_v463_run2.json",
+                  "supplemental_sources": [
+                    "state/ocb_community_task23_llm.json"
+                  ],
+                  "title": "테스트18 - XSS 취약점 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/ocb_community_task24_llm.json",
+                  "title": "테스트18 - 파일 처리 진단 결과",
+                  "type": "finding"
+                },
+                {
+                  "source": "state/ocb_community_task25_final.json",
+                  "title": "테스트18 - 데이터 보호 진단 결과",
+                  "type": "finding"
+                }
+              ]
+            },
+            {
+              "title": "테스트19 - OCB Sugar Stage 정적 진단 (2026-03-09)",
+              "groups": [
+                {
+                  "title": "테스트19-A — msg-sugar",
+                  "entries": [
+                    {
+                      "source": "state/ocb_sugar_stage_진단보고서_v1.md",
+                      "title": "테스트19-A - OCB Sugar Stage (msg-sugar) 진단 보고서",
+                      "type": "main_report",
+                      "task_sources": {
+                        "api": "state/ocb_sugar_stage_api_inventory.json",
+                        "injection": "state/ocb_sugar_stage_injection.json",
+                        "xss": "state/ocb_sugar_stage_xss.json",
+                        "file_handling": "state/ocb_sugar_stage_task24.json",
+                        "data_protection": "state/ocb_sugar_stage_task25.json"
+                      },
+                      "page_id": 739224601
+                    },
+                    {
+                      "source": "state/ocb_sugar_stage_api_inventory.json",
+                      "title": "테스트19-A - API 인벤토리 결과",
+                      "type": "api_inventory",
+                      "page_id": 739224631
+                    },
+                    {
+                      "source": "state/ocb_sugar_stage_injection.json",
+                      "supplemental_sources": [
+                        "state/ocb_sugar_stage_task22_llm.json"
+                      ],
+                      "title": "테스트19-A - 인젝션 취약점 진단 결과",
+                      "type": "finding",
+                      "page_id": 739224637
+                    },
+                    {
+                      "source": "state/ocb_sugar_stage_xss.json",
+                      "supplemental_sources": [
+                        "state/ocb_sugar_stage_task23_llm.json"
+                      ],
+                      "title": "테스트19-A - XSS 취약점 진단 결과",
+                      "type": "finding",
+                      "page_id": 739224645
+                    },
+                    {
+                      "source": "state/ocb_sugar_stage_task24.json",
+                      "title": "테스트19-A - 파일 처리 진단 결과",
+                      "type": "finding",
+                      "page_id": 739224650
+                    },
+                    {
+                      "source": "state/ocb_sugar_stage_task25.json",
+                      "supplemental_sources": [
+                        "state/ocb_sugar_stage_task25_llm.json"
+                      ],
+                      "title": "테스트19-A - 데이터 보호 진단 결과",
+                      "type": "finding",
+                      "page_id": 739224654
+                    },
+                    {
+                      "source": "state/ocb_sugar_stage_종합보고서.md",
+                      "title": "테스트19-A - OCB Sugar Stage (msg-sugar) 종합 보고서 (API 리스팅 포함)",
+                      "type": "doc",
+                      "page_id": 739224935
+                    }
+                  ],
+                  "page_id": 739224600
+                },
+                {
+                  "title": "테스트19-B — sugar-admin",
+                  "entries": [
+                    {
+                      "source": "state/ocb_sugar_admin_진단보고서_v1.md",
+                      "title": "테스트19-B - OCB Sugar Stage (sugar-admin) 진단 보고서",
+                      "type": "main_report",
+                      "task_sources": {
+                        "api": "state/ocb_sugar_admin_api_inventory.json",
+                        "injection": "state/ocb_sugar_admin_injection.json",
+                        "xss": "state/ocb_sugar_admin_xss.json",
+                        "data_protection": "state/ocb_sugar_admin_task25.json"
+                      },
+                      "page_id": 739224606
+                    },
+                    {
+                      "source": "state/ocb_sugar_admin_api_inventory.json",
+                      "title": "테스트19-B - API 인벤토리 결과",
+                      "type": "api_inventory",
+                      "page_id": 739224659
+                    },
+                    {
+                      "source": "state/ocb_sugar_admin_injection.json",
+                      "supplemental_sources": [
+                        "state/ocb_sugar_admin_task22_llm.json"
+                      ],
+                      "title": "테스트19-B - 인젝션 취약점 진단 결과",
+                      "type": "finding",
+                      "page_id": 739224664
+                    },
+                    {
+                      "source": "state/ocb_sugar_admin_xss.json",
+                      "supplemental_sources": [
+                        "state/ocb_sugar_admin_task23_llm.json"
+                      ],
+                      "title": "테스트19-B - XSS 취약점 진단 결과",
+                      "type": "finding",
+                      "page_id": 739224668
+                    },
+                    {
+                      "source": "state/ocb_sugar_admin_task25_final.json",
+                      "title": "테스트19-B - 데이터 보호 진단 결과",
+                      "type": "finding",
+                      "page_id": 739224673
+                    }
+                  ],
+                  "page_id": 739224605
+                }
+              ],
+              "entries": [
+                {
+                  "source": "state/ocb_sugar_stage_combined_report.md",
+                  "title": "테스트19 - OCB Sugar Stage 통합 진단 보고서 (msg-sugar + sugar-admin)",
+                  "type": "main_report",
+                  "task_sources": {},
+                  "page_id": 739227307
+                }
+              ],
+              "page_id": 739224599
+            },
+            {
+              "title": "테스트20 - appif5 Syrup Wallet API Gateway 정적 진단 (2026-03-10)",
+              "confluence_page_id": "739226657",
+              "entries": [
+                {
+                  "source": "state/appif5_진단보고서_v1.md",
+                  "title": "테스트20 - appif5 Syrup Wallet API Gateway 진단 보고서",
+                  "type": "main_report",
+                  "confluence_page_id": "739226658",
+                  "task_sources": {
+                    "api": "state/appif5_api_inventory.json",
+                    "injection": "state/appif5_injection.json",
+                    "xss": "state/appif5_xss.json",
+                    "data_protection": "state/appif5_task25_final.json"
+                  }
+                },
+                {
+                  "source": "state/appif5_api_inventory.json",
+                  "title": "테스트20 - API 인벤토리 결과",
                   "type": "api_inventory",
-                  "page_id": 739224631
+                  "confluence_page_id": "739226660"
                 },
                 {
-                  "source": "state/ocb_sugar_stage_injection.json",
+                  "source": "state/appif5_injection.json",
                   "supplemental_sources": [
-                    "state/ocb_sugar_stage_task22_llm.json"
+                    "state/appif5_task22_llm.json"
                   ],
-                  "title": "테스트19-A - 인젝션 취약점 진단 결과",
+                  "title": "테스트20 - 인젝션 취약점 진단 결과",
                   "type": "finding",
-                  "page_id": 739224637
+                  "confluence_page_id": "739226661"
                 },
                 {
-                  "source": "state/ocb_sugar_stage_xss.json",
+                  "source": "state/appif5_xss.json",
                   "supplemental_sources": [
-                    "state/ocb_sugar_stage_task23_llm.json"
+                    "state/appif5_task23_llm.json"
                   ],
-                  "title": "테스트19-A - XSS 취약점 진단 결과",
+                  "title": "테스트20 - XSS 취약점 진단 결과",
                   "type": "finding",
-                  "page_id": 739224645
+                  "confluence_page_id": "739226663"
                 },
                 {
-                  "source": "state/ocb_sugar_stage_task24.json",
-                  "title": "테스트19-A - 파일 처리 진단 결과",
+                  "source": "state/appif5_task25_final.json",
+                  "title": "테스트20 - 데이터 보호 진단 결과",
                   "type": "finding",
-                  "page_id": 739224650
+                  "confluence_page_id": "739226664"
+                }
+              ]
+            },
+            {
+              "title": "테스트17 - MSG Sugar API 신규 정적 진단 (2026-03-05)",
+              "confluence_page_id": "737062311",
+              "entries": [
+                {
+                  "source": "state/msgsugar_new_진단보고서.md",
+                  "title": "테스트17 - MSG Sugar API 신규 진단 보고서",
+                  "type": "main_report",
+                  "confluence_page_id": "737062312",
+                  "task_sources": {
+                    "api": "state/msgsugar_new_api_inventory.json",
+                    "injection": "state/msgsugar_new_injection.json",
+                    "xss": "state/msgsugar_new_xss.json",
+                    "data_protection": "state/msgsugar_new_task25_final.json"
+                  }
                 },
                 {
-                  "source": "state/ocb_sugar_stage_task25.json",
+                  "source": "state/msgsugar_new_injection.json",
                   "supplemental_sources": [
-                    "state/ocb_sugar_stage_task25_llm.json"
+                    "state/msgsugar_new_task22.json"
                   ],
-                  "title": "테스트19-A - 데이터 보호 진단 결과",
+                  "title": "테스트17 - 인젝션 취약점 진단 결과",
                   "type": "finding",
-                  "page_id": 739224654
+                  "confluence_page_id": "737062376"
                 },
                 {
-                  "source": "state/ocb_sugar_stage_종합보고서.md",
-                  "title": "테스트19-A - OCB Sugar Stage (msg-sugar) 종합 보고서 (API 리스팅 포함)",
+                  "source": "state/msgsugar_new_xss.json",
+                  "supplemental_sources": [
+                    "state/msgsugar_new_task23.json"
+                  ],
+                  "title": "테스트17 - XSS 취약점 진단 결과",
+                  "type": "finding",
+                  "confluence_page_id": "737062379"
+                },
+                {
+                  "source": "state/msgsugar_new_xss_report.md",
+                  "title": "테스트17 - XSS 취약점 최종 진단 보고서 (종합 판정)",
                   "type": "doc",
-                  "page_id": 739224935
+                  "confluence_page_id": "737063366"
+                },
+                {
+                  "source": "state/msgsugar_new_task25_final.json",
+                  "title": "테스트17 - 데이터 보호 진단 결과",
+                  "type": "finding",
+                  "confluence_page_id": "737062319"
                 }
-              ],
-              "page_id": 739224600
-            },
-            {
-              "title": "테스트19-B — sugar-admin",
-              "entries": [
-                {
-                  "source": "state/ocb_sugar_admin_진단보고서_v1.md",
-                  "title": "테스트19-B - OCB Sugar Stage (sugar-admin) 진단 보고서",
-                  "type": "main_report",
-                  "task_sources": {
-                    "api": "state/ocb_sugar_admin_api_inventory.json",
-                    "injection": "state/ocb_sugar_admin_injection.json",
-                    "xss": "state/ocb_sugar_admin_xss.json",
-                    "data_protection": "state/ocb_sugar_admin_task25.json"
-                  },
-                  "page_id": 739224606
-                },
-                {
-                  "source": "state/ocb_sugar_admin_api_inventory.json",
-                  "title": "테스트19-B - API 인벤토리 결과",
-                  "type": "api_inventory",
-                  "page_id": 739224659
-                },
-                {
-                  "source": "state/ocb_sugar_admin_injection.json",
-                  "supplemental_sources": [
-                    "state/ocb_sugar_admin_task22_llm.json"
-                  ],
-                  "title": "테스트19-B - 인젝션 취약점 진단 결과",
-                  "type": "finding",
-                  "page_id": 739224664
-                },
-                {
-                  "source": "state/ocb_sugar_admin_xss.json",
-                  "supplemental_sources": [
-                    "state/ocb_sugar_admin_task23_llm.json"
-                  ],
-                  "title": "테스트19-B - XSS 취약점 진단 결과",
-                  "type": "finding",
-                  "page_id": 739224668
-                },
-                {
-                  "source": "state/ocb_sugar_admin_task25_final.json",
-                  "title": "테스트19-B - 데이터 보호 진단 결과",
-                  "type": "finding",
-                  "page_id": 739224673
-                }
-              ],
-              "page_id": 739224605
+              ]
             }
           ],
-          "entries": [
-            {
-              "source": "state/ocb_sugar_stage_combined_report.md",
-              "title": "테스트19 - OCB Sugar Stage 통합 진단 보고서 (msg-sugar + sugar-admin)",
-              "type": "main_report",
-              "task_sources": {},
-              "page_id": 739227307
-            }
-          ],
-          "page_id": 739224599
+          "entries": []
         },
         {
-          "title": "테스트20 - appif5 Syrup Wallet API Gateway 정적 진단 (2026-03-10)",
-          "confluence_page_id": "739226657",
+          "title": "테스트21 - OCB Sugar Stage msg-sugar 정적 진단 (2026-03-13)",
+          "page_id": 739241077,
           "entries": [
             {
-              "source": "state/appif5_진단보고서_v1.md",
-              "title": "테스트20 - appif5 Syrup Wallet API Gateway 진단 보고서",
+              "source": "state/0312_ocb_sugar_진단보고서.md",
+              "title": "테스트21 - OCB Sugar Stage (msg-sugar) 진단 보고서",
               "type": "main_report",
-              "confluence_page_id": "739226658",
+              "page_id": 739241078,
               "task_sources": {
-                "api": "state/appif5_api_inventory.json",
-                "injection": "state/appif5_injection.json",
-                "xss": "state/appif5_xss.json",
-                "data_protection": "state/appif5_task25_final.json"
+                "api": "state/0312_ocb_sugar_api_inventory.json",
+                "injection": "state/0312_ocb_sugar_injection.json",
+                "xss": "state/0312_ocb_sugar_xss.json",
+                "file_handling": "state/0312_ocb_sugar_task24.json",
+                "data_protection": "state/0312_ocb_sugar_task25.json"
               }
             },
             {
-              "source": "state/appif5_api_inventory.json",
-              "title": "테스트20 - API 인벤토리 결과",
+              "source": "state/0312_ocb_sugar_api_inventory.json",
+              "title": "테스트21 - API 인벤토리 결과",
               "type": "api_inventory",
-              "confluence_page_id": "739226660"
+              "page_id": 739241086
             },
             {
-              "source": "state/appif5_injection.json",
+              "source": "state/0312_ocb_sugar_injection.json",
               "supplemental_sources": [
-                "state/appif5_task22_llm.json"
+                "state/0312_ocb_sugar_task22_llm.json"
               ],
-              "title": "테스트20 - 인젝션 취약점 진단 결과",
+              "title": "테스트21 - 인젝션 취약점 진단 결과",
               "type": "finding",
-              "confluence_page_id": "739226661"
+              "page_id": 739241096
             },
             {
-              "source": "state/appif5_xss.json",
+              "source": "state/0312_ocb_sugar_xss.json",
               "supplemental_sources": [
-                "state/appif5_task23_llm.json"
+                "state/0312_ocb_sugar_task23_llm.json"
               ],
-              "title": "테스트20 - XSS 취약점 진단 결과",
+              "title": "테스트21 - XSS 취약점 진단 결과",
               "type": "finding",
-              "confluence_page_id": "739226663"
+              "page_id": 739241090
             },
             {
-              "source": "state/appif5_task25_final.json",
-              "title": "테스트20 - 데이터 보호 진단 결과",
-              "type": "finding",
-              "confluence_page_id": "739226664"
-            }
-          ]
-        },
-        {
-          "title": "테스트17 - MSG Sugar API 신규 정적 진단 (2026-03-05)",
-          "confluence_page_id": "737062311",
-          "entries": [
-            {
-              "source": "state/msgsugar_new_진단보고서.md",
-              "title": "테스트17 - MSG Sugar API 신규 진단 보고서",
-              "type": "main_report",
-              "confluence_page_id": "737062312",
-              "task_sources": {
-                "api": "state/msgsugar_new_api_inventory.json",
-                "injection": "state/msgsugar_new_injection.json",
-                "xss": "state/msgsugar_new_xss.json",
-                "data_protection": "state/msgsugar_new_task25_final.json"
-              }
-            },
-            {
-              "source": "state/msgsugar_new_injection.json",
+              "source": "state/0312_ocb_sugar_task24.json",
               "supplemental_sources": [
-                "state/msgsugar_new_task22.json"
+                "state/0312_ocb_sugar_task24_llm.json"
               ],
-              "title": "테스트17 - 인젝션 취약점 진단 결과",
+              "title": "테스트21 - 파일 처리 진단 결과",
               "type": "finding",
-              "confluence_page_id": "737062376"
+              "page_id": 739241099
             },
             {
-              "source": "state/msgsugar_new_xss.json",
+              "source": "state/0312_ocb_sugar_task25.json",
               "supplemental_sources": [
-                "state/msgsugar_new_task23.json"
+                "state/0312_ocb_sugar_task25_llm.json"
               ],
-              "title": "테스트17 - XSS 취약점 진단 결과",
+              "title": "테스트21 - 데이터 보호 진단 결과",
               "type": "finding",
-              "confluence_page_id": "737062379"
-            },
-            {
-              "source": "state/msgsugar_new_xss_report.md",
-              "title": "테스트17 - XSS 취약점 최종 진단 보고서 (종합 판정)",
-              "type": "doc",
-              "confluence_page_id": "737063366"
-            },
-            {
-              "source": "state/msgsugar_new_task25_final.json",
-              "title": "테스트17 - 데이터 보호 진단 결과",
-              "type": "finding",
-              "confluence_page_id": "737062319"
+              "page_id": 739241102
             }
           ]
         }
