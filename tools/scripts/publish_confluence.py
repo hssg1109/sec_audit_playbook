@@ -2200,13 +2200,15 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
     if llm_supp:
         xss_rev = llm_supp.get("xss_endpoint_review", {})
         # group_judgments 인덱싱
+        # Bug fix: HTML_VIEW 그룹이 "잠재적위협" 조건에도 매칭되어 key collision 발생.
+        # HTML_VIEW를 먼저 체크해야 "잠재적위협 — HTML_VIEW" 그룹이 view로 올바르게 매핑됨.
         xss_gj_map: dict[str, dict] = {}
         for gj in xss_rev.get("group_judgments", []):
             gname = gj.get("group", "")
-            if "잠재적위협" in gname:
-                xss_gj_map["persistent"] = gj
-            elif "HTML_VIEW" in gname or "HTML_view" in gname.lower():
+            if "HTML_VIEW" in gname or "HTML_view" in gname.lower():
                 xss_gj_map["view"] = gj
+            elif "잠재적위협" in gname:
+                xss_gj_map["persistent"] = gj
             elif "Reflected" in gname or "text/html" in gname:
                 xss_gj_map["reflected_manual"] = gj
 
@@ -2222,8 +2224,6 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
                 eps = gj.get("endpoints_reviewed", []) + gj.get("controllers_reviewed", [])
                 judgment = gj.get("judgment", "")
                 if eps and gj_key == "view" and judgment == "양호":
-                    # View XSS: 컨트롤러 수준 양호 확인 → auto_i(정보 EP) 모두 양호로 처리
-                    # (controllers_reviewed 수 ≠ endpoint 수이므로 auto_i를 safe에 포함)
                     s = auto_s + auto_i
                     i = 0
                     v = auto_v
@@ -2237,6 +2237,56 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
                     v = auto_v
                 else:
                     s, i, v = auto_s, auto_i, auto_v
+            return [
+                tlabel,
+                f"<strong style='color:green'>{s}</strong>건" if s else "0건",
+                f"<strong style='color:orange'>{i}</strong>건" if i else "0건",
+                f"<strong style='color:red'>{v}</strong>건" if v else "0건",
+            ]
+
+        def _llm_findings_pt_row(tkey: str, tlabel: str, cat_keywords: list[str]) -> list:
+            """LLM 수동분석 findings 기반 per-type 집계.
+            auto-scan이 놓친 LLM 발견 취약점(Open Redirect 등)을 매트릭스에 반영하고,
+            LLM이 재분류한 결과(취약→정보 등)를 endpoint 단위로 보정한다.
+            총계는 auto-scan total 기준 유지 (새 정적 JSP 등 외부 EP는 미포함).
+            """
+            td = per_type.get(tkey, {}) if isinstance(per_type.get(tkey), dict) else {}
+            auto_s = td.get("양호", 0) + td.get("해당없음", 0)
+            auto_i = td.get("정보", 0)
+            auto_v = td.get("취약", 0)
+            total  = auto_s + auto_i + auto_v
+
+            # cat_keywords에 매칭되는 LLM finding 수집 (filter/misconfiguration 제외)
+            relevant = [
+                f for f in (llm_findings or [])
+                if not any(k in f.get("category", "").lower()
+                           for k in ("filter", "misconfiguration"))
+                and any(k.lower() in (f.get("category", "") + " " +
+                                      f.get("diagnosis_type", "")).lower()
+                        for k in cat_keywords)
+            ]
+            if not relevant:
+                return _llm_pt_row(tkey, tlabel, "")   # fallback to group_judgment logic
+
+            # affected_endpoints에서 path 기준으로 결과 집계
+            vuln_paths: set[str] = set()
+            info_paths: set[str] = set()
+            for f in relevant:
+                r = f.get("result", "")
+                for ep in f.get("affected_endpoints", []):
+                    path = ep.get("path", "")
+                    if not path or path.startswith("/static/"):
+                        continue   # API 인벤토리 외부(정적 JSP 등) 제외
+                    if r == "취약":
+                        vuln_paths.add(path)
+                    elif r == "정보":
+                        info_paths.add(path)
+
+            all_llm = vuln_paths | info_paths
+            # auto-scan 취약 중 LLM이 커버한 EP → LLM 결과로 대체
+            v = len(vuln_paths) + max(0, auto_v - len(all_llm))
+            i = len(info_paths) + max(0, auto_i - len(info_paths & all_llm))
+            s = total - v - i
             return [
                 tlabel,
                 f"<strong style='color:green'>{s}</strong>건" if s else "0건",
@@ -2259,9 +2309,12 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
                 f"<strong style='color:red'>{filter_vuln}</strong>건" if filter_vuln else "0건",
             ],
             _llm_pt_row("persistent_xss", "Persistent XSS", "persistent"),
-            _llm_pt_row("view_xss",       "View XSS",       "view"),
-            _llm_pt_row("reflected_xss",  "Reflected XSS",  "reflected_manual"),
-            _pt_row("redirect_xss", "Open Redirect"),
+            _llm_findings_pt_row("view_xss",      "View XSS",
+                                 ["view", "html attribute"]),
+            _llm_findings_pt_row("reflected_xss", "Reflected XSS",
+                                 ["view", "reflected", "html attribute"]),
+            _llm_findings_pt_row("redirect_xss",  "Open Redirect",
+                                 ["redirect", "open redirect"]),
             [
                 "DOM-based XSS",
                 f"양호 (스캔 {dom_files}파일)" if not dom_total else "0건",
