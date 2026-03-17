@@ -10,6 +10,33 @@
 
 ---
 
+## [v4.14.0] - 2026-03-17
+
+### Fixed — scan_injection_enhanced.py v4.7.0: HTTP 클라이언트 추적 버그 3종 수정
+
+#### 원인: OCB WebView API 진단 시 47건 `needs_review` → 실제 모두 외부 API 호출(양호)
+
+**버그 1. `extract_constructor_deps` — `@Autowired` 접근제한자 없는 필드 미탐지**
+- Java package-private 필드 (`@Autowired\n TypeName fieldName;`) 패턴에서
+  접근제한자(`private`/`protected`/`public`) 없이 바로 타입명이 오는 경우 미탐지
+- 수정: `(?:private|protected|public)?` → `(?:(?:private|protected|public)[\s\n]+)?` 완전 optional
+
+**버그 2. `db_client_fields` — `'Template'` 키워드로 HTTP RestTemplate 오분류**
+- `'Template' in 'OcbSimpleLoginRestTemplate'` → True → DB 클라이언트로 잘못 분류
+- `analyze_dao_method()` (MyBatis) 호출 → 매핑 없음 → `db_operations=[]` → `needs_review`
+- 수정: `'Template'` 제거 → `'JdbcTemplate'`, `'HibernateTemplate'`, `'JpaTemplate'` 등 DB 전용 키워드만 유지
+
+**버그 3. `_trace_service_chain` — HTTP 클라이언트 필드 조기 판정 미구현**
+- `_HTTP_CLIENT_RE`가 정의되어 있으나 Service 레벨 필드 타입 검사에 미적용
+- 수정: `http_client_fields` 분리 → 메서드 본문에서 HTTP 클라이언트 호출 발견 시
+  `external_api` DbOperation 생성 후 즉시 return (양호 확정)
+
+#### 예상 효과
+- `SoiRestTemplate`, `OcbSimpleLoginRestTemplate`, `PromotionRestTemplate` 등
+  커스텀 RestTemplate 래퍼 클래스를 사용하는 서비스의 47건 `needs_review` → 자동 양호 확정
+
+---
+
 ## [v4.13.0] - 2026-03-17
 
 ### Added — OCB WebView API (OCBWEBVIEW) 정적 진단 완료

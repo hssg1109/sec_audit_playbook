@@ -217,10 +217,14 @@ def extract_constructor_deps(content: str) -> list:
     #    @Autowired
     #    @Qualifier("primary")
     #    private FooService fooService;
+    #
+    # [Phase 25] 접근제한자 없이 @Autowired만 단독으로 오는 패턴 지원:
+    #    @Autowired
+    #    OcbSimpleLoginRestTemplate simpleLoginRestTemplate;  ← package-private
     for m in re.finditer(
         r'@(?:Autowired|Inject|Resource)(?:\s*\([^)]*\))?'
         r'(?:[\s\n]+@\w+(?:\s*\([^)]*\))?)*'   # 중간 어노테이션 0개 이상
-        r'[\s\n]+(?:(?:private|protected|public)[\s\n]+)?'
+        r'[\s\n]+(?:(?:private|protected|public|)[\s\n]+)?'  # [Phase 25] 접근제한자 완전 optional
         r'(?:final[\s\n]+)?'                    # [Phase 18] final 키워드 허용
         r'(\w+)(?:<[^>]*>)?[\s\n]+(\w+)\s*;',
         content
@@ -1011,15 +1015,56 @@ def _trace_service_chain(svc_class: str, svc_method: str,
 
     svc_deps = extract_constructor_deps(svc_content)
 
+    # [Phase 25] HTTP 클라이언트 필드 — DB 클라이언트보다 먼저 분리
+    # RestTemplate/WebClient/FeignClient 계열은 외부 API 호출용이므로 DB 추적 불필요
+    http_client_fields = [(name, cls) for name, cls in svc_deps
+                          if _HTTP_CLIENT_RE.search(cls)]
+
+    # [Phase 25] HTTP 클라이언트 조기 판정:
+    # Service 의존성 중 HTTP 클라이언트 필드가 있고, 해당 메서드 본문에서
+    # HTTP 클라이언트를 호출하면 → 외부 API 호출로 확정 → 양호 처리
+    if http_client_fields:
+        http_field_names = [n for n, _ in http_client_fields]
+        svc_method_body_http = extract_method_body(svc_content, svc_method) or ""
+        http_calls = extract_method_calls(svc_method_body_http, http_field_names)
+        # 메서드 본문에서 직접 HTTP 클라이언트 호출이 발견되면 외부 API 호출 확정
+        if http_calls:
+            http_cls = http_client_fields[0][1]
+            result["db_operations"].append(DbOperation(
+                method=svc_method,
+                access_type="external_api",
+                detail=f"외부 API 호출 ({http_cls}) — DB 직접 접근 없음. 양호.",
+                is_vulnerable=False,
+            ))
+            return result
+        # 메서드 본문 추출 실패(Kotlin 등)이나 HTTP 클라이언트 필드가 클래스 유일 의존성이면 외부 API 패턴 확정
+        if not svc_method_body_http and not any(
+            cls.endswith(s) for _, cls in svc_deps
+            for s in ('Repository', 'Mapper', 'Dao', 'DAO',
+                      'JdbcTemplate', 'SqlMapClient', 'DataSource',
+                      'JdbcOperations', 'SqlSession')
+        ):
+            http_cls = http_client_fields[0][1]
+            result["db_operations"].append(DbOperation(
+                method=svc_method,
+                access_type="external_api",
+                detail=f"외부 API 호출 ({http_cls}, 메서드 추출 실패 fallback) — DB 의존성 없음. 양호.",
+                is_vulnerable=False,
+            ))
+            return result
+
     # Repository/Mapper/DAO 필드
     repo_fields = [(name, cls) for name, cls in svc_deps
                    if any(cls.endswith(s) for s in
                           ('Repository', 'Mapper', 'Dao', 'DAO'))]
-    # DB 클라이언트 필드
+    # DB 클라이언트 필드 — [Phase 25] 'Template' 제거: RestTemplate 계열 혼입 방지
+    # JdbcTemplate/HibernateTemplate 등 DB 전용 Template은 클래스명에 'Jdbc'/'Hibernate' 포함
     db_client_fields = [(name, cls) for name, cls in svc_deps
                         if any(kw in cls for kw in
-                               ('Template', 'SqlMapClient', 'DataSource',
-                                'JdbcOperations', 'SqlSession'))]
+                               ('JdbcTemplate', 'NamedParameterJdbc',
+                                'SqlMapClient', 'DataSource',
+                                'JdbcOperations', 'SqlSession',
+                                'HibernateTemplate', 'JpaTemplate'))]
 
     svc_method_body = extract_method_body(svc_content, svc_method)
     if not svc_method_body:
@@ -3745,7 +3790,7 @@ def run_diagnosis(source_dir: Path, inventory_path: Path,
             "total_classes_indexed": len(class_index),
             "total_mybatis_mappings": len(mybatis_index),
             "scanned_at": datetime.now().isoformat(),
-            "script_version": "4.6.0",
+            "script_version": "4.7.0",
         },
         "endpoint_diagnoses": [
             # 양호 결과는 service_calls/repository_calls/db_operations 제거해 파일 크기 절감
