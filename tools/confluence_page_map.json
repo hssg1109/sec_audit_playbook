@@ -1001,7 +1001,8 @@
         {
           "source": "state/ocbwebview_api_api_inventory.json",
           "title": "테스트28 - API 인벤토리 (562 엔드포인트)",
-          "type": "api_inventory"
+          "type": "api_inventory",
+          "page_id": 741055844
         },
         {
           "source": "state/ocbwebview_api_injection.json",
@@ -1009,7 +1010,8 @@
             "state/ocbwebview_api_task22_llm.json"
           ],
           "title": "테스트28 - 인젝션 취약점 진단 결과",
-          "type": "finding"
+          "type": "finding",
+          "page_id": 741055848
         },
         {
           "source": "state/ocbwebview_api_xss.json",
@@ -1017,17 +1019,20 @@
             "state/ocbwebview_api_task23_llm.json"
           ],
           "title": "테스트28 - XSS 취약점 진단 결과",
-          "type": "finding"
+          "type": "finding",
+          "page_id": 741055850
         },
         {
           "source": "state/ocbwebview_api_task24_llm.json",
           "title": "테스트28 - 파일 처리 진단 결과",
-          "type": "finding"
+          "type": "finding",
+          "page_id": 741055852
         },
         {
           "source": "state/ocbwebview_api_task25_llm.json",
           "title": "테스트28 - 데이터 보호 진단 결과",
-          "type": "finding"
+          "type": "finding",
+          "page_id": 741055854
         }
       ]
     }
