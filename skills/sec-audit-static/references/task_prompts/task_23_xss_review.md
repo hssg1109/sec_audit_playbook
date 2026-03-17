@@ -43,22 +43,59 @@ Task 2-1에서 추출한 API 인벤토리를 기반으로 **Persistent XSS**, **
 
 ---
 
+### View XSS 진단 범위 (레이어 구분)
+
+> **View XSS는 두 레이어를 모두 포함한다.** 레이어별 탐지 방법과 스캐너 한계를 구분하여 적용한다.
+
+#### A. 서버사이드 템플릿 View XSS (scan_xss.py Phase 2)
+
+- **대상**: `.jsp`, `.html`(Thymeleaf), `.ftl`(FreeMarker), `.vm`(Velocity) 등 서버가 렌더링하는 View 파일
+- **탐지**: `scan_xss.py`가 Controller → View 파일을 추적하여 naked EL / 미이스케이핑 자동 탐지
+- **한계**: **API 인벤토리에 등록된 Controller가 렌더링하는 View만 탐지** → 컨트롤러 없이 직접 접근 가능한 JSP(`WEB-INF` 외부)는 미탐지
+- ⚠️ **직접 접근 가능 JSP 수동 보완 필수**: `src/main/webapp/` 하위 JSP 중 `WEB-INF` 외부에 있는 파일은 URL로 직접 호출 가능 → `request.getParameterMap()` 등 HTTP 파라미터 직접 렌더링 패턴 확인
+
+```bash
+# WEB-INF 외부 JSP 확인 (직접 접근 가능)
+find src/main/webapp -name "*.jsp" ! -path "*/WEB-INF/*"
+```
+
+#### B. 프론트엔드 JS/TS/Vue View XSS (scan_xss.py Phase 6 = DOM XSS 스캔)
+
+- **대상**: `.js`, `.ts`, `.vue`, `.tsx`, `.jsx` 프론트엔드 소스 파일
+- **탐지**: `scan_xss.py`가 `dom_xss_scan`으로 전역 스캔 (`scan_metadata.dom_xss_scan` 참조)
+- **탐지 패턴**: `dangerouslySetInnerHTML`, `v-html`, `innerHTML =`, `$().html()`, `document.write()` 등
+- **한계**: 빌드 결과물(`dist/`, `build/`) 및 `node_modules/` 제외, **원본 소스가 없으면 탐지 불가**
+- `js_files_scanned: 0`이면 프론트엔드 소스 없음 (React/Vue/Angular 별도 레포 분리 구조 가능) → 별도 레포 존재 시 해당 레포도 진단 대상에 포함해야 함
+
+**레이어별 진단 요약:**
+
+| 레이어 | 파일 위치 | 스캐너 커버 | LLM 수동 보완 필요 |
+|---|---|---|---|
+| 서버 템플릿 (WEB-INF 내) | `WEB-INF/jsp/*.jsp` | ✅ Controller 추적으로 탐지 | needs_review 항목 |
+| 서버 템플릿 (WEB-INF 외) | `webapp/static/*.jsp` | ❌ 미탐지 | **수동 직접 확인 필수** |
+| 프론트엔드 JS | `.js/.ts/.vue` | ✅ dom_xss_scan | js_files_scanned=0 시 확인 |
+| 프론트엔드 별도 레포 | 별도 레포 | ❌ 미탐지 | 진단 대상 범위 확인 필요 |
+
+---
+
 ### 파일 탐색 전략 (토큰 최적화)
 
 > **전체 소스코드를 탐색하지 마세요.** 아래 순서로 필요한 파일만 추적합니다.
 
-1. `state/task_21_result.json`에서 API 엔드포인트 목록을 로드
+1. `state/<prefix>_xss.json`에서 auto-scan 결과 로드
 2. 각 API의 **Controller 파일**을 확인 → `@Controller` vs `@RestController` 어노테이션 판별
 3. Controller에서 View로 데이터를 전달하는 패턴 확인 (`model.addAttribute()` 등)
 4. **View 파일** 추적: JSP, Thymeleaf, Pug, React/Vue/Angular 컴포넌트
-5. 전역 필터/인터셉터 확인: XSS 필터 설정 (web.xml, SecurityConfig, Lucy Filter 설정 등)
+5. **WEB-INF 외부 JSP 수동 확인** (스캐너 미탐지 영역)
+6. 전역 필터/인터셉터 확인: XSS 필터 설정 (web.xml, SecurityConfig, Lucy Filter 설정 등)
 
 ```
 API 목록 → Controller (@Controller/@RestController 판별)
               ├→ Service → DB 저장 로직 (Persistent XSS)
-              ├→ View 파일 (JSP/Thymeleaf/React/Vue) (View XSS)
+              ├→ View 파일 WEB-INF/jsp/ (서버 템플릿 View XSS) ← scan_xss.py 탐지
+              ├→ webapp/static/*.jsp 직접 접근 JSP (서버 템플릿 View XSS) ← 수동 확인
               ├→ Redirect 로직 (sendRedirect/forward) (Redirect XSS)
-              └→ JS/TS/Vue 파일 전역 스캔 (DOM XSS)
+              └→ JS/TS/Vue 파일 전역 스캔 (DOM XSS) ← scan_xss.py dom_xss_scan
 ```
 
 ---
