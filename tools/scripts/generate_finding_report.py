@@ -818,11 +818,16 @@ def load_endpoint_group_findings(filepath: Path,
         sqli_review = (llm_supp_data or {}).get("sqli_endpoint_review", {})
         sqli_overall = sqli_review.get("overall_sqli_judgment", "")
         sqli_rationale = sqli_review.get("rationale", "")
-        # group_judgments를 group명 → 판정/근거로 인덱싱
+        # group_judgments를 group명(diagnosis_type 부분문자열) → 판정/근거로 인덱싱
+        # diagnosis_type 값이 그룹명에 포함되어 있으면 매칭 (프로젝트별 명칭 변동 대응)
         sqli_group_map: dict[str, dict] = {}
+        _sqli_dtype_keys = (
+            "외부 의존성 호출", "XML 미발견 패턴 추정",
+            "DB 접근 미확인", "자동 판정 불가", "추적 불가",
+        )
         for gj in sqli_review.get("group_judgments", []):
             gname = gj.get("group", "")
-            for key in ("외부 의존성 호출", "XML 미발견 패턴 추정"):
+            for key in _sqli_dtype_keys:
                 if key in gname:
                     sqli_group_map[key] = gj
                     break
@@ -894,7 +899,7 @@ def load_endpoint_group_findings(filepath: Path,
             )
             # LLM 검토 결과로 제목/설명 갱신
             gj_for_type = sqli_group_map.get(dtype)
-            llm_judgment = gj_for_type.get("judgment", "") if gj_for_type else ""
+            llm_judgment = gj_for_type.get("judgment", "") if gj_for_type else sqli_overall
             if llm_judgment == "양호":
                 title = f"SQL 인젝션 LLM 검토 완료 — {dtype} ({len(eps)}건) [양호]"
                 lead = (
