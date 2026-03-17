@@ -10,6 +10,96 @@
 
 ---
 
+## [v4.13.0] - 2026-03-17
+
+### Added — OCB WebView API (OCBWEBVIEW) 정적 진단 완료
+
+- **대상**: `http://code.skplanet.com/scm/ocbwebview/ocb-webview-api.git` (commit 197f89f)
+- **규모**: 1305 소스파일, 562 API 엔드포인트 (240 인증, 322 공개)
+- **Confluence**: 테스트28 — 보고서 page_id: 741055787
+
+#### 주요 취약점 확정 (취약 12건 / 정보 6건)
+
+| 카테고리 | ID | 심각도 | 제목 |
+|---|---|---|---|
+| XSS | XSS-KCP-001 | High | KCP 결제 JSP JavaScript 컨텍스트 Open Redirect + XSS |
+| XSS | XSS-KCP-002 | High | KCP 결제 JSP HTML Attribute/JavaScript XSS |
+| XSS | XSS-FILTER-001 | Medium | 서블릿 레벨 전역 XSS 필터 미적용 (form-urlencoded) |
+| File | FILE-UPLOAD-001 | Medium | 파일 업로드 MIME 타입 서버사이드 검증 미적용 |
+| Data | DATA-SEC-001 | Critical | 운영 DB 자격증명 평문 — application-real.properties |
+| Data | DATA-SEC-002 | Critical | 운영 API 키 평문 — real/config.properties (KCP/KakaoPay/NaverPay/KB) |
+| Data | DATA-SEC-003 | High | ALP DB 자격증명 평문 — application-alp.properties |
+| Data | DATA-SEC-004 | High | ALP API 키 평문 — alp/config.properties |
+| Data | DATA-SEC-005/006 | Medium | dev 환경 자격증명/API 키 평문 (13건) |
+| Data | DATA-SEC-007/008/009 | Medium | local/공통 자격증명/API 키 평문 (14건) |
+| Data | DATA-LOG-001 | Critical | 운영 로그 PII 평문 출력 68건 (60+ 파일) |
+| Injection | INJ-001 | Info | SpEL FP (RedisCacheAspect 어노테이션 상수) |
+
+#### 진단 이슈 노트
+
+- `Map<String,String>` 제네릭 타입이 XHTML 파싱 오류 유발 → `Map[String,String]`으로 escaping 처리 후 재게시
+- file_upload Critical→Medium 하향: NFS 외부 스토리지 + .webp 화이트리스트 + UUID 파일명 확인
+
+---
+
+## [v4.12.0] - 2026-03-16
+
+### Added — scan_data_protection.py v1.3.0: 3종 탐지 보완
+
+#### [보완 1] Base64 인코딩 시크릿 탐지 추가
+
+- `_S_BASE64_SECRET_NAMES_RE`: `hmacKey`, `authKey`, `signingKey`, `clientKey`, `encryptKey`, `base64Secret` 등 기존 미커버 변수명 컨텍스트 + 24자 이상 Base64 패턴
+- `_S_BASE64_CHARS_RE`: `+`/`/`/`=` 포함 여부 2차 필터 (단순 alphanumeric 제외, 기존 `_S_GENERIC_SECRET_RE`와 중복 방지)
+- 기존 JWT/AWS 패턴이 탐지한 줄은 `already_flagged_lines` 집합으로 중복 skip
+
+#### [보완 2] 하드코딩 IV(초기화 벡터) 탐지 추가 (CWE-329)
+
+- Pattern A `_C_IV_STRING_RE`: `new IvParameterSpec("literal".getBytes())` → High
+- Pattern B `_C_IV_BYTES_INLINE_RE`: `new IvParameterSpec(new byte[]{0x00,...})` → High
+  - `_C_IV_NUMERIC_VALS_RE`로 배열 내 숫자 리터럴 유무 확인(메서드 호출 결과 FP 방지)
+- Pattern C: `static final byte[] IV = {...}` 상수 선언 + `IvParameterSpec(IV)` 참조 2-pass → Medium (needs_review: true)
+- `_C_SECURE_RANDOM_IV_RE`: SecureRandom 기반 IV 생성 파일 전체 skip (안전)
+
+#### [보완 3] Lombok @ToString PII 노출 탐지 추가 (CWE-532)
+
+- `scan_toString_exposure()` 신규 함수 (category: DTO_EXPOSURE, severity: Medium)
+- 탐지 대상: `@ToString` / `@Data` / `@Value` (Lombok) 사용 클래스에 PII 필드 존재 + exclude 미처리
+- FP 방지:
+  - `@ToString(onlyExplicitlyIncluded = true)` → 클래스 전체 양호
+  - `@ToString(exclude = {"fieldName"})` → 해당 필드 양호
+  - 필드 레벨 `@ToString.Exclude` → 해당 필드 양호
+- `--skip tostring` 옵션 추가
+
+---
+
+## [v4.11.1] - 2026-03-16
+
+### Fixed — task_25 LLM 프롬프트 정합성 수정 (v1.3.1)
+
+#### skills/sec-audit-static/references/task_prompts/task_25_data_protection.md
+
+- **Step 5 케이스 A 강화**: `src/main/java/` 경로 findings에 `needs_review: true` 남기는 문제 방지
+  - `"Critical 상향 권고"` → `"케이스 A 자동 확정: severity Critical, needs_review: false 강제"` 로 변경
+  - `src/main/kotlin/` 경로도 명시적으로 추가
+  - 경고 박스 추가: `src/main/java` 경로에 `needs_review: true` 절대 금지
+- **Step 6 low 버킷 severity 수정**: `Info` → `Medium` (v4.9.5 스크립트 기준 반영)
+  - scan_data_protection.py v4.9.5에서 debug/trace → Medium(Risk 3)으로 변경됐으나 프롬프트에 미반영된 불일치 해소
+
+#### docs/sec-audit-static/task-25_data-protection.md
+
+- HARDCODED_SECRET 예시표: DATA-SEC-001(운영 Java/Kotlin 소스) `High` → `Critical`
+- SENSITIVE_LOGGING 예시표: DATA-LOG-002 `Info` → `Medium`
+- Step 6 Flowchart 노드: `Critical 1건 + Info 1건` → `Critical 1건 + Medium 1건`
+- 예시 JSON: DATA-SEC-001 `severity: High` → `Critical`, `manual_review_note` 자동 확정 문구
+
+#### state/ocb_sugar_stage_task25_llm.json
+
+- DATA-SEC-001: `severity: High` → `Critical`, `needs_review: true` → `false`, manual_review_note 확정 문구
+- DATA-LOG-002: `severity: Info` → `Medium`
+- `admin_page_separation`: `"미확인"` → `"미분리"` 확정 (0312 실행본 근거 반영)
+
+---
+
 ## [v4.11.0] - 2026-03-13
 
 ### Added — T-01: 보고서 상단 서비스 설명 + 자산 구조 표 자동 삽입
