@@ -42,6 +42,10 @@ python3 tools/scripts/scan_injection_enhanced.py <source_dir> \
 1. **`needs_review: true` / `result: 정보` 항목 심층 분석 [필수]**
    - 스크립트가 자동 판정하지 못한 endpoint (외부 의존성 / XML 미발견 등)
    - **diagnosis_type 그룹별 대표 서비스/DAO 소스코드를 직접 읽고 판정 확정**
+   - ⚠️ **`diagnosis_type: "자동 판정 불가"` 항목은 반드시 LLM이 직접 서비스/DAO 코드를 확인해야 한다.**
+     - "자동 판정 불가" = 스캐너가 DB 접근 패턴을 분석하지 못한 것 (안전 확인이 아님)
+     - 자동으로 양호 처리 절대 금지 — 코드 직접 확인 후 판정
+     - 주요 원인: Kotlin SQL 상수 참조, 동적 SQL 빌더, 외부 모듈 의존성
    - 절차:
      1. `endpoint_diagnoses`에서 `result: 정보` 항목을 `diagnosis_type`별로 그룹화
      2. 각 그룹의 외부 서비스/DAO → MyBatis XML/JPA/iBatis 직접 확인
@@ -172,7 +176,14 @@ python3 tools/scripts/scan_injection_enhanced.py <source_dir> \
 ### 출력 형식
 
 자동스캔 결과(`<prefix>_injection.json`)에서 수동 확정이 필요한 항목만 findings로 출력합니다.
-`endpoint_diagnoses`는 포함하지 않으며(자동스캔 JSON에 이미 있음), **보완 findings만** 작성합니다:
+`endpoint_diagnoses`는 포함하지 않으며(자동스캔 JSON에 이미 있음), **보완 findings만** 작성합니다.
+
+> **`affected_endpoints` 작성 규칙** — 각 finding에 영향 받는 API 목록을 구조화 배열로 명시.
+> 보고서 렌더링 시 Confluence Expand 매크로 또는 `<details>` 펼치기 섹션으로 자동 출력됩니다.
+> - `method`: HTTP 메서드 (GET/POST/PUT/DELETE 등)
+> - `path`: Request Mapping 경로 (예: `/api/v1/user/login`)
+> - `controller`: 클래스명.메서드명() (예: `UserController.login()`)
+> - `description`: 해당 엔드포인트에서 취약점 발현 방식 한 줄 설명
 
 ```json
 {
@@ -217,7 +228,14 @@ python3 tools/scripts/scan_injection_enhanced.py <source_dir> \
       "severity": "Medium",
       "category": "Injection / OS Command (Stored RCE Pattern)",
       "description": "상세 설명 — 자동스캔이 탐지하지 못한 취약 패턴",
-      "affected_endpoint": "서비스 전반",
+      "affected_endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/v1/example",
+          "controller": "ExampleController.doAction()",
+          "description": "파라미터 userInput이 비검증 SQL 쿼리에 직접 삽입됨"
+        }
+      ],
       "evidence": {
         "file": "com/.../ServiceClass.java",
         "lines": "61-67",

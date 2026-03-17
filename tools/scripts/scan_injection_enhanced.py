@@ -3513,6 +3513,21 @@ def judge_endpoint(trace_result: dict, endpoint: dict) -> dict:
                 "evidence": evidence,
             }
 
+        # ----- 분석 불가 (unknown) → 수동 검토 필요 -----
+        # [Phase 26] access_type='unknown'은 "취약 미확인"이 아니라 "분석 자체 불가"
+        # is_vulnerable=False여도 unknown이면 양호 판정 금지 → 정보/수동검토로 분리
+        if op.access_type == "unknown":
+            return {
+                "_priority": 1,
+                "result": "정보",
+                "diagnosis_type": "자동 판정 불가",
+                "diagnosis_detail": "DB 접근 패턴 분석 실패 - 수동 검토 필요",
+                "filter_type": "N/A",
+                "filter_detail": "N/A",
+                "needs_review": True,
+                "evidence": evidence,
+            }
+
         # ----- 안전 패턴 → 양호 -----
         if not op.is_vulnerable:
             filter_type = "r2dbc"
@@ -3790,7 +3805,7 @@ def run_diagnosis(source_dir: Path, inventory_path: Path,
             "total_classes_indexed": len(class_index),
             "total_mybatis_mappings": len(mybatis_index),
             "scanned_at": datetime.now().isoformat(),
-            "script_version": "4.7.0",
+            "script_version": "4.8.0",
         },
         "endpoint_diagnoses": [
             # 양호 결과는 service_calls/repository_calls/db_operations 제거해 파일 크기 절감

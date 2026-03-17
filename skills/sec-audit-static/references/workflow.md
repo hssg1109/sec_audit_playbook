@@ -18,6 +18,8 @@ Phase 3: LLM 수동분석 보완 (자동스캔 결과를 보완·갱신)
   ├─ Task 3-2: 인젝션 수동분석    → <prefix>_task22_llm.json
   │   ├─ [필수] 자동스캔 "정보/needs_review" endpoint 전수 판정
   │   │   ├─ diagnosis_type 그룹별 외부 서비스/DAO 소스 직접 확인
+  │   │   ├─ [필수] "자동 판정 불가" (diagnosis_type="자동 판정 불가") → 양호 자동 처리 금지
+  │   │   │   └─ 반드시 LLM이 해당 서비스/DAO 코드 직접 확인 후 판정 (Kotlin SQL 상수·동적SQL 등)
   │   │   ├─ MyBatis/iBatis XML 전수 스캔: ${} 위험패턴 여부
   │   │   └─ 판정 결과 → sqli_endpoint_review 블록 저장
   │   └─ 전역 패턴(OS Command/GroovyShell 등) 판정
@@ -172,10 +174,26 @@ python3 tools/scripts/scan_data_protection.py <source_dir> \
 }
 ```
 
-> **API 인벤토리 상세 페이지**: `api_inventory` 타입으로 게시하면 `publish_confluence.py`가
-> `_json_to_xhtml_api_inventory` 렌더러를 사용하여 엔드포인트별 파라미터 + DTO 내부 필드
-> (resolved_fields)를 상세 테이블로 렌더링합니다. `scan_dto.py`를 사전 실행하고
-> `scan_api.py --dto-catalog`로 DTO 연동을 완료해야 상세 필드가 표시됩니다.
+> **API 인벤토리 페이지 (`type: "api_inventory"`) — Swagger 수준 렌더링**
+>
+> `api_inventory` 타입 페이지는 **반드시 포함**해야 합니다 (이전에 생략하면 API 엔드포인트 현황이 보고서에 없음).
+>
+> `publish_confluence.py`의 `_json_to_xhtml_api_inventory()` 렌더러가 아래 구조로 출력합니다:
+>
+> | 섹션 | 내용 |
+> |------|------|
+> | 스캔 요약 | 파일 수, 컨트롤러 수, 엔드포인트 수 |
+> | HTTP 메서드별 / 인증 분류 | GET/POST/... 건수, 인증 필요/불필요 분포 |
+> | 모듈별 TOC 테이블 | 모듈 → 컨트롤러 수, 전체/메서드 분포 요약 |
+> | API 레퍼런스 (Swagger 스타일) | 모듈 → 컨트롤러 → **Confluence Expand 매크로** (클릭하여 펼치기) |
+> | 엔드포인트 expand 내부 | 핸들러, 위치, 인증, 파라미터 테이블, DTO 필드 스키마 |
+>
+> **HTTP 메서드 색상 코드** (Swagger 동일 배색):
+> - `GET` = 파란색, `POST` = 초록색, `PUT` = 주황색, `DELETE` = 빨간색, `PATCH` = 청록색
+>
+> **DTO 필드 상세(Request Body 스키마)** 표시 조건:
+> `scan_dto.py` 사전 실행 + `scan_api.py --dto-catalog` 연동 완료 시 `resolved_fields` 자동 표시.
+> 미연동 시 파라미터 타입(`HashMap<String,String>` 등)만 표시됨.
 
 ## 보안 정책
 

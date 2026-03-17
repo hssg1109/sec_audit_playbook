@@ -850,9 +850,9 @@
               "page_id": 741053782
             },
             {
-              "source": "state/t10_2603_gws_oki_be_task25_llm.json",
+              "source": "state/t10_2603_gws_oki_be_task25.json",
               "supplemental_sources": [
-                "state/t10_2603_gws_oki_be_task25.json"
+                "state/t10_2603_gws_oki_be_task25_llm.json"
               ],
               "title": "테스트23 - 데이터 보호 진단 결과",
               "type": "finding",
@@ -992,10 +992,10 @@
           "page_id": 741055787,
           "task_sources": {
             "api": "state/ocbwebview_api_api_inventory.json",
-            "injection": "state/ocbwebview_api_task22_llm.json",
-            "xss": "state/ocbwebview_api_task23_llm.json",
-            "file_handling": "state/ocbwebview_api_task24_llm.json",
-            "data_protection": "state/ocbwebview_api_task25_llm.json"
+            "injection": "state/ocbwebview_api_injection.json",
+            "xss": "state/ocbwebview_api_xss.json",
+            "file_handling": "state/ocbwebview_api_task24.json",
+            "data_protection": "state/ocbwebview_api_task25.json"
           }
         },
         {
@@ -1023,13 +1023,19 @@
           "page_id": 741055850
         },
         {
-          "source": "state/ocbwebview_api_task24_llm.json",
+          "source": "state/ocbwebview_api_task24.json",
+          "supplemental_sources": [
+            "state/ocbwebview_api_task24_llm.json"
+          ],
           "title": "테스트28 - 파일 처리 진단 결과",
           "type": "finding",
           "page_id": 741055852
         },
         {
-          "source": "state/ocbwebview_api_task25_llm.json",
+          "source": "state/ocbwebview_api_task25.json",
+          "supplemental_sources": [
+            "state/ocbwebview_api_task25_llm.json"
+          ],
           "title": "테스트28 - 데이터 보호 진단 결과",
           "type": "finding",
           "page_id": 741055854

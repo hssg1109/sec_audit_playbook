@@ -72,22 +72,34 @@ CATEGORY_INFO = {
         "number": "4",
         "threat": "정보 노출, 계정 탈취",
         "items": {
-            "info_leak": "정보 누출",
-            "hardcoded": "하드코딩된 비밀정보",
-            "cors": "CORS 설정 미흡",
-            "jwt": "JWT 취약점",
-            "csrf": "CSRF 보호 미흡",
+            "info_leak":    "정보 누출",           # fallback 기본값 (첫 번째 항목)
+            "log_exposure": "로그 내 정보 노출",
+            "hardcoded":    "하드코딩된 비밀정보",
+            "weak_crypto":  "취약한 암호화 알고리즘",
+            "cors":         "CORS 설정 미흡",
+            "jwt":          "JWT 취약점",
+            "csrf":         "CSRF 보호 미흡",
         }
     },
 }
 
-# severity → 위험도
+# severity 내부값 → (결과, 위험도) 매핑
+# 근거: 전자금융감독규정 제37조의3, 주요 정보통신기반시설 보호지침 제2021-28호
+# 결과: 취약/정보/양호  |  위험도: 1~5 (5=즉각조치, 4=우선조치, 3=검토후조치, 2=통과, 1=참고)
+# 보고서에 Critical/High 등 영문 등급은 표시하지 않고 위험도 숫자만 노출함
 RISK_MAP = {
+    # 표준 포맷 (scan_xss, scan_data_protection, scan_file_processing)
     "critical": ("취약", 5),
-    "high": ("취약", 5),
-    "medium": ("정보", 4),
-    "low": ("양호", 3),
-    "info": ("정보", 4),
+    "high":     ("취약", 4),
+    "medium":   ("정보", 3),
+    "low":      ("양호", 2),
+    "info":     ("정보", 1),
+    # Injection 스캔 포맷 (scan_injection_enhanced: "Risk N" 형식)
+    "risk 5":   ("취약", 5),
+    "risk 4":   ("취약", 4),
+    "risk 3":   ("정보", 3),
+    "risk 2":   ("양호", 2),
+    "risk 1":   ("정보", 1),
 }
 
 ANCHOR_STYLE = "confluence"
@@ -136,14 +148,36 @@ SUBCATEGORY_EXTRA_KEYWORDS: dict[str, list[tuple[str, str]]] = {
         ("hardcoded",  "hardcoded"),
         ("secret",     "hardcoded"),
         ("credential", "hardcoded"),
-        ("민감정보 로깅", "info_leak"),
-        ("로깅",         "info_leak"),
-        ("logging",    "info_leak"),
-        ("민감정보",     "info_leak"),
-        ("pii",        "info_leak"),
-        ("취약 암호화",  "info_leak"),
-        ("암호화",       "info_leak"),
-        ("weak crypto","info_leak"),
+        # SENSITIVE_LOGGING — 로그 내 정보 노출 (민감정보/개인정보 로깅)
+        # 주의: "민감정보" 단독 키워드는 DTO/기타 finding 오탐 방지를 위해 제외
+        ("sensitive_logging",  "log_exposure"),
+        ("로그 내 정보 노출",   "log_exposure"),
+        ("로그 내 정보",        "log_exposure"),
+        ("운영 로그",           "log_exposure"),
+        ("개발 로그",           "log_exposure"),
+        ("민감정보 로깅",        "log_exposure"),
+        ("민감정보 로그",        "log_exposure"),
+        ("민감정보 노출",        "log_exposure"),  # 로그 노출 (단독은 DTO와 겹치므로 "노출"까지 포함)
+        ("로깅",               "log_exposure"),
+        ("logging",            "log_exposure"),
+        # DTO_EXPOSURE / ADMIN_SEPARATION → 정보 누출 (pii/logging보다 우선 체크)
+        ("dto_exposure",       "info_leak"),
+        ("admin_separation",   "info_leak"),
+        ("dto",                "info_leak"),
+        ("jsonignore",         "info_leak"),
+        ("@jsonignore",        "info_leak"),
+        ("관리자 api",          "info_leak"),
+        ("관리자 api 분리",     "info_leak"),
+        # pii 단독: DTO 키워드 미매칭 시에만 도달 (위 dto/dto_exposure 후순위)
+        ("pii",                "log_exposure"),
+        # WEAK_CRYPTO — 취약한 암호화 알고리즘 (PasswordEncoder, MD5, SHA-1 등)
+        ("weak_crypto",       "weak_crypto"),
+        ("weak crypto",       "weak_crypto"),
+        ("취약한 암호화",      "weak_crypto"),
+        ("취약 암호화",        "weak_crypto"),
+        ("passwordencoder",   "weak_crypto"),
+        ("암호화 알고리즘",    "weak_crypto"),
+        ("암호 알고리즘",      "weak_crypto"),
         ("cors",       "cors"),
         ("jwt",        "jwt"),
         ("csrf",       "csrf"),
@@ -166,11 +200,11 @@ _SCAN_SUMMARY_STATS: dict[tuple[str, str], object] = {
         "info": s.get("sqli", {}).get("정보", 0),
         "safe": s.get("sqli", {}).get("양호", 0),
     },
-    # OS Command: 전역 패턴 스캔 — 발견 건수는 모두 정보, 양호 없음
+    # OS Command: 전역 패턴 스캔 — total=0이면 스캔 후 양호 확인
     ("injection", "OS Command 인젝션"): lambda s: {
         "vuln": 0,
         "info": s.get("os_command", {}).get("total", 0),
-        "safe": 0,
+        "safe": 1 if s.get("os_command", {}).get("total", 0) == 0 else 0,
     },
     # SSI/SSTI: 전역 패턴 스캔 — total=0이면 1회 스캔 수행 결과 양호
     ("injection", "SSI/SSTI 인젝션"): lambda s: {
@@ -186,6 +220,19 @@ _SCAN_SUMMARY_STATS: dict[tuple[str, str], object] = {
         "info": s.get("_scan_metadata", {}).get("dom_xss_scan", {}).get("findings_count", 0),
         "safe": 0,
     },
+    # File Handling (task24): upload_diagnoses/download_diagnoses/rfi_diagnoses 기반
+    # 파일 업로드는 LLM supplemental이 최종 판정 (extractor 없음 — LLM finding 집계 사용)
+    ("file_handling", "파일 다운로드"): lambda s: {
+        "vuln": s.get("download", {}).get("vulnerable", 0),
+        "info": s.get("download", {}).get("info", 0),
+        "safe": 1 if s.get("download", {}).get("total", 0) == 0 else s.get("download", {}).get("safe", 0),
+    },
+    ("file_handling", "로컬 파일 인클루전"): lambda s: {
+        "vuln": s.get("rfi", {}).get("vulnerable", 0),
+        "info": s.get("rfi", {}).get("info", 0),
+        "safe": 1 if s.get("rfi", {}).get("total", 0) == 0 else s.get("rfi", {}).get("safe", 0),
+    },
+    ("file_handling", "경로 탐색"): lambda s: {"vuln": 0, "info": 0, "safe": 1},
 }
 
 
@@ -246,10 +293,13 @@ class Finding:
     evidence_type: str  # code, config, api, etc.
     flow: list
     instances: list = field(default_factory=list)
+    affected_endpoints: list = field(default_factory=list)  # [{method, path, controller, description}] — 명시적 영향 API 목록
     is_supplemental: bool = False  # LLM 수동분석 보완 finding 여부
     from_ep_group: bool = False    # endpoint_diagnoses 기반 그룹 finding 여부
     original_id: str = ""          # 원본 JSON id (supplemental override 매칭용, e.g. "INJ-001")
-    ep_expansion: dict = field(default_factory=dict)  # EP별 행 분리 데이터 {"vuln_instances": [...], "info_instances": [...]}
+    scan_category: str = ""        # 원본 JSON category 값 (auto-scan 카테고리 — category-replace 매칭용)
+    log_instances: list = field(default_factory=list)  # SENSITIVE_LOGGING 파일별 노출 민감정보 [{file, file_path, sensitive_data, snippet}]
+    ep_expansion: dict = field(default_factory=dict)   # EP별 행 분리 데이터 {"vuln_instances": [...], "info_instances": [...]}
 
 
 @dataclass
@@ -539,6 +589,44 @@ def load_findings(filepath: Path, source_dir: Path,
                 "endpoint": endpoint,
             }]
 
+        # affected_endpoints 파싱 — [{method, path, controller, description}] 구조화 목록
+        # JSON 필드 우선순위: affected_endpoints(배열) > affected_endpoint(단수 문자열 — 하위호환)
+        _METHOD_RE = re.compile(
+            r'^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(.+)', re.IGNORECASE
+        )
+
+        def _parse_ep_entry(raw) -> dict:
+            """단일 엔드포인트 항목을 정규화된 dict로 변환."""
+            if isinstance(raw, dict):
+                return {
+                    "method":      raw.get("method", "").upper() if raw.get("method") else "",
+                    "path":        raw.get("path", raw.get("endpoint", "")),
+                    "controller":  raw.get("controller", ""),
+                    "description": raw.get("description", ""),
+                }
+            if isinstance(raw, str) and raw.strip():
+                m = _METHOD_RE.match(raw.strip())
+                if m:
+                    return {"method": m.group(1).upper(), "path": m.group(2).strip(),
+                            "controller": "", "description": ""}
+                return {"method": "", "path": raw.strip(), "controller": "", "description": ""}
+            return {}
+
+        affected_endpoints: list[dict] = []
+        _ae_raw = f.get("affected_endpoints", [])
+        if isinstance(_ae_raw, list) and _ae_raw:
+            for _ae in _ae_raw:
+                _entry = _parse_ep_entry(_ae)
+                if _entry.get("path"):
+                    affected_endpoints.append(_entry)
+        elif not affected_endpoints:
+            # 하위호환: 단수 문자열 affected_endpoint → 1-entry 배열로 승격
+            _ae_str = f.get("affected_endpoint", "")
+            if isinstance(_ae_str, str) and _ae_str.strip() and _ae_str not in ("-", "서비스 전반", "전역"):
+                _entry = _parse_ep_entry(_ae_str)
+                if _entry.get("path"):
+                    affected_endpoints.append(_entry)
+
         # 서브카테고리 추출
         title_lower = f.get("title", "").lower()
         cat_lower = f.get("category", "").lower()
@@ -549,9 +637,17 @@ def load_findings(filepath: Path, source_dir: Path,
             subcategory = raw_sub
         # 2) CATEGORY_INFO item key 기반 매핑 (영문 키 → 표시 명칭)
         if not subcategory:
+            import re as _re
+            # title에서 "(파일명.확장자)" 형태의 괄호 내용을 제거 — 파일명 포함 오탐 방지
+            # 예: "민감정보(PII) 평문 로깅 — 1건 (JwtAuthenticationFilter.java)" 에서
+            #      "(JwtAuthenticationFilter.java)" 제거 → "jwt" 오탐 방지
+            title_no_filename = _re.sub(
+                r'\s*\([^)]*\.(java|kt|xml|js|ts|jsx|tsx|py|go|cs|rb|cpp|c|h)\b[^)]*\)',
+                '', title_lower
+            )
             for key in sorted(cat_info["items"].keys(), key=len, reverse=True):
                 name = cat_info["items"][key]
-                if key in title_lower or key in cat_lower:
+                if key in cat_lower or key in title_no_filename:
                     subcategory = name
                     break
         # 3) SUBCATEGORY_EXTRA_KEYWORDS 기반 매핑 (LLM 한국어/혼용 category 대응)
@@ -592,8 +688,11 @@ def load_findings(filepath: Path, source_dir: Path,
             evidence_type="code" if code_snippet else "description",
             flow=f.get("flow", []),
             instances=instances,
+            affected_endpoints=affected_endpoints,
             is_supplemental=is_supplemental,
             original_id=f.get("id", ""),  # 원본 JSON id 보존 (override 매칭용)
+            scan_category=f.get("category", ""),  # 원본 JSON category (category-replace 매칭용)
+            log_instances=f.get("log_instances", []),  # SENSITIVE_LOGGING 파일별 노출 민감정보 목록
         ))
 
     return category, findings
@@ -623,7 +722,12 @@ def load_endpoint_group_findings(filepath: Path,
     cat_info = CATEGORY_INFO[category]
 
     info_eps = [ep for ep in raw["endpoint_diagnoses"] if ep.get("result") == "정보"]
-    if not info_eps:
+    # XSS(2-3): 자동스캔이 "취약"으로 판정한 endpoint_diagnoses도 그룹 Finding으로 변환
+    vuln_eps_for_group = (
+        [ep for ep in raw["endpoint_diagnoses"] if ep.get("result") == "취약"]
+        if task_id == "2-3" else []
+    )
+    if not info_eps and not vuln_eps_for_group:
         return category, []
 
     def _find_method_in_file(src_dir: Path, process_file: str, method_name: str,
@@ -650,16 +754,22 @@ def load_endpoint_group_findings(filepath: Path,
         # 메서드 찾기: @Mapping 어노테이션 또는 메서드명
         search_terms = []
         if request_mapping:
-            # URL의 마지막 세그먼트
+            # URL의 마지막 세그먼트 — @PutMapping("/reacquiring/malls") 에서 seg="malls"
+            # 단, 세그먼트가 경로 중간이므로 따옴표로 감싸인 패턴 대신 값 자체로도 검색
             seg = request_mapping.rstrip("/").split("/")[-1]
-            if seg:
-                search_terms.append(f'"{seg}"')
+            # {pathVariable} 형태이면 제외
+            if seg and not (seg.startswith("{") and seg.endswith("}")):
+                search_terms.append(f'"{seg}"')        # "@PutMapping("/...malls")" 매칭
+                search_terms.append(f"/{seg}\"")       # "/reacquiring/malls"" 패턴 매칭
                 search_terms.append(f'"{request_mapping}"')
         if method_name:
-            search_terms.append(f"fun {method_name}")
-            search_terms.append(f"void {method_name}")
-            search_terms.append(f"public {method_name}")
-            search_terms.append(method_name + "(")
+            # method_name은 "allReacquiring()" 형태일 수 있으므로 () 제거 후 기본명 추출
+            base = method_name.rstrip("()")
+            search_terms.append(f"fun {base}(")         # Kotlin
+            search_terms.append(f" {base}(")            # Java: 리턴타입 뒤 공백 + 메서드명
+            search_terms.append(f"\t{base}(")           # 탭 들여쓰기
+            search_terms.append(f"void {base}(")        # void 리턴
+            search_terms.append(f"public {base}(")      # 단순 public (리턴타입 없는 경우)
 
         hit_line = 0
         for i, ln in enumerate(lines):
@@ -673,13 +783,21 @@ def load_endpoint_group_findings(filepath: Path,
             return "", [], []
 
         idx = hit_line - 1
-        # 메서드 블록 추출: hit부터 최대 15줄 또는 닫는 }까지
+        # 메서드 블록 추출: hit부터 메서드 바디({}) 끝까지 (어노테이션 포함)
+        # depth==0 조기 종료 문제: @PutMapping 어노테이션 hit 후 시그니처를 거쳐 { 진입 전에 끊기는 것 방지
         snippet_lines = []
         depth = 0
-        for ln in lines[idx:idx + 20]:
+        entered_body = False  # 실제 메서드 바디({})에 진입했는지 여부
+        for ln in lines[idx:idx + 30]:
             snippet_lines.append(ln)
             depth += ln.count("{") - ln.count("}")
-            if depth < 0 or (depth == 0 and len(snippet_lines) > 3):
+            if depth > 0:
+                entered_body = True
+            if entered_body and depth <= 0:
+                # 메서드 바디 진입 후 닫힘 → 메서드 종료
+                break
+            if not entered_body and len(snippet_lines) > 10:
+                # 10줄 이상 어노테이션/시그니처만 지속 → 위치가 잘못됐거나 추상 메서드
                 break
 
         if not snippet_lines:
@@ -820,7 +938,7 @@ def load_endpoint_group_findings(filepath: Path,
     elif task_id == "2-3":  # XSS: 잠재적위협 / 수동확인필요 그룹
         from collections import defaultdict
         groups: dict[str, list] = defaultdict(list)
-        for ep in info_eps:
+        for ep in info_eps + vuln_eps_for_group:
             groups[ep.get("xss_category", "기타")].append(ep)
 
         xss_review = (llm_supp_data or {}).get("xss_endpoint_review", {})
@@ -876,20 +994,80 @@ def load_endpoint_group_findings(filepath: Path,
                 if llm_j == "양호":
                     title = f"Persistent XSS 잠재 위협 LLM 검토 완료 — ({len(eps)}건) [양호]"
                 else:
-                    title = f"Persistent XSS 잠재 위협 — 전역 XSS 필터 우회 영향 범위 ({len(eps)}건)"
+                    title = f"Persistent XSS — 전역 XSS 필터 미적용, 입력값 필터링 없이 DB 저장 ({len(eps)}건)"
+
+                # 전역 XSS 필터 상태를 scan_metadata에서 읽어 동적으로 설명 생성
+                _gxf = raw.get("scan_metadata", {}).get("global_xss_filter", {})
+                _filter_level = _gxf.get("filter_level", "none")
+                _has_lucy = _gxf.get("has_lucy", False)
+                if _filter_level == "none":
+                    _filter_state_desc = "전역 XSS 필터가 미설정된 상태(Lucy/AntiSamy/ESAPI 모두 미발견)"
+                elif _has_lucy:
+                    _filter_state_desc = "Lucy XSS 필터가 설정되었으나 일부 경로에서 필터링이 우회됨"
+                else:
+                    _filter_state_desc = "전역 XSS 필터가 불충분하게 설정된 상태"
+
+                # taint 경로 확인된 엔드포인트 추출 (코드 흐름 증적용)
+                _taint_confirmed_eps = [
+                    ep for ep in eps
+                    if isinstance(ep.get("phase_details", {}).get("phase5_persistent"), dict)
+                    and ep["phase_details"]["phase5_persistent"].get("taint_result", {}).get("taint_confirmed")
+                ]
+                _taint_count = len(_taint_confirmed_eps)
+                _taint_note = ""
+                if _taint_count > 0:
+                    _chains = []
+                    for _tc in _taint_confirmed_eps:
+                        _tr = _tc["phase_details"]["phase5_persistent"]["taint_result"]
+                        _chain = _tr.get("call_chain", [])
+                        _ep_path = _tc.get("request_mapping", "")
+                        _ep_method = _tc.get("http_method", "")
+                        if _chain:
+                            _chains.append(
+                                f"- `{_ep_method} {_ep_path}`: "
+                                + " → ".join(f"`{c}`" for c in _chain)
+                            )
+                    _taint_note = (
+                        f"\n\n**DB 저장 경로 확인 완료 ({_taint_count}건):**\n"
+                        + "\n".join(_chains)
+                    )
+
                 desc = (
-                    f"**전역 XSS 필터가 `skipXss=true` 기본값으로 비활성화된 상태**에서 "
-                    f"(→ XSS 필터 우회 취약점 참조), DB에 사용자 입력을 저장하거나 "
-                    f"DB 데이터를 응답으로 반환하는 **{len(eps)}개 엔드포인트**가 "
-                    "잠재적 Persistent XSS 위험에 노출됩니다.\n\n"
-                    "**공통 패턴:** `@RestController` / `@ResponseBody` — JSON 응답. "
-                    "브라우저가 HTML로 직접 렌더링하지 않으나, 클라이언트에서 응답 데이터를 "
-                    "`innerHTML`에 삽입하는 경우 XSS가 발생합니다.\n\n"
-                    "**위험도 판단:** 전역 필터 우회 취약점이 수정되면 해당 엔드포인트 위험도 감소."
+                    f"{_filter_state_desc}에서 자유 텍스트 파라미터가 필터링 없이 DB에 저장되는 "
+                    f"**{len(eps)}개 엔드포인트**가 Persistent XSS 위험에 노출됩니다.\n\n"
+                    "**공통 패턴:** `@RestController` / `@ResponseBody` — JSON 응답으로 "
+                    "현재 아키텍처에서 직접 HTML 렌더링 경로는 없으나, 동일 데이터를 소비하는 "
+                    "프론트엔드(React/Vue) 또는 관리자 화면에서 적절한 출력 인코딩이 없을 경우 "
+                    "Stored XSS가 발현됩니다."
+                    + _taint_note
                     + llm_note
                 )
-                rec = ("전역 XSS 필터의 `skipXss` 기본값을 `false`로 설정하고, "
-                       "클라이언트 측 `innerHTML` 삽입 시 DOMPurify 등 sanitizer를 적용하십시오.")
+
+                # 대응방안: 필터 유무에 따라 다르게 생성
+                if _filter_level == "none":
+                    rec = (
+                        "저장 시점 XSS 입력 필터 적용 (Defense-in-Depth):\n"
+                        "1. Spring Lucy XSS Filter (naver/lucy-xss-servlet) 전역 적용 — "
+                        "JSON 요청(`Content-Type: application/json`) 포함 처리\n"
+                        "2. 또는 Jackson `ObjectMapper`에 커스텀 `JsonDeserializer` 적용으로 "
+                        "HTML 특수문자(< > ' \" 등) Sanitize\n"
+                        "3. 소비자(프론트엔드/관리자 앱) 측 출력 인코딩 별도 적용 권고 "
+                        "(저장 측 필터와 상호보완)"
+                    )
+                elif _has_lucy:
+                    rec = (
+                        "Lucy XSS 필터 설정 보완:\n"
+                        "1. `skipXss` 기본값을 `false`로 설정하여 전체 요청에 필터 적용\n"
+                        "2. `multipart/form-data` 요청에 `multipartFilter` 설정 추가\n"
+                        "3. JSON `Content-Type` 요청 처리 여부 확인 및 보완"
+                    )
+                else:
+                    rec = (
+                        "전역 XSS 필터 적용 강화:\n"
+                        "1. Lucy XSS Filter 또는 OWASP AntiSamy 전역 적용\n"
+                        "2. 모든 Content-Type 요청 커버 여부 확인\n"
+                        "3. 소비자 측 출력 인코딩 병행 적용"
+                    )
             else:  # 수동확인필요
                 subcategory = "Reflected XSS"
                 llm_note = _xss_llm_note("수동확인필요")
@@ -909,8 +1087,13 @@ def load_endpoint_group_findings(filepath: Path,
                 rec = ("각 엔드포인트에서 사용자 입력이 View/응답에 반영되는 지점을 확인하고 "
                        "JSTL `<c:out>`, Spring `HtmlUtils.htmlEscape()` 등으로 출력 인코딩을 적용하십시오.")
 
-            # 대표 케이스: phase_details에서 진단 흐름 추출
-            rep = eps[0]
+            # 대표 케이스: taint 확인된 EP 우선 선택, 없으면 첫 번째 EP
+            _taint_eps_local = [
+                ep for ep in eps
+                if isinstance(ep.get("phase_details", {}).get("phase5_persistent"), dict)
+                and ep["phase_details"]["phase5_persistent"].get("taint_result", {}).get("taint_confirmed")
+            ]
+            rep = _taint_eps_local[0] if _taint_eps_local else eps[0]
             rep_flow: list[str] = []
             ph = rep.get("phase_details", {})
             if isinstance(ph, dict):
@@ -919,26 +1102,71 @@ def load_endpoint_group_findings(filepath: Path,
                     ct = p1.get("controller_type", "")
                     ret = p1.get("return_type", "")
                     if ct:
-                        rep_flow.append(f"[Phase1] controller_type={ct}, return_type={ret}")
+                        rep_flow.append(f"[컨트롤러] type={ct}, return={ret}")
                 p5 = ph.get("phase5_persistent", {})
                 if isinstance(p5, dict) and p5:
-                    rep_flow.append(f"[Phase5 Persistent] {str(p5)[:120]}")
+                    tr = p5.get("taint_result", {})
+                    if isinstance(tr, dict) and tr.get("taint_confirmed") and tr.get("call_chain"):
+                        chain_str = " → ".join(tr["call_chain"])
+                        rep_flow.append(f"[DB 저장 경로] {chain_str}")
+                        rep_flow.append(f"[판정] {tr.get('reason', '')[:200]}")
+                    else:
+                        reason = p5.get("reason", "")
+                        if reason:
+                            rep_flow.append(f"[Phase5 Persistent] {reason[:200]}")
             diag = rep.get("diagnosis_detail", "")
-            if diag:
-                rep_flow.append(f"[판정] {diag[:150]}")
+            if diag and not rep_flow:
+                rep_flow.append(f"[판정] {diag[:200]}")
 
             rep_code, rep_before, rep_after = _find_method_in_file(
                 source_dir, rep.get("process_file", ""),
                 rep.get("handler", "").split(".")[-1] if rep.get("handler") else "",
                 rep.get("request_mapping", "")
             )
+            # Persistent XSS: rep_code 추출 실패 시 LLM taint_evidence Controller→Service 코드 사용
+            # (전역 필터 없음 증적은 finding-2-1에서 담당 → Persistent XSS finding은 DB 저장 경로 증적 우선)
+            if not rep_code and xss_cat == "잠재적위협" and llm_supp_data:
+                for _lf in llm_supp_data.get("findings", []):
+                    _te_list = _lf.get("taint_evidence", [])
+                    if not _te_list:
+                        continue
+                    _te = _te_list[0]
+                    _ctrl_snippet = _te.get("controller_snippet", "").strip()
+                    _ctrl_file    = _te.get("controller_file", "")
+                    _ctrl_lines   = _te.get("controller_lines", "")
+                    _svc_snippet  = _te.get("service_snippet", "").strip()
+                    _svc_file     = _te.get("service_file", "")
+                    _svc_lines    = _te.get("service_lines", "")
+                    if _ctrl_snippet or _svc_snippet:
+                        _parts: list[str] = []
+                        if _ctrl_snippet:
+                            _clabel = _ctrl_file.split("/")[-1] + (f" (lines {_ctrl_lines})" if _ctrl_lines else "")
+                            _parts.append(f"// [Controller] {_clabel}")
+                            _parts.extend(_ctrl_snippet.splitlines())
+                        if _svc_snippet:
+                            if _parts:
+                                _parts.append("")
+                            _slabel = _svc_file.split("/")[-1] + (f" (lines {_svc_lines})" if _svc_lines else "")
+                            _parts.append(f"// [Service] {_slabel}")
+                            _parts.extend(_svc_snippet.splitlines())
+                        rep_code = "\n".join(_parts)
+                        rep_before = []
+                        rep_after  = []
+                    break
             # LLM 판정이 양호이고 개별 endpoints_reviewed 중 정보/취약 없으면 → "low"(양호)
             _xss_gj = xss_group_map.get("잠재적위협" if xss_cat == "잠재적위협" else "수동확인필요", {})
             _xss_eps_reviewed = (_xss_gj.get("endpoints_reviewed", [])
                                  + _xss_gj.get("controllers_reviewed", []))
             _has_non_safe = any(e.get("result") in ("정보", "취약") for e in _xss_eps_reviewed)
             _xss_llm_j = _xss_gj.get("judgment", "")
-            _ep_severity = "low" if (_xss_llm_j == "양호" and not _has_non_safe) else "info"
+            # 그룹 내 취약 판정 EP가 있으면 severity를 high(→취약)으로 상향
+            _group_has_vuln = any(e.get("result") == "취약" for e in eps)
+            if _xss_llm_j == "양호" and not _has_non_safe:
+                _ep_severity = "low"
+            elif _group_has_vuln or _xss_llm_j == "취약":
+                _ep_severity = "high"
+            else:
+                _ep_severity = "info"
 
             # Persistent XSS: persistent_xss_revision이 있으면 EP별 행 분리 데이터 생성
             _ep_expansion: dict = {}
@@ -1140,6 +1368,10 @@ def generate_stats_matrix(all_findings: dict[str, list[Finding]],
                             counts[item_name]["vuln"] = sc["vuln"]
                     except Exception:
                         pass
+            # 스캔 실행 확인(cat_summary 존재) 후에도 0/0/0이면 양호(safe=1) 표시
+            # 스캔이 진행됐고 해당 항목에 아무 발견이 없음 → 양호로 기록
+            if cat_summary and counts[item_name] == {"vuln": 0, "info": 0, "safe": 0}:
+                counts[item_name]["safe"] = 1
 
         first_row = True
         for item_name, c in counts.items():
@@ -1243,9 +1475,11 @@ def generate_summary_table(all_findings: dict[str, list[Finding]],
                                  "정보", "4", _ep, _fn, _detail_link])
                 continue  # 그룹 finding 자체 행은 생성하지 않음
 
-            # File 표시: 단건이면 파일명, 다건이면 "multiple (N)"
+            # File 표시: 단건이면 파일명, 다건이면 "{대표 파일명} 외 OO건"
             if len(f.instances) > 1:
-                file_short = f"multiple ({len(f.instances)})"
+                rep_file = f.file.split("/")[-1] if f.file else (f.instances[0].get("file", "").split("/")[-1] if f.instances else "")
+                extra = len(f.instances) - 1
+                file_short = f"{rep_file} 외 {extra}건" if rep_file else f"외 {extra}건"
             elif f.file:
                 file_short = f.file.split("/")[-1]
             else:
@@ -1312,17 +1546,27 @@ def generate_category_detail(category_id: str, findings: list[Finding],
 
     for f in reportable:
         result, risk = RISK_MAP.get(f.severity, ("정보", 4))
-        # 현황 요약: description 첫 줄의 첫 문장, 80자 제한
-        _desc_raw = f.description.strip() if f.description else ""
-        # 개행 기준 첫 줄
-        _desc_line = _desc_raw.split('\n')[0] if _desc_raw else ""
-        # '. ' (마침표+공백) 기준 첫 문장, fallback은 전체 첫 줄
-        if '. ' in _desc_line:
-            _sent = _desc_line.split('. ')[0]
-        else:
-            _sent = _desc_line
-        # 80자 초과 시 말줄임
-        status = (_sent[:77] + '...') if len(_sent) > 80 else _sent
+        # 현황 요약: title 기반 (suffix 제거 후 사용, description 말줄임 없음)
+        import re as _re_s
+        _title = (f.title or "").strip()
+        # "(N건)" suffix 제거
+        _title = _re_s.sub(r"\s*\(\d+건\)\s*$", "", _title).strip()
+        # "— anything (file.ext)" suffix 제거
+        _title = _re_s.sub(
+            r"\s*—\s*[^—\n]*?\(\w[\w.]*\.(?:java|kt|xml|json|properties|py)\)\s*$",
+            "", _title
+        ).strip()
+        # "— 설명" suffix: 앞부분이 40자 이하이면 앞부분만 사용 (단, subcategory와 동일해지면 스킵)
+        _m = _re_s.match(r"^(.+?)\s*—\s*.+$", _title)
+        if _m and len(_m.group(1).strip()) <= 40:
+            _candidate = _m.group(1).strip()
+            if _candidate != (f.subcategory or "").strip():
+                _title = _candidate
+        # title이 subcategory와 동일(너무 일반적)이면 description 첫 문장 fallback
+        if not _title or _title == (f.subcategory or "").strip():
+            _desc_raw = (f.description or "").strip().split('\n')[0]
+            _title = _desc_raw.split('. ')[0] if '. ' in _desc_raw else _desc_raw
+        status = _title or "-"
         if not status:
             status = "-"
 
@@ -1346,14 +1590,97 @@ def generate_category_detail(category_id: str, findings: list[Finding],
             lines.append(_anchor(f"finding-{f.id}"))
             lines.append(f"#### ＊ {finding_label} {f.id} {f.subcategory} ({result})\n")
 
-        # 영향 받는 엔드포인트/파일
-        if f.endpoint:
-            lines.append(f"**영향 받는 API:** `{f.endpoint}`\n")
+        # 영향 받는 엔드포인트/파일 (단순 단일 표시)
+        if not f.affected_endpoints:
+            # affected_endpoints 목록이 없을 때만 단일 endpoint/file 표시
+            if f.endpoint:
+                lines.append(f"**영향 받는 API:** `{f.endpoint}`\n")
         if f.file:
             file_display = f.file
             if f.line:
                 file_display += f":{f.line}"
             lines.append(f"**파일:** `{file_display}`\n")
+
+        # ── expand 섹션: 로그 내 정보 노출이면 파일 목록, 그 외 API 엔드포인트 목록 ─────────
+        if f.log_instances:
+            # SENSITIVE_LOGGING: 취약 파일 및 노출 민감정보 목록
+            _li_cnt = len(f.log_instances)
+            _title  = f"취약 파일 및 노출 민감정보 목록 ({_li_cnt}건)"
+            if ANCHOR_STYLE == "md2cf":
+                rows_html = []
+                for li in f.log_instances:
+                    fname_disp = f"<code>{li.get('file', '-')}</code>"
+                    sdata_disp = li.get("sensitive_data", "-")
+                    snip_disp  = f"<code>{li.get('snippet', '-')[:120]}</code>"
+                    rows_html.append(
+                        f"<tr><td>{fname_disp}</td><td>{sdata_disp}</td><td>{snip_disp}</td></tr>"
+                    )
+                table_html = (
+                    "<table><tbody>"
+                    "<tr><th>파일명</th><th>노출 민감정보</th><th>로그 코드(대표)</th></tr>"
+                    + "".join(rows_html)
+                    + "</tbody></table>"
+                )
+                lines.append(
+                    '<ac:structured-macro ac:name="expand">'
+                    f'<ac:parameter ac:name="title">{_title} — 펼치기</ac:parameter>'
+                    f'<ac:rich-text-body>{table_html}</ac:rich-text-body>'
+                    '</ac:structured-macro>'
+                )
+                lines.append("")
+            else:
+                lines.append("<details>")
+                lines.append(f"<summary><strong>{_title}</strong></summary>\n")
+                lines.append("| 파일명 | 노출 민감정보 | 로그 코드(대표) |")
+                lines.append("|:-------|:-------------|:----------------|")
+                for li in f.log_instances:
+                    _fn = f"`{li.get('file', '-')}`"
+                    _sd = li.get("sensitive_data", "-")
+                    _sn = f"`{li.get('snippet', '-')[:80]}`"
+                    lines.append(f"| {_fn} | {_sd} | {_sn} |")
+                lines.append("\n</details>\n")
+
+        elif f.affected_endpoints:
+            # 그 외: 영향 받는 API 엔드포인트 목록
+            _ep_cnt = len(f.affected_endpoints)
+            _title  = f"영향 받는 API 엔드포인트 ({_ep_cnt}건)"
+            if ANCHOR_STYLE == "md2cf":
+                rows_html = []
+                for ep in f.affected_endpoints:
+                    m_disp   = f"<code>{ep['method']}</code>"  if ep.get("method")      else "-"
+                    p_disp   = f"<code>{ep['path']}</code>"    if ep.get("path")        else "-"
+                    c_disp   = f"<code>{ep['controller']}</code>" if ep.get("controller") else "-"
+                    d_disp   = ep.get("description", "") or "-"
+                    rows_html.append(
+                        f"<tr><td>{m_disp}</td><td>{p_disp}</td>"
+                        f"<td>{c_disp}</td><td>{d_disp}</td></tr>"
+                    )
+                table_html = (
+                    "<table><tbody>"
+                    "<tr><th>Method</th><th>Endpoint</th><th>Controller</th><th>설명</th></tr>"
+                    + "".join(rows_html)
+                    + "</tbody></table>"
+                )
+                expand_macro = (
+                    '<ac:structured-macro ac:name="expand">'
+                    f'<ac:parameter ac:name="title">{_title} — 펼치기</ac:parameter>'
+                    f'<ac:rich-text-body>{table_html}</ac:rich-text-body>'
+                    '</ac:structured-macro>'
+                )
+                lines.append(expand_macro)
+                lines.append("")
+            else:
+                lines.append("<details>")
+                lines.append(f"<summary><strong>{_title}</strong></summary>\n")
+                lines.append("| Method | Endpoint | Controller | 설명 |")
+                lines.append("|:------:|:---------|:-----------|:-----|")
+                for ep in f.affected_endpoints:
+                    _m = f"`{ep['method']}`" if ep.get("method") else "-"
+                    _p = f"`{ep['path']}`"   if ep.get("path")   else "-"
+                    _c = f"`{ep['controller']}`" if ep.get("controller") else "-"
+                    _d = ep.get("description", "") or "-"
+                    lines.append(f"| {_m} | {_p} | {_c} | {_d} |")
+                lines.append("\n</details>\n")
 
         if len(f.instances) > 1:
             if ANCHOR_STYLE == "md2cf":
@@ -1611,10 +1938,10 @@ def generate_report(
             all_findings[category] = []
         all_findings[category].extend(findings)
         print(f"  {fpath.name}: {len(findings)}건 ({category})")
-        # 스캔 JSON 여부 판별: endpoint_diagnoses 키 존재 시 summary 추출
+        # 스캔 JSON summary 추출 (task22/23: endpoint_diagnoses 기반, task24/25: upload_diagnoses 등)
         try:
             raw = json.loads(fpath.read_text(encoding="utf-8"))
-            if "endpoint_diagnoses" in raw and "summary" in raw:
+            if "summary" in raw:
                 summary = dict(raw["summary"])
                 # scan_metadata 보존 (DOM XSS dom_xss_scan 등 sub-scan 통계)
                 if "scan_metadata" in raw:
@@ -1646,20 +1973,36 @@ def generate_report(
                 existing = all_findings[s_category]
                 cat_num  = CATEGORY_INFO[s_category]["number"]
 
-                # original_id → list index 역색인 (override 위치 탐색용)
-                orig_id_index: dict[str, int] = {
-                    f.original_id: i
-                    for i, f in enumerate(existing)
-                    if f.original_id
-                }
+                # ── Category-Replace: LLM 보완 finding의 scan_category 수집 ──
+                # LLM 보완 파일(is_supplemental=True)의 scan_category가 auto-scan 결과와
+                # 겹치면 해당 scan_category의 auto-scan finding 전체를 LLM 결과로 교체.
+                # 예) SENSITIVE_LOGGING 27건 → 운영/개발로그 2건으로 그룹화 교체
+                supp_scan_cats = {sf.scan_category for sf in s_findings if sf.scan_category}
+                replaced_cats: set[str] = set()
+                removed_count = 0
+                if supp_scan_cats:
+                    before_len = len(existing)
+                    existing[:] = [
+                        f for f in existing
+                        if f.scan_category not in supp_scan_cats
+                    ]
+                    removed_count = before_len - len(existing)
+                    replaced_cats = supp_scan_cats if removed_count > 0 else set()
 
-                # 현재 마지막 순번 파악 (신규 Append 연속 번호 부여용)
+                # 남은 existing finding의 마지막 순번 재계산
                 max_seq = 0
                 for f in existing:
                     try:
                         max_seq = max(max_seq, int(f.id.split("-")[-1]))
                     except (ValueError, IndexError):
                         pass
+
+                # original_id → list index 역색인 (override 위치 탐색용, category-replace 후)
+                orig_id_index: dict[str, int] = {
+                    f.original_id: i
+                    for i, f in enumerate(existing)
+                    if f.original_id
+                }
 
                 overridden = 0
                 appended   = 0
@@ -1671,18 +2014,18 @@ def generate_report(
                         existing[idx_in_list] = sf
                         overridden += 1
                     else:
-                        # ── Append: 새 발견 항목, 연속 순번 부여 ──
+                        # ── Append / Category-Replace insert: 연속 순번 부여 ──
                         max_seq += 1
                         sf.id = f"{cat_num}-{max_seq}"
                         existing.append(sf)
-                        # 역색인 갱신 (후속 sf 중복 방지)
                         if sf.original_id:
                             orig_id_index[sf.original_id] = len(existing) - 1
                         appended += 1
 
+                _replace_info = f", cat-replace={removed_count}건 제거({','.join(sorted(replaced_cats))})" if replaced_cats else ""
                 print(
                     f"  {sp.name}: {len(s_findings)}건 ({s_category}) ★보완"
-                    f" [override={overridden}, append={appended}]"
+                    f" [override={overridden}, append={appended}{_replace_info}]"
                 )
 
     # endpoint_diagnoses 기반 그룹 Finding 병합 (정보 엔드포인트 → 보고서 항목화)
@@ -1764,9 +2107,9 @@ def generate_report(
                     gname = gj.get("group", "")
                     judgment = gj.get("judgment", "")
                     eps = gj.get("endpoints_reviewed", []) + gj.get("controllers_reviewed", [])
-                    if "잠재적위협" in gname and judgment == "양호":
+                    if "잠재적위협" in gname and judgment in ("양호", "정보", "취약"):
                         pt = per_t.get("persistent_xss", {}) if isinstance(per_t.get("persistent_xss"), dict) else {}
-                        # persistent_xss_revision이 있으면 LLM 확인 기반 수치 사용
+                        # persistent_xss_revision이 있으면 LLM taint 확인 기반 수치 우선 사용
                         _pxss_rev = auto_xss_sum.get("persistent_xss_revision", {})
                         if isinstance(_pxss_rev, dict) and _pxss_rev.get("upgraded_to_vuln"):
                             _confirmed = _pxss_rev["upgraded_to_vuln"]
@@ -1776,7 +2119,21 @@ def generate_report(
                                 "info": pt.get("정보", 0) + max(0, _auto_vuln - _confirmed),
                                 "vuln": _confirmed,
                             }
-                        else:
+                        elif judgment == "양호":
+                            # LLM이 잠재위협 전체를 양호로 확인 → 취약 → 양호로 이동
+                            llm_matrix_overrides[("xss", "Persistent XSS")] = {
+                                "safe": pt.get("양호", 0) + pt.get("해당없음", 0) + pt.get("취약", 0),
+                                "info": pt.get("정보", 0),
+                                "vuln": 0,
+                            }
+                        elif judgment == "정보":
+                            # LLM이 취약 → 정보(Entry Point 경고)로 재판정 → 취약 건수를 정보로 이동
+                            llm_matrix_overrides[("xss", "Persistent XSS")] = {
+                                "safe": pt.get("양호", 0) + pt.get("해당없음", 0),
+                                "info": pt.get("정보", 0) + pt.get("취약", 0),
+                                "vuln": 0,
+                            }
+                        else:  # judgment == "취약": auto-scan 수치 유지
                             llm_matrix_overrides[("xss", "Persistent XSS")] = {
                                 "safe": pt.get("양호", 0) + pt.get("해당없음", 0),
                                 "info": pt.get("정보", 0),
@@ -1820,6 +2177,31 @@ def generate_report(
                         "info": 0,
                         "vuln": 0,
                     }
+            # SSI/SSTI: LLM가 전체 FP 확정(result=양호) 시 → safe=1
+            ssi_related = [f for f in sp_data.get("findings", [])
+                           if any(k in f.get("category", "").lower()
+                                  for k in ("ssi", "ssti", "spel", "server-side"))]
+            if ssi_related and all(f.get("result") == "양호" for f in ssi_related):
+                auto_ssi_total = scan_summaries.get("injection", {}).get("ssi", {}).get("total", 0)
+                if auto_ssi_total <= len(ssi_related):
+                    llm_matrix_overrides[("injection", "SSI/SSTI 인젝션")] = {
+                        "safe": 1, "info": 0, "vuln": 0,
+                    }
+            # 데이터보호 assessment 기반 카테고리별 양호 override
+            dp_assessment = sp_data.get("data_protection_assessment", {})
+            if dp_assessment:
+                if dp_assessment.get("weak_crypto_count", -1) == 0:
+                    llm_matrix_overrides.setdefault(
+                        ("data_protection", "취약한 암호화 알고리즘"), {"safe": 1, "info": 0, "vuln": 0}
+                    )
+                if dp_assessment.get("cors_wildcard") is False:
+                    llm_matrix_overrides.setdefault(
+                        ("data_protection", "CORS 설정 미흡"), {"safe": 1, "info": 0, "vuln": 0}
+                    )
+                if dp_assessment.get("jwt_unsigned_allowed") is False:
+                    llm_matrix_overrides.setdefault(
+                        ("data_protection", "JWT 취약점"), {"safe": 1, "info": 0, "vuln": 0}
+                    )
 
     # 코드 증적 보완: finding 중 code_snippet 없는 경우, 같은 category 내 코드가 있는 finding에서 차용
     # Pass 1: EP 그룹 finding에서 동일 subcategory 코드 차용
@@ -1839,9 +2221,15 @@ def generate_report(
             ref = ep_with_code_by_sub.get(f.subcategory)
             if ref is f:
                 ref = None
-            # Pass 2: fallback — 카테고리 내 어떤 finding이든 코드 있는 것
+            # Pass 2: fallback — 동일 subcategory 내 다른 finding (cross-subcategory 차용 금지)
+            # 이유: subcategory가 다른 finding의 코드를 차용하면 증적과 파일명이 불일치함
+            # 예) "XSS 필터 결함"의 LoggingFilter 코드가 "Persistent XSS"에 차용되는 문제 방지
             if not ref:
-                ref = any_with_code
+                ref = next(
+                    (sf for sf in findings
+                     if sf is not f and sf.code_snippet and sf.subcategory == f.subcategory),
+                    None
+                )
             if ref and ref is not f:
                 f.code_snippet = ref.code_snippet
                 f.context_before = ref.context_before
@@ -1898,17 +2286,90 @@ def generate_report(
 
     if total_vuln > 0 or total_info > 0:
         report_lines.append(f"### {'1.4' if asset_info else '1.2'} 주요 식별 취약점\n")
-        # Task 순서대로 High/Critical 취약점 출력
+
+        # severity 순위 (높을수록 먼저)
+        # 위험도 숫자 기준 정렬 (RISK_MAP의 위험도 값과 일치)
+        _SEV_RANK = {
+            "critical": 5, "risk 5": 5,
+            "high":     4, "risk 4": 4,
+            "medium":   3, "risk 3": 3,
+            "low":      2, "risk 2": 2,
+            "info":     1, "risk 1": 1,
+        }
+
+        def _type_key(f: "Finding") -> str:
+            """finding 그룹핑 키 (1.4 주요 식별 취약점 전용).
+            subcategory 대신 title 기반 그룹핑 — subcategory는 "정보 누출"처럼 이질적 유형을
+            하나로 뭉뚱그리는 경우가 있어 실제 취약점 유형 구분 불가.
+            - "민감정보(PII) 평문 로깅 — 3건 (StampService.java)" → "민감정보(PII) 평문 로깅"
+            - "Lombok @ToString PII 필드 노출 — @ToString.Exclude 미처리 (File.java)" → "Lombok @ToString PII 필드 노출"
+            - "Persistent XSS — 전역 XSS 필터 미적용... (82건)" → "Persistent XSS"
+            """
+            import re as _re
+            title = f.title
+            # "— ... (파일명.확장자)" suffix 제거 (Lombok 등 파일별 finding 대응)
+            title = _re.sub(
+                r"\s*—\s*[^—\n]*?\(\w[\w.]*\.(?:java|kt|xml|json|properties|py)\)\s*$",
+                "", title
+            ).strip()
+            # "(N건)" suffix 제거
+            title = _re.sub(r"\s*\(\d+건\)\s*$", "", title).strip()
+            # "— 긴 부가 설명" suffix 제거 (XSS EP그룹 finding: "Persistent XSS — 전역 XSS 필터 미적용...")
+            # 단, "—" 앞부분이 subcategory 수준의 짧은 명칭이면 그 앞만 사용
+            m = _re.match(r"^(.+?)\s*—\s*.+$", title)
+            if m and len(m.group(1).strip()) <= 40:
+                title = m.group(1).strip()
+            return title
+
+        # Task 순서대로 처리: subcategory별 dedup → severity 내림차순 최대 3유형/카테고리
+        KEY_PER_CAT = 3   # 카테고리당 최대 표시 유형 수
+        cat_blocks: list[tuple[str, str, list[str]]] = []  # (task_label, cat_name, bullets)
+
         for task_label, _task_desc, cat_id in _TASK_ORDER:
             findings = all_findings.get(cat_id, [])
-            high_findings = [f for f in findings if f.severity in ("critical", "high")]
-            if not high_findings:
+            # 취약/정보 중 Critical/High/Medium만 후보 (severity 대소문자 정규화)
+            candidates = [
+                f for f in findings
+                if f.severity.lower() in ("critical", "high", "medium")
+                and RISK_MAP.get(f.severity.lower(), ("", 0))[0] in ("취약", "정보")
+            ]
+            if not candidates:
                 continue
-            cat_info = CATEGORY_INFO[cat_id]
-            # 예: * **[Task 2-2] 인젝션**
-            report_lines.append(f"* **[{task_label}] {cat_info['name']}**")
-            for f in high_findings[:3]:   # 상위 3개만
-                report_lines.append(f"  - {f.title}")
+
+            # subcategory(또는 타입키) 기준 그룹핑
+            groups: dict[str, list["Finding"]] = {}
+            for f in candidates:
+                key = _type_key(f)
+                groups.setdefault(key, []).append(f)
+
+            # 그룹별 대표: 그룹 내 최고 severity finding, count 산출
+            # 정렬: severity 내림차순
+            group_reps: list[tuple[int, "Finding", int, str]] = []  # (sev_rank, rep, count, label)
+            for key, gf_list in groups.items():
+                rep = max(gf_list, key=lambda f: _SEV_RANK.get(f.severity.lower(), 0))
+                sev_rank = _SEV_RANK.get(rep.severity.lower(), 0)
+                count = len(gf_list)
+                # 대표 레이블: 타입키를 사용 (파일명 suffix 제거된 깔끔한 이름)
+                label = key
+                group_reps.append((sev_rank, rep, count, label))
+
+            group_reps.sort(key=lambda x: -x[0])
+
+            bullets: list[str] = []
+            for sev_rank, rep, count, label in group_reps[:KEY_PER_CAT]:
+                # 위험도 숫자 기반 레이블 (Critical/High 등 영문 등급 미표시)
+                _risk_num = RISK_MAP.get(rep.severity.lower(), ("", 3))[1]
+                sev_tag = f"위험도 {_risk_num}"
+                count_str = f" ({count}건)" if count > 1 else ""
+                bullets.append(f"  - [{sev_tag}] {label}{count_str}")
+
+            if bullets:
+                cat_info = CATEGORY_INFO[cat_id]
+                cat_blocks.append((task_label, cat_info["name"], bullets))
+
+        for task_label, cat_name, bullets in cat_blocks:
+            report_lines.append(f"* **[{task_label}] {cat_name}**")
+            report_lines.extend(bullets)
             report_lines.append("")
 
     # 요약 표
