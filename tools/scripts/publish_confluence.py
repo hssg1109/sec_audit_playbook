@@ -21,6 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from html import escape as html_escape
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # .env loader
@@ -350,6 +351,33 @@ def md_to_xhtml(md_text):
     # expand_store is shared by closures below so nested tokens resolve correctly.
     expand_store: dict = {}
 
+    def _postprocess_code_blocks(xhtml: str) -> str:
+        """Convert <pre><code class="language-X"> output (from markdown library)
+        to Confluence code macros with theme and title.
+
+        The markdown library converts ```lang\\n...\\n``` to
+        <pre><code class="language-lang">...</code></pre>.
+        This step replaces those with proper ac:structured-macro code blocks.
+        """
+        import html as _html_module
+
+        def _repl(m: re.Match) -> str:
+            cls  = m.group(1) or ""
+            body = _html_module.unescape(m.group(2))
+            # "language-java" → "java", "language-properties" → "properties"
+            lang_m = re.search(r'(?:language-)?(\w+)', cls)
+            raw_lang = lang_m.group(1) if lang_m else "text"
+            # Confluence가 지원하지 않는 언어 힌트(properties, kotlin 등)는 "text"로 정규화
+            lang = raw_lang if raw_lang in _CONFLUENCE_VALID_LANGS else "text"
+            return _code_macro(body, lang)
+
+        return re.sub(
+            r'<pre><code(?:\s+class="([^"]*)")?>(.*?)</code></pre>',
+            _repl,
+            xhtml,
+            flags=re.DOTALL,
+        )
+
     def _convert_body(content_md: str) -> str:
         """Convert body markdown (may contain [[EXPAND:N]] tokens) to XHTML.
         Uses the shared expand_store so nested expand blocks are resolved."""
@@ -357,6 +385,7 @@ def md_to_xhtml(md_text):
             body = _md_to_xhtml_lib(content_md)
         except ImportError:
             body = _md_to_xhtml_fallback(content_md)
+        body = _postprocess_code_blocks(body)
         body = _postprocess_anchors(body)
         body = _postprocess_expand_blocks(body)
         return body
@@ -499,6 +528,7 @@ def md_to_xhtml(md_text):
         xhtml = _md_to_xhtml_lib(md_text)
     except ImportError:
         xhtml = _md_to_xhtml_fallback(md_text)
+    xhtml = _postprocess_code_blocks(xhtml)   # <pre><code> → Confluence code macro
     xhtml = _postprocess_anchors(xhtml)
     xhtml = _postprocess_expand_blocks(xhtml)
     xhtml = _postprocess_passthrough(xhtml)
@@ -511,12 +541,64 @@ def md_to_xhtml(md_text):
 # JSON -> XHTML helpers
 # ---------------------------------------------------------------------------
 
-def _code_macro(code_text, lang="text"):
-    """Wrap code in Confluence code macro (Storage Format)."""
+_CODE_THEME = "RDark"  # Confluence 코드블록 기본 테마 (RDark: 시인성 좋은 다크 테마)
+
+# 파일 확장자 → Confluence code macro language 매핑
+_EXT_TO_LANG = {
+    ".java": "java", ".kt": "java", ".kts": "groovy",
+    ".xml": "xml", ".yml": "yaml", ".yaml": "yaml",
+    ".json": "javascript", ".properties": "text",
+    ".sql": "sql", ".py": "python",
+    ".js": "javascript", ".ts": "javascript",
+    ".sh": "bash", ".groovy": "groovy", ".gradle": "groovy",
+    ".html": "html", ".jsp": "html",
+}
+
+# Confluence code macro가 인식하는 유효 언어 목록.
+# 이 목록 외의 언어는 "text"(plain text)로 정규화한다.
+_CONFLUENCE_VALID_LANGS = {
+    "java", "python", "sql", "xml", "html", "javascript",
+    "groovy", "bash", "scala", "yaml", "css", "none", "text",
+    "cpp", "csharp", "php", "ruby", "diff", "powershell",
+    "actionscript3", "coldfusion", "delphi", "erlang", "sass",
+}
+
+
+def _lang_for_file(filename: str) -> str:
+    """파일 확장자에서 Confluence code macro language 결정."""
+    if not filename:
+        return "text"
+    ext = Path(filename).suffix.lower()
+    return _EXT_TO_LANG.get(ext, "text")
+
+
+def _code_macro(code_text: str, lang: str = "text", theme: str = _CODE_THEME) -> str:
+    """Wrap code in Confluence code macro.
+
+    MD 코드블록의 첫 줄이 'FILE: <path>' 형식이면 title 파라미터로 추출.
+    테마와 제목이 포함된 Confluence Storage Format 반환.
+    """
+    # FILE: 첫 줄 → title 추출
+    title = ""
+    lines = code_text.split("\n")
+    if lines and lines[0].startswith("FILE: "):
+        title = lines[0][6:].strip()
+        code_text = "\n".join(lines[1:]).lstrip("\n")
+        # 언어가 text이면 파일명으로 재탐지
+        if lang == "text":
+            lang = _lang_for_file(title.split(":")[0])  # "path/to/File.java:42" → "java"
+
+    safe = code_text.replace("]]>", "]] >")
+    params = (
+        f'<ac:parameter ac:name="language">{html_escape(lang)}</ac:parameter>'
+        f'<ac:parameter ac:name="theme">{html_escape(theme)}</ac:parameter>'
+    )
+    if title:
+        params += f'<ac:parameter ac:name="title">{html_escape(title)}</ac:parameter>'
     return (
         f'<ac:structured-macro ac:name="code">'
-        f'<ac:parameter ac:name="language">{html_escape(lang)}</ac:parameter>'
-        f'<ac:plain-text-body><![CDATA[{code_text}]]></ac:plain-text-body>'
+        + params
+        + f'<ac:plain-text-body><![CDATA[{safe}]]></ac:plain-text-body>'
         f'</ac:structured-macro>'
     )
 
@@ -601,6 +683,35 @@ def _json_to_xhtml_asset(data):
         parts.append(f"<p>전체 자산 수: {meta.get('total_assets', 0)}</p>")
 
     return "\n".join(parts)
+
+
+def _method_badge(method: str) -> str:
+    """Return a Confluence-compatible HTTP method badge using the Status macro.
+
+    Uses <ac:structured-macro ac:name="status"> (same pattern as _severity_badge)
+    so it works on all Confluence instances without requiring inline CSS support.
+
+    Colour mapping (Swagger-inspired, Confluence status macro colours):
+      GET → Blue, POST → Green, PUT → Yellow, DELETE → Red,
+      PATCH → Purple, HEAD/OPTIONS → Grey
+    """
+    _METHOD_COLOUR = {
+        "GET":     "Blue",
+        "POST":    "Green",
+        "PUT":     "Yellow",
+        "DELETE":  "Red",
+        "PATCH":   "Purple",
+        "HEAD":    "Grey",
+        "OPTIONS": "Grey",
+    }
+    m = method.upper()
+    colour = _METHOD_COLOUR.get(m, "Grey")
+    return (
+        f'<ac:structured-macro ac:name="status">'
+        f'<ac:parameter ac:name="colour">{colour}</ac:parameter>'
+        f'<ac:parameter ac:name="title">{html_escape(m)}</ac:parameter>'
+        f'</ac:structured-macro>'
+    )
 
 
 def _json_to_xhtml_api(data):
@@ -839,118 +950,191 @@ def _json_to_xhtml_api_inventory(data):
                          f"<code>{cfg_file}</code> "
                          f"(CSRF: {csrf}, CORS: {cors})</p>")
 
-    # --- 엔드포인트 목록 테이블 ---
+    # --- 엔드포인트: 모듈 → 컨트롤러별 그룹화 (Swagger tag 구조) ---
     endpoints = data.get("endpoints", [])
-    if endpoints:
-        parts.append("<h2>엔드포인트 목록</h2>")
-        headers = ["#", "Method", "API", "인증", "인증 상세", "핸들러", "파일"]
-        rows = []
-        for idx, ep in enumerate(endpoints, 1):
-            auth_required = ep.get("auth_required", False)
-            auth_detail = ep.get("auth_detail", "")
+    if not endpoints:
+        return "\n".join(parts)
 
-            if auth_required:
-                auth_badge = _severity_badge("High").replace("High", "필수")
-            else:
-                auth_badge = _severity_badge("Info").replace("Info", "불필요")
+    # 그룹 빌드: {module: {controller: [ep, ...]}}
+    from collections import defaultdict
+    by_module: dict = defaultdict(lambda: defaultdict(list))
+    for ep in endpoints:
+        module = ep.get("module", "unknown")
+        handler = ep.get("handler", "")
+        # "ControllerName.methodName()" → "ControllerName"
+        ctrl = handler.split(".")[0] if handler else "Unknown"
+        by_module[module][ctrl].append(ep)
 
-            rows.append([
-                str(idx),
-                f"<code>{html_escape(str(ep.get('method', '')))}</code>",
-                f"<code>{html_escape(str(ep.get('api', '')))}</code>",
-                auth_badge,
-                f"<code>{html_escape(auth_detail)}</code>" if auth_detail else "-",
-                f"<code>{html_escape(str(ep.get('handler', '')))}</code>",
-                f"<code>{html_escape(str(ep.get('file', '')))}</code>",
-            ])
-        parts.append(_table(headers, rows))
+    # 모듈별 요약 TOC 테이블
+    parts.append("<h2>엔드포인트 현황 (모듈별)</h2>")
+    method_order = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+    toc_rows = []
+    for mod in sorted(by_module):
+        ctrls = by_module[mod]
+        total = sum(len(v) for v in ctrls.values())
+        m_counts = {}
+        for eps_list in ctrls.values():
+            for ep in eps_list:
+                m = ep.get("method", "").upper()
+                m_counts[m] = m_counts.get(m, 0) + 1
+        method_cells = " ".join(
+            f'{_method_badge(m)} <strong>{m_counts[m]}</strong>'
+            for m in method_order if m in m_counts
+        )
+        toc_rows.append([
+            f"<strong>{html_escape(mod)}</strong>",
+            str(len(ctrls)),
+            f"<strong>{total}</strong>",
+            method_cells or "-",
+        ])
+    parts.append(_table(["모듈", "컨트롤러", "전체 엔드포인트", "HTTP 메서드 분포"], toc_rows))
 
-    # --- 엔드포인트 상세 (파라미터 보유) ---
-    has_params = [ep for ep in endpoints
-                  if ep.get("parameters")
-                  and any(p.get("type") not in ("request", "response", "exchange")
-                          for p in ep["parameters"])]
-    if has_params:
-        parts.append("<h2>엔드포인트 상세</h2>")
-        for ep in has_params:
-            api = html_escape(str(ep.get("api", "")))
-            method = html_escape(str(ep.get("method", "")))
-            handler = html_escape(str(ep.get("handler", "")))
-            desc = html_escape(str(ep.get("description", "")))
-            file_loc = html_escape(str(ep.get("file", "")))
-            ret_type = html_escape(str(ep.get("return_type", "")))
+    # 모듈 → 컨트롤러 → 엔드포인트(expand) 계층 렌더링
+    parts.append("<h2>API 레퍼런스</h2>")
+    for mod in sorted(by_module):
+        parts.append(f"<h3>📦 {html_escape(mod)}</h3>")
+        ctrls = by_module[mod]
+        for ctrl in sorted(ctrls):
+            eps_list = ctrls[ctrl]
+            parts.append(
+                f"<h4>{html_escape(ctrl)} "
+                f"<em style='font-weight:normal;color:#555;'>({len(eps_list)}건)</em></h4>"
+            )
+            # 컨트롤러 내 빠른 목록 (non-expand 요약 행)
+            quick_rows = []
+            for ep in eps_list:
+                method = ep.get("method", "")
+                api = ep.get("api", "")
+                desc = ep.get("description", "") or ""
+                handler_m = html_escape(ep.get("handler", "").split(".", 1)[-1].rstrip("()"))
+                quick_rows.append([
+                    _method_badge(method),
+                    f"<code>{html_escape(api)}</code>",
+                    f"<code>{handler_m}()</code>",
+                    html_escape(desc) if desc else "-",
+                ])
+            parts.append(_table(["Method", "Path", "메서드", "설명"], quick_rows))
 
-            parts.append(f"<h3><code>{method} {api}</code></h3>")
-            parts.append(f"<p><strong>핸들러:</strong> <code>{handler}</code> "
-                         f"(<code>{file_loc}:{ep.get('line', '')}</code>)</p>")
-            if desc:
-                parts.append(f"<p>{desc}</p>")
-            if ret_type:
-                parts.append(f"<p><strong>응답:</strong> <code>{ret_type}</code></p>")
+            # 엔드포인트 상세 — Confluence expand macro 1개씩
+            for ep in eps_list:
+                method   = ep.get("method", "")
+                api      = ep.get("api", "")
+                handler  = html_escape(ep.get("handler", ""))
+                desc     = ep.get("description", "") or ""
+                file_loc = html_escape(ep.get("file", ""))
+                line     = ep.get("line", "")
+                ret_type = ep.get("return_type", "") or ""
+                auth_req = ep.get("auth_required", False)
+                auth_det = ep.get("auth_detail", "") or ""
+                mw_list  = ep.get("middleware", [])
 
-            # 인증 정보
-            auth_detail = ep.get("auth_detail", "")
-            if auth_detail:
-                parts.append(f"<p><strong>인증:</strong> <code>{html_escape(auth_detail)}</code></p>")
+                # expand 제목: plain text only (ac:parameter는 HTML 마크업 불허)
+                api_display = api if api.startswith("/") else f"/{api}"
+                expand_title = html_escape(f"{method}  {api_display}")
 
-            # 미들웨어
-            mw = ep.get("middleware", [])
-            if mw:
-                mw_str = ", ".join(f"<code>{html_escape(m)}</code>" for m in mw)
-                parts.append(f"<p><strong>미들웨어:</strong> {mw_str}</p>")
+                body: list[str] = []
+                # 메서드 배지 + 경로 (expand 내부 상단에 표시)
+                body.append(
+                    f"<p>{_method_badge(method)}&nbsp;"
+                    f"<code><strong>{html_escape(api_display)}</strong></code></p>"
+                )
+                # 핸들러 + 위치
+                body.append(
+                    f"<p><strong>핸들러:</strong> <code>{handler}</code><br/>"
+                    f"<strong>위치:</strong> <code>{file_loc}:{line}</code></p>"
+                )
+                # 인증 (Confluence status 매크로 사용 — span style 불허)
+                if auth_req:
+                    auth_label = (
+                        '<ac:structured-macro ac:name="status">'
+                        '<ac:parameter ac:name="colour">Red</ac:parameter>'
+                        '<ac:parameter ac:name="title">인증 필수</ac:parameter>'
+                        '</ac:structured-macro>'
+                    )
+                else:
+                    auth_label = (
+                        '<ac:structured-macro ac:name="status">'
+                        '<ac:parameter ac:name="colour">Green</ac:parameter>'
+                        '<ac:parameter ac:name="title">인증 불필요</ac:parameter>'
+                        '</ac:structured-macro>'
+                    )
+                auth_line = auth_label
+                if auth_det:
+                    auth_line += f' <code>{html_escape(auth_det)}</code>'
+                body.append(f"<p><strong>인증:</strong> {auth_line}</p>")
+                # 설명
+                if desc:
+                    body.append(f"<p><strong>설명:</strong> {html_escape(desc)}</p>")
+                # 응답 타입
+                if ret_type and ret_type not in ("unknown", ""):
+                    body.append(f"<p><strong>응답 타입:</strong> <code>{html_escape(ret_type)}</code></p>")
+                # 미들웨어
+                if mw_list:
+                    mw_str = ", ".join(f"<code>{html_escape(m)}</code>" for m in mw_list)
+                    body.append(f"<p><strong>미들웨어:</strong> {mw_str}</p>")
 
-            # 파라미터 테이블
-            params = [p for p in ep.get("parameters", [])
-                      if p.get("type") not in ("request", "response", "exchange")]
-            if params:
-                p_headers = ["파라미터", "출처", "데이터 타입", "필수", "기본값"]
-                p_rows = []
-                for p in params:
-                    req_str = "Y" if p.get("required") else "-"
-                    default = p.get("default_value")
-                    default_str = f"<code>{html_escape(str(default))}</code>" if default else "-"
-                    dtype = html_escape(str(p.get("data_type", "")))
-                    resolved = p.get("resolved_from", "")
-                    if resolved:
-                        dtype += f' <em>({html_escape(resolved)})</em>'
+                # 파라미터
+                params = [p for p in ep.get("parameters", [])
+                          if p.get("type") not in ("request", "response", "exchange")]
+                if params:
+                    body.append("<p><strong>파라미터</strong></p>")
+                    p_rows = []
+                    for p in params:
+                        req_str = "✅ 필수" if p.get("required") else "-"
+                        default = p.get("default_value")
+                        default_str = f"<code>{html_escape(str(default))}</code>" if default else "-"
+                        dtype = html_escape(str(p.get("data_type", "")))
+                        resolved = p.get("resolved_from", "")
+                        if resolved:
+                            dtype += f' <em>({html_escape(resolved)})</em>'
+                        p_rows.append([
+                            f"<code>{html_escape(str(p.get('name', '')))}</code>",
+                            f"<code>{html_escape(str(p.get('type', '')))}</code>",
+                            f"<code>{dtype}</code>",
+                            req_str,
+                            default_str,
+                        ])
+                    body.append(_table(["파라미터", "출처", "데이터 타입", "필수", "기본값"], p_rows))
 
-                    p_rows.append([
-                        f"<code>{html_escape(str(p.get('name', '')))}</code>",
-                        f"<code>{html_escape(str(p.get('type', '')))}</code>",
-                        f"<code>{dtype}</code>",
-                        req_str,
-                        default_str,
-                    ])
-                parts.append(_table(p_headers, p_rows))
+                    # DTO resolved fields (Request Body 스키마)
+                    for p in params:
+                        resolved_fields = p.get("resolved_fields", [])
+                        if resolved_fields:
+                            rf_from = html_escape(str(p.get("resolved_from", p.get("data_type", ""))))
+                            p_name  = html_escape(str(p.get("name", "")))
+                            body.append(
+                                f"<p><em>Request Body 스키마 — "
+                                f"<code>{p_name}</code> (<code>{rf_from}</code>):</em></p>"
+                            )
+                            rf_rows = []
+                            for rf in resolved_fields:
+                                annos = rf.get("annotations", [])
+                                anno_str = " ".join(
+                                    f"<code>{html_escape(a)}</code>" for a in annos
+                                ) if annos else "-"
+                                inherited = rf.get("inherited", False)
+                                name_str = html_escape(str(rf.get("name", "")))
+                                if inherited:
+                                    inh_from = html_escape(str(rf.get("inherited_from", "")))
+                                    name_str += f" <em>(← {inh_from})</em>"
+                                rf_rows.append([
+                                    f"<code>{name_str}</code>",
+                                    f"<code>{html_escape(str(rf.get('data_type', '')))}</code>",
+                                    anno_str,
+                                    "Y" if rf.get("nullable") else "-",
+                                ])
+                            body.append(_table(["필드", "타입", "어노테이션", "Nullable"], rf_rows))
+                elif not params:
+                    body.append("<p><em>파라미터 없음 (HttpServletRequest 직접 처리)</em></p>")
 
-                # DTO resolved fields (세부 필드)
-                for p in params:
-                    resolved_fields = p.get("resolved_fields", [])
-                    if resolved_fields:
-                        resolved_from = html_escape(str(p.get("resolved_from", p.get("data_type", ""))))
-                        parts.append(
-                            f"<p><em><code>{html_escape(str(p.get('name', '')))}</code> "
-                            f"타입 <code>{resolved_from}</code> 필드:</em></p>"
-                        )
-                        rf_headers = ["필드", "타입", "어노테이션", "Nullable"]
-                        rf_rows = []
-                        for rf in resolved_fields:
-                            annos = rf.get("annotations", [])
-                            anno_str = " ".join(
-                                f"<code>{html_escape(a)}</code>" for a in annos
-                            ) if annos else "-"
-                            inherited = rf.get("inherited", False)
-                            name_str = html_escape(str(rf.get("name", "")))
-                            if inherited:
-                                inh_from = html_escape(str(rf.get("inherited_from", "")))
-                                name_str += f" <em>(← {inh_from})</em>"
-                            rf_rows.append([
-                                f"<code>{name_str}</code>",
-                                f"<code>{html_escape(str(rf.get('data_type', '')))}</code>",
-                                anno_str,
-                                "Y" if rf.get("nullable") else "-",
-                            ])
-                        parts.append(_table(rf_headers, rf_rows))
+                body_html = "\n".join(body)
+                # Confluence Expand 매크로 (펼치기) — title은 plain text만
+                parts.append(
+                    '<ac:structured-macro ac:name="expand">'
+                    f'<ac:parameter ac:name="title">{expand_title}</ac:parameter>'
+                    f'<ac:rich-text-body>{body_html}</ac:rich-text-body>'
+                    '</ac:structured-macro>'
+                )
 
     return "\n".join(parts)
 
@@ -1021,19 +1205,12 @@ def _json_to_xhtml_vuln(data):
             snippet = evidence.get("code_snippet", "")
             if snippet:
                 efile_name = evidence.get("file", "")
-                if efile_name.endswith(".java") or efile_name.endswith(".xml"):
-                    lang = "java"
-                elif efile_name.endswith(".kts"):
-                    lang = "groovy"
-                elif efile_name.endswith(".kt"):
-                    lang = "java"  # Confluence Server/DC does not support "kotlin"
-                elif efile_name.endswith(".py"):
-                    lang = "python"
-                elif efile_name.endswith(".js") or efile_name.endswith(".ts"):
-                    lang = "javascript"
-                else:
-                    lang = "text"
-                parts.append(_code_macro(snippet, lang))
+                lang = _lang_for_file(efile_name)
+                elines_val = evidence.get("lines", "")
+                ev_title = Path(efile_name).name if efile_name else ""
+                if elines_val:
+                    ev_title += f"  (line {elines_val})"
+                parts.append(_confluence_code_block(snippet, lang, title=ev_title))
 
         # attack example
         attack = f.get("attack_example", "")
@@ -1294,14 +1471,42 @@ def _json_to_xhtml_supp_findings(data: dict) -> str:
                     ev_text = "\n".join(str(e) for e in evidence)
                     parts.append(_code_macro(ev_text, "text"))
                 else:
-                    efile  = html_escape(str(evidence.get("file", "")))
-                    elines = html_escape(str(evidence.get("lines", "")))
+                    efile_raw = str(evidence.get("file", ""))
+                    elines_raw = str(evidence.get("lines", ""))
+                    efile = html_escape(efile_raw)
+                    elines = html_escape(elines_raw)
                     if efile:
                         parts.append(f"<p><strong>증거:</strong> <code>{efile}:{elines}</code></p>")
                     snippet = evidence.get("code_snippet", "")
                     if snippet:
-                        lang = "java" if efile.endswith((".java", ".kt", ".xml")) else "text"
-                        parts.append(_code_macro(snippet, lang))
+                        lang = _lang_for_file(efile_raw)
+                        ev_title = Path(efile_raw).name if efile_raw else ""
+                        if elines_raw:
+                            ev_title += f"  (line {elines_raw})"
+                        parts.append(_confluence_code_block(snippet, lang, title=ev_title))
+
+            # taint_evidence: DB 저장 경로 코드 흐름 (Controller → Service → Repository)
+            taint_evidence = f.get("taint_evidence", [])
+            if taint_evidence:
+                parts.append("<p><strong>DB 저장 경로 코드 흐름 (Taint Path)</strong></p>")
+                for te in taint_evidence:
+                    te_title = te.get("title", "Taint Path")
+                    parts.append(f"<p><strong>{html_escape(te_title)}</strong></p>")
+                    # Controller
+                    for role, fkey, skey in [
+                        ("Controller", "controller_file", "controller_snippet"),
+                        ("Service",    "service_file",    "service_snippet"),
+                        ("Repository", "repository_file", "repository_snippet"),
+                    ]:
+                        fpath = te.get(fkey, "")
+                        snippet = te.get(skey, "")
+                        if snippet:
+                            flines = te.get(fkey.replace("_file", "_lines"), "")
+                            t_label = Path(fpath).name if fpath else role
+                            if flines:
+                                t_label += f"  (line {flines})"
+                            lang = _lang_for_file(fpath)
+                            parts.append(_confluence_code_block(snippet, lang, title=t_label))
 
             note = f.get("manual_review_note", "")
             if note:
@@ -1408,14 +1613,27 @@ def _simplify_category(ep: dict) -> str:
         return "제어 흐름상 안전"
 
 
-def _confluence_code_block(content: str, language: str = "text") -> str:
-    """Render a Confluence code block macro (XHTML storage format)."""
+def _confluence_code_block(content: str, language: str = "text",
+                           title: str = "", theme: str = _CODE_THEME) -> str:
+    """Render a Confluence code block macro (XHTML storage format).
+
+    Args:
+        content: 코드 본문
+        language: Confluence 언어 식별자 (java / xml / python 등)
+        title: 코드블록 상단 제목 (파일명 표시용)
+        theme: Confluence 코드 테마 (기본: RDark)
+    """
     safe = content.replace("]]>", "]] >")
+    params = (
+        f'<ac:parameter ac:name="language">{html_escape(language)}</ac:parameter>'
+        f'<ac:parameter ac:name="theme">{html_escape(theme)}</ac:parameter>'
+    )
+    if title:
+        params += f'<ac:parameter ac:name="title">{html_escape(title)}</ac:parameter>'
     return (
         f'<ac:structured-macro ac:name="code">'
-        f'<ac:parameter ac:name="language">{language}</ac:parameter>'
-        f'<ac:parameter ac:name="theme">Confluence</ac:parameter>'
-        f'<ac:plain-text-body><![CDATA[{safe}]]></ac:plain-text-body>'
+        + params
+        + f'<ac:plain-text-body><![CDATA[{safe}]]></ac:plain-text-body>'
         f'</ac:structured-macro>'
     )
 
@@ -1493,9 +1711,13 @@ def _render_ep_detail(ep: dict) -> str:
     if db_ops and isinstance(db_ops, list):
         for op in db_ops:
             if isinstance(op, dict) and op.get("code_snippet"):
-                lang = "java"  # Confluence Server/DC does not support "kotlin"
-                parts.append("<p><strong>코드 스니펫</strong></p>")
-                parts.append(_confluence_code_block(op["code_snippet"], lang))
+                op_file = op.get("file", proc_file)
+                op_line = op.get("line", "")
+                lang = _lang_for_file(op_file)
+                op_title = Path(op_file).name if op_file else ""
+                if op_line:
+                    op_title += f"  (line {op_line})"
+                parts.append(_confluence_code_block(op["code_snippet"], lang, title=op_title))
                 break
 
     # Vulnerable pattern detail
@@ -1888,15 +2110,21 @@ def _render_xss_ep_detail(ep: dict) -> str:
     # 취약 evidence (코드 스니펫)
     for ev in ep.get("evidence", [])[:2]:
         if isinstance(ev, dict):
-            efile   = html_escape(str(ev.get("file", "")))
-            eline   = html_escape(str(ev.get("line", "")))
+            efile_raw = str(ev.get("file", ""))
+            eline_raw = str(ev.get("line", ""))
+            efile   = html_escape(efile_raw)
+            eline   = html_escape(eline_raw)
             snippet = ev.get("code_snippet", "")
             if efile:
                 parts.append(
                     f"<p><strong>위치:</strong> <code>{efile}:{eline}</code></p>"
                 )
             if snippet:
-                parts.append(_confluence_code_block(snippet, "java"))
+                ev_lang = _lang_for_file(efile_raw)
+                ev_title = Path(efile_raw).name if efile_raw else ""
+                if eline_raw:
+                    ev_title += f"  (line {eline_raw})"
+                parts.append(_confluence_code_block(snippet, ev_lang, title=ev_title))
 
     return "".join(parts)
 
@@ -2068,13 +2296,18 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
                 ev = f.get("evidence", {})
                 if isinstance(ev, dict):
                     snippet = ev.get("code_snippet", "")
-                    efile   = ev.get("file", "")
-                    eline   = ev.get("line", "")
+                    efile   = str(ev.get("file", ""))
+                    eline   = str(ev.get("line", "")) if ev.get("line") else ""
+                    elines_v = str(ev.get("lines", "")) if ev.get("lines") else eline
                     if efile:
-                        parts.append(f"<p><strong>위치:</strong> <code>{html_escape(str(efile))}"
+                        parts.append(f"<p><strong>위치:</strong> <code>{html_escape(efile)}"
                                      + (f":{eline}" if eline else "") + "</code></p>")
                     if snippet:
-                        parts.append(_confluence_code_block(snippet, "java"))
+                        ev_lang = _lang_for_file(efile)
+                        ev_title = Path(efile).name if efile else ""
+                        if elines_v:
+                            ev_title += f"  (line {elines_v})"
+                        parts.append(_confluence_code_block(snippet, ev_lang, title=ev_title))
                 if rec:
                     parts.append(
                         f'<ac:structured-macro ac:name="tip">'
@@ -2400,12 +2633,18 @@ def _json_to_xhtml_final(data):
 
             evidence = f.get("evidence", {})
             if evidence:
-                efile = html_escape(str(evidence.get("file", "")))
-                elines = html_escape(str(evidence.get("lines", "")))
+                efile_raw = str(evidence.get("file", ""))
+                elines_raw = str(evidence.get("lines", ""))
+                efile = html_escape(efile_raw)
+                elines = html_escape(elines_raw)
                 parts.append(f"<p><strong>증거:</strong> {efile}:{elines}</p>")
                 snippet = evidence.get("code_snippet", "")
                 if snippet:
-                    parts.append(_code_macro(snippet, "java"))
+                    ev_lang = _lang_for_file(efile_raw)
+                    ev_title = Path(efile_raw).name if efile_raw else ""
+                    if elines_raw:
+                        ev_title += f"  (line {elines_raw})"
+                    parts.append(_confluence_code_block(snippet, ev_lang, title=ev_title))
 
             cwe = f.get("cwe_id", "")
             owasp = f.get("owasp_category", "")
@@ -2975,7 +3214,12 @@ def main():
     )
     parser.add_argument(
         "--filter", default=None,
-        help="Only publish entries matching this source path.",
+        help="Only publish entries matching this source path (exact match).",
+    )
+    parser.add_argument(
+        "--filter-group", default=None,
+        help="Publish all entries in groups whose title contains this substring "
+             "(case-insensitive). Example: --filter-group 테스트28",
     )
     args = parser.parse_args()
 
@@ -3004,7 +3248,7 @@ def main():
     # apply filter
     publish_root = True
     def _filter_groups(grps, filt):
-        """Recursively filter groups by source path."""
+        """Recursively filter groups by source path (exact match)."""
         filtered = []
         for g in grps:
             gc = dict(g)
@@ -3015,12 +3259,41 @@ def main():
                 filtered.append(gc)
         return filtered
 
-    if args.filter:
+    def _filter_groups_by_title(grps, title_substr):
+        """Recursively keep groups whose title contains title_substr (case-insensitive).
+        Matching groups are kept whole (all entries preserved).
+        Non-matching groups are kept only if they contain a matching descendant.
+        """
+        needle = title_substr.lower()
+        filtered = []
+        for g in grps:
+            if needle in g["title"].lower():
+                # entire group matches — keep as-is
+                filtered.append(g)
+            else:
+                # check children
+                gc = dict(g)
+                gc["groups"] = _filter_groups_by_title(gc.get("groups", []), title_substr)
+                if gc["groups"]:
+                    filtered.append(gc)
+        return filtered
+
+    if args.filter and args.filter_group:
+        print("[ERROR] --filter and --filter-group are mutually exclusive.", file=sys.stderr)
+        sys.exit(1)
+    elif args.filter:
         publish_root = (root_page and root_page.get("source") == args.filter)
         entries = [e for e in entries if e["source"] == args.filter]
         groups = _filter_groups(groups, args.filter)
         if not entries and not groups and not publish_root:
             print(f"[WARN] No entries match filter: {args.filter}", file=sys.stderr)
+            sys.exit(0)
+    elif args.filter_group:
+        publish_root = False
+        entries = []
+        groups = _filter_groups_by_title(groups, args.filter_group)
+        if not groups:
+            print(f"[WARN] No groups match filter-group: {args.filter_group}", file=sys.stderr)
             sys.exit(0)
     else:
         publish_root = root_page is not None
