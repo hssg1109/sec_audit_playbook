@@ -70,11 +70,61 @@ API 목록 → Controller (@Controller/@RestController 판별)
 **진단 방법:**
 1. Controller → Service → Repository 추적하여 사용자 입력이 DB에 저장되는 흐름 확인
 2. 저장 시점에 XSS 필터가 적용되는지 확인
-3. 저장된 데이터가 출력되는 View가 제한되고 프론트에서 양호 확인 시 → 예외 가능 (증적 필요)
+3. 저장된 데이터를 소비하는 모든 View/프론트엔드에서 안전한 출력 인코딩이 적용됨을 **직접 코드로 확인**한 경우에만 하향 가능
+
+**코드 흐름 증적 작성 기준 (Persistent XSS finding 필수):**
+
+> 단순 "DB에 저장될 수 있음" 서술은 증적으로 불충분. 아래 형식으로 실제 저장 경로를 명시해야 한다.
+
+```
+[DB 저장 경로] Controller.method() → ServiceImpl.method() → Repository.save()|Mapper.insert()
+[저장 필드]   requestParam/requestBody 필드명 → 저장 컬럼명 (확인 가능한 경우)
+[필터 적용]   없음 (filter_level: none) | Lucy 미적용 | 커스텀 필터 미작동
+```
+
+**대표 증적 선택 우선순위:**
+1. taint 경로가 자동 추적 완료된 엔드포인트 (taint_confirmed=true) — call_chain 그대로 인용
+2. 자동 추적 실패 시: Controller 소스에서 Service 호출 → Repository/Mapper 호출 수동 추적
+3. Repository/Mapper 확인 불가 시: "Service 레이어 호출 확인, Repository 직접 추적 불가" 명시
+
+**대응방안 작성 기준:**
+- `filter_level: none` (필터 자체 없음): Lucy XSS Filter 신규 도입 또는 Jackson 커스텀 Deserializer 권고. `skipXss` 언급 금지 (Lucy 미설치 서비스에 해당 없음)
+- `filter_level: insufficient` (Lucy 있으나 설정 미흡): `skipXss=false` 설정, multipartFilter 추가 등 구체 설정 명시
+- `filter_level: none` + REST JSON 서버: "저장 시점 Jackson ObjectMapper 커스텀 또는 Lucy JSON 모드" 권고
+
+**판정 (보수적 기본값 적용):**
+
+> ⚠️ **기본 판정 원칙**: 입력 정제(sanitization)는 저장 시점에 수행되어야 한다 (Defense-in-Depth). 현재 렌더링 컨텍스트가 안전하더라도, 필터 없이 DB에 저장된 데이터는 아키텍처 변경·Admin 화면 추가·데이터 이관 시 즉시 XSS로 발현될 수 있다. **저장 시점 필터 미적용 = 취약**이 기본값이다.
+
+| 조건 | 판정 |
+|---|---|
+| 전역 XSS 필터 없이 자유 텍스트 DB 저장 | **취약 (Medium)** |
+| 서블릿 필터(Lucy 등) 적용 중이나 `multipart/form-data` multipartFilter 미설정 | **취약 (Medium)** |
+| 전역 필터 없으나 저장 필드가 숫자/UUID/코드값 등 HTML 메타문자 포함 불가 구조 | **양호** (증적 필요) |
+
+#### 1-A. Cross-module Stored XSS 하향 조건 (엄격 적용)
+
+> ⚠️ **하향은 예외다.** 아래 두 조건을 **모두 코드 직접 확인**으로 충족한 경우에만 정보로 하향한다. 확인 불가 시 취약 유지.
+
+**하향(정보) 조건:** 두 조건 모두 충족 시에만 `정보(Entry Point 경고)` 허용.
+
+| 조건 | 확인 방법 |
+|---|---|
+| ① REST API 전용 서버 — 서버사이드 HTML 렌더링 View 파일 0개 확인 | View 파일(.jsp/.html/.ftl/.vm) 실제 탐색으로 0개 확인 |
+| ② **모든 소비자(admin, frontend, batch, 연동 시스템)**에서 출력 인코딩 적용을 코드로 직접 확인 | Admin JSP `<c:out>` / React DOMPurify / 전역 응답 필터 등 직접 코드 확인 |
 
 **판정:**
-- 필터 없이 DB 저장 → **취약**
-- 서블릿 필터(Lucy 등) 적용 중이나 `multipart/form-data`에 대한 `multipartFilter` 미설정 → **취약**
+- 두 조건 모두 충족 + 증적 있음 → **정보: Cross-module Stored XSS Entry Point 가능성**
+- 소비자 코드 미확인 / 외부 시스템이 소비자인 경우 → **취약 유지** (소비자 측 안전성 보장 불가)
+- REST API가 읽기 전용(GET only) → **해당 없음**
+
+**대응 방안 문구 (recommendation):**
+```
+저장 시점 XSS 방어 적용 (Defense-in-Depth):
+- Jackson JsonDeserializer 커스텀 또는 @ControllerAdvice + @InitBinder로 OWASP HTML Sanitizer(java-html-sanitizer) 적용
+- 또는 Spring Lucy XSS Filter (REST JSON 모드) 전역 적용
+- 소비자 측 출력 인코딩이 있더라도 저장 시점 방어는 별도로 적용 권고 (계층 방어)
+```
 
 ---
 
@@ -130,6 +180,30 @@ API 목록 → Controller (@Controller/@RestController 판별)
 **판정:**
 - 사용자 입력값을 검증 없이 리다이렉트 → **취약**
 - 리다이렉트 대상이 화이트리스트/고정 URL → **양호**
+
+---
+
+### 3-B. Redirect XSS — 사용자 입력 확인 필수 원칙
+
+> ⚠️ **XSS/Open Redirect finding 생성 전 데이터 소스를 반드시 확인한다.**
+>
+> JSP naked EL, `location.replace()`, `form action` 등에서 취약 패턴이 발견되더라도,
+> **해당 값이 사용자(HTTP 요청)가 직접 제어할 수 없는 경우** → **정보(Info)** 로 하향한다.
+
+**입력 소스 분류 기준:**
+
+| 입력 소스 | 판정 |
+|---|---|
+| HTTP 요청 파라미터(`@RequestParam`, `@RequestBody`, `@PathVariable`) → 직접 View 출력 | **취약** |
+| 사용자 입력이 암호화/서명되어 서버에 저장됐다가 복호화 후 출력 (공격자가 원본 값 주입 가능한 경우) | **취약** |
+| 외부 서비스(PG사, API Gateway, KCP 등) 서버가 반환한 값 → View 출력 (사용자 직접 제어 불가) | **정보** |
+| 서버 내부 설정값(`@Value`, DB 조회 코드값, enum) → View 출력 | **양호** |
+| 외부 서비스 응답이지만 MITM/Supply Chain 공격 시나리오만 해당 | **정보** (악용 조건 명시) |
+
+**정보 분류 시 필수 기재 사항:**
+- `diagnosis_type`: `[정보] View naked EL — 사용자 직접 입력 미확인 (외부 서비스 응답 의존)` 형태
+- `manual_review_note`: 데이터 소스 추적 결과 (어떤 서비스/메서드에서 값이 오는지 명시)
+- `recommendation`: 방어적 코딩 권고 (취약 조치와 동일하나 우선순위 낮음)
 
 ---
 
@@ -190,6 +264,23 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 
 ### 6. XSS 필터 충분성 검증
 
+> ⚠️ **전역 XSS 필터 미적용(filter_level: none)은 단순 정보가 아니라 Medium/취약으로 판정한다.**
+> 이유: 전역 필터 부재는 시스템 전체의 입력 정제 계층이 없음을 의미하며, 현재 렌더링이 안전하더라도 아키텍처 변경 시 전면 노출된다. OWASP ASVS V5.2.1(입력 검증), V5.3.1(출력 인코딩) 모두 요구.
+
+**전역 필터 존재 여부 판정:**
+
+| 상태 | 판정 |
+|---|---|
+| Lucy / AntiSamy / ESAPI / Custom XSS Filter 미발견 (`filter_level: none`) | **취약 (Medium)** — 시스템 수준 XSS 입력 정제 계층 부재 |
+| 전역 필터 존재 + `< > ' "` 4개 필터 누락 | **취약 (Medium)** |
+| 전역 필터 존재 + `< > ' "` 모두 필터 + `( ) / #` 일부 누락 | **정보** |
+| 8개 문자 모두 필터 또는 JSON-only API + Jackson HTML escape 활성화 | **양호** |
+
+**REST API 전용 서버의 전역 필터 판정:**
+- `@RestController` + JSON 반환이라도 전역 XSS 필터 미적용은 **취약 (Medium)**
+- 단, Jackson `ObjectMapper`의 `ESCAPE_NON_ASCII` 또는 `@JsonSerialize(using=HtmlEscapingSerializer)` 전역 적용 시 → **정보** (HTML 특수문자 이스케이핑되나 완전한 XSS 필터는 아님)
+- `filter_level: none` + POST/PUT 저장 엔드포인트 다수 → **취약 (Medium)** (Persistent XSS finding과 연계)
+
 **필수 필터 문자 (8개):**
 
 | 문자 | HTML Entity |
@@ -203,16 +294,11 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 | `/` | `&#x2F;` |
 | `#` | `&#35;` |
 
-**판정:**
-- `< > ' "` 중 하나라도 필터 누락 → **취약**
-- `< > ' "` 필터 중이나 `( ) / #` 중 하나 이상 누락 → **Info**
-- 8개 문자 모두 필터 중 → **양호**
-
 **검사 대상 필터 라이브러리:**
 - OWASP AntiSamy
-- Lucy XSS Filter / Lucy XSS Servlet Filter
+- Lucy XSS Filter / Lucy XSS Servlet Filter (SK Planet 사내 표준)
 - ESAPI
-- Java Servlet Filter
+- Java Servlet Filter (커스텀)
 
 ---
 
@@ -221,17 +307,26 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 | 심각도 | 조건 |
 |---|---|
 | **Critical** | 인증 없는 API + Persistent XSS + 필터 없음 |
-| **High** | Persistent XSS 필터 없음, 또는 @Controller HTML 반환 + 필터 없음, DOM XSS 사용자 입력 직접 삽입 |
-| **Medium** | 부분 필터 적용 (필수 4문자 중 일부 누락), Redirect 검증 미흡, DOM XSS 잠재 패턴 + sanitize 미확인 |
+| **High** | Persistent XSS 필터 없음(@Controller HTML 반환), DOM XSS 사용자 입력 직접 삽입 |
+| **Medium** | **전역 XSS 필터 미적용 (filter_level: none) — REST API 포함**, 부분 필터 적용 (필수 4문자 중 일부 누락), Redirect 검증 미흡, REST API + 필터 없이 DB 저장 (Persistent XSS), DOM XSS 잠재 패턴 + sanitize 미확인 |
 | **Low** | @RestController JSON 반환이나 Gson disableHtmlEscaping 사용 |
-| **Info** | 필터 개선 권고 (8개 중 보조 4문자 누락), dangerouslySetInnerHTML / v-html + sanitize 적용 확인 권고 |
+| **Info** | 전역 필터 있으나 보조 4문자(`( ) / #`) 누락, dangerouslySetInnerHTML / v-html + sanitize 적용 확인 권고, Cross-module Entry Point (소비자 측 안전성 코드 확인된 경우), **View naked EL/JS 컨텍스트 출력이나 사용자 직접 입력 미확인 (외부 서비스 응답·서버 내부값)** |
 
 ---
 
 ### 출력 형식
 
 자동스캔 결과(`<prefix>_xss.json`)에서 수동 확정이 필요한 항목만 findings로 출력합니다.
-`endpoint_diagnoses`는 포함하지 않으며(자동스캔 JSON에 이미 있음), **보완 findings만** 작성합니다:
+`endpoint_diagnoses`는 포함하지 않으며(자동스캔 JSON에 이미 있음), **보완 findings만** 작성합니다.
+
+> **`affected_endpoints` 작성 규칙** — 각 finding에 영향 받는 API 목록을 구조화 배열로 명시.
+> 보고서 렌더링 시 Confluence Expand 매크로 또는 `<details>` 펼치기 섹션으로 자동 출력됩니다.
+> - `method`: HTTP 메서드 (GET/POST/PUT/DELETE 등)
+> - `path`: Request Mapping 경로 (예: `/admin/board/list`)
+> - `controller`: 클래스명.메서드명() (예: `BoardController.list()`)
+> - `description`: 해당 엔드포인트에서 XSS 발현 방식 한 줄 설명
+> - **전역 XSS 필터 결함 finding (필터 부재·전역 설정 오류)**: `"path": "전체 엔드포인트 (전역 필터 미적용)"` **1건만** 기재. 특정 엔드포인트 샘플 추가 금지 — 전역 문제를 특정 엔드포인트 문제처럼 오해 유발. 영향 범위(EP 수, POST/PUT 저장 건수 등)는 `description` 필드에 서술.
+> - **Persistent XSS 개별 endpoint finding**: 자동스캔 endpoint_diagnoses의 취약 판정 EP 목록은 보고서 생성기가 자동으로 그룹 finding으로 변환 — LLM이 별도 affected_endpoints 기재 불필요.
 
 ```json
 {
@@ -283,7 +378,20 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
       "severity": "High",
       "category": "XSS / Filter Misconfiguration",
       "description": "상세 설명 — 자동스캔이 탐지하지 못한 전역 필터 취약점 등",
-      "affected_endpoint": "전체 엔드포인트 (전역 필터)",
+      "affected_endpoints": [
+        {
+          "method": "GET",
+          "path": "/admin/board/list",
+          "controller": "BoardAdminController.list()",
+          "description": "파라미터 searchKeyword가 JSP에 escape 없이 출력됨"
+        },
+        {
+          "method": "POST",
+          "path": "/admin/board/save",
+          "controller": "BoardAdminController.save()",
+          "description": "전역 XSS 필터 미적용으로 저장 시점 클렌징 없음"
+        }
+      ],
       "evidence": {
         "file": "com/.../XssFilterUtil.java",
         "lines": "35-51",
@@ -313,6 +421,52 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 
 **주의**: `endpoint_diagnoses` 키는 출력하지 않는다 (자동스캔 JSON과 중복).
 전역 XSS 필터 상태(`xss_filter_assessment`)와 수동 확정 findings만 포함한다.
+
+---
+
+### 코드 증적 품질 기준 (필수 준수)
+
+> ⚠️ **코드 증적은 반드시 실제 소스 파일 내용을 사용해야 한다.** 아래 규칙을 반드시 따를 것.
+
+#### 규칙 1: evidence.file — 실제 파일 경로 (디렉토리 금지)
+
+```
+✅ 올바른 예: "foundation/oki-rest-config/src/main/java/.../LoggingFilter.java"
+❌ 잘못된 예: "foundation/oki-rest-config/src/main/java/.../filter/"  ← 디렉토리
+```
+
+#### 규칙 2: evidence.code_snippet — 실제 파일 내용 (생성/추측 금지)
+
+- Read 툴로 해당 파일을 직접 읽어 실제 코드를 복사할 것
+- 아래와 같은 생성된 주석 코드는 **절대 사용 금지**:
+  ```
+  // LoggingFilter만 존재 — XSS 입력 필터 미발견  ← 금지 (생성된 주석)
+  // has_lucy: false ...                          ← 금지 (생성된 주석)
+  ```
+- 파일을 읽지 않고 evidence를 작성하면 반드시 `needs_review: true` 로 표시하고 `manual_review_note`에 "코드 미확인" 명시
+
+#### 규칙 3: taint_evidence — Controller→Service→Repository 실제 코드 흐름
+
+DB 저장 경로(taint path)가 확인된 경우, `taint_evidence` 배열로 각 계층의 실제 코드 스니펫을 첨부:
+
+```json
+"taint_evidence": [
+  {
+    "title": "Taint Path 1 — Controller → Service → Repository",
+    "controller_file": "실제 경로/Controller.java",
+    "controller_lines": "66-73",
+    "controller_snippet": "/* Read 툴로 읽은 실제 Controller 코드 */",
+    "service_file": "실제 경로/Service.java",
+    "service_lines": "44-54",
+    "service_snippet": "/* Read 툴로 읽은 실제 Service 코드 */",
+    "repository_file": "실제 경로/Repository.java (있을 경우)",
+    "repository_lines": "26",
+    "repository_snippet": "/* 실제 Repository 인터페이스/메서드 */"
+  }
+]
+```
+
+각 taint path마다 Controller, Service, Repository 계층 코드를 모두 Read 툴로 직접 확인하여 첨부한다.
 
 ---
 
