@@ -44,7 +44,26 @@ API 목록 → Controller → Service → 파일 처리 로직
 
 #### 1.2 판정 기준
 
-**양호 조건 (아래 중 하나 이상 충족):**
+**[0순위] 인프라 아키텍처 레벨 — 최우선 점검 항목**
+
+> 코드 레벨 방어(MIME 검증, 확장자 필터 등)보다 **저장 경로의 물리적 분리**가 더 근본적인 방어책이다.
+> 저장 경로가 Web Document Root 내부이면 코드 레벨 방어를 통과한 악성 파일이 URL로 직접 실행될 수 있다.
+
+| 저장 경로 상황 | 판정 |
+|---|---|
+| Web Document Root 외부 (NAS, S3, `/data/uploads/` 등) + 다운로드 전용 서블릿 경유 | **양호 (근본 방어)** |
+| Web Document Root 내부 (`/webapps/upload/`, `/static/` 등) + 코드 레벨 필터만 존재 | **취약 (코드 필터 우회 시 직접 실행 가능)** |
+| 저장 경로 설정 코드 미확인 | `needs_review: true` — `@Value` 경로 설정 또는 `application.yml` 확인 요청 |
+
+**recommendation 필수 포함 문구:**
+```
+[아키텍처 0순위] 업로드 저장 경로를 WAS의 Web Document Root와 물리적으로 분리.
+외부 NAS 또는 AWS S3 사용. 저장 경로 외부 분리 시 악성 스크립트 파일이 업로드되더라도
+URL을 통한 직접 실행(Execute)이 불가하여 웹쉘 공격을 원천 차단.
+다운로드는 전용 서블릿을 통한 스트림 응답(Content-Disposition: attachment)으로만 제공.
+```
+
+**양호 조건 — 코드 레벨 (아래 중 하나 이상 충족):**
 - 확장자 필터 + 파일명 필터가 동시에 존재
 - 고정 로직으로 업로드하며 사용자 입력값 미포함
 - 고정 로직에 사용자 입력값 포함되나 필터링 후 포함
@@ -53,6 +72,7 @@ API 목록 → Controller → Service → 파일 처리 로직
 **취약 조건:**
 - 확장자 필터 / 파일명 필터가 모두 확인되지 않는 경우 → **취약**
 - 고정 로직에 사용자 입력값이 포함되나 필터링 미적용 → **취약**
+- 저장 경로가 Web Document Root 내부 + 코드 레벨 방어 부재 → **취약 (Critical)**
 
 **필터 상세:**
 
@@ -130,7 +150,14 @@ API 목록 → Controller → Service → 파일 처리 로직
 ### 출력 형식
 
 자동스캔 결과(`<prefix>_task24.json`)에서 수동 확정이 필요한 항목만 findings로 출력합니다.
-자동스캔 JSON에 이미 있는 `endpoint_diagnoses`는 포함하지 않으며, **보완 findings만** 작성합니다:
+자동스캔 JSON에 이미 있는 `endpoint_diagnoses`는 포함하지 않으며, **보완 findings만** 작성합니다.
+
+> **`affected_endpoints` 작성 규칙** — 각 finding에 영향 받는 API 목록을 구조화 배열로 명시.
+> 보고서 렌더링 시 Confluence Expand 매크로 또는 `<details>` 펼치기 섹션으로 자동 출력됩니다.
+> - `method`: HTTP 메서드 (POST/GET 등)
+> - `path`: Request Mapping 경로 (예: `/admin/file/upload`)
+> - `controller`: 클래스명.메서드명() (예: `FileAdminController.upload()`)
+> - `description`: 해당 엔드포인트에서 파일 처리 취약점 발현 방식 한 줄 설명
 
 ```json
 {
@@ -143,7 +170,14 @@ API 목록 → Controller → Service → 파일 처리 로직
       "severity": "High",
       "category": "File Handling / IDOR",
       "description": "상세 설명 — 자동스캔이 탐지하지 못한 권한 검증 누락 또는 우회 기법",
-      "affected_endpoint": "/api/download",
+      "affected_endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/upload",
+          "controller": "FileController.upload()",
+          "description": "MIME 타입 검증 및 확장자 화이트리스트 미적용"
+        }
+      ],
       "evidence": {
         "file": "src/controller/FileController.java",
         "lines": "50-65",

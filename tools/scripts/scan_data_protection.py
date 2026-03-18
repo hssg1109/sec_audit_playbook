@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scan_data_protection.py v1.0.0
+scan_data_protection.py v1.3.0
 ================================================================================
 Spring Boot (Java/Kotlin) 데이터 보호 및 정보 노출 취약점 자동 진단.
 Task 2-5 전용 정적 분석 스크립트.
@@ -22,6 +22,7 @@ Task 2-5 전용 정적 분석 스크립트.
 """
 
 import argparse
+import bisect
 import json
 import re
 import sys
@@ -31,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # ============================================================
 #  0. 공통 유틸
@@ -135,6 +136,23 @@ _S_GENERIC_SECRET_RE = re.compile(
 _S_VALUE_ANNOTATION_RE = re.compile(r'@Value\s*\(\s*["\$]\{[^}]+\}["\)]')
 # System.getenv — 환경변수 참조 (안전)
 _S_GETENV_RE = re.compile(r'System\.getenv\s*\(')
+
+# ── [보완 1] Base64 인코딩 시크릿 탐지 ──────────────────────────────────────
+# 기존 _S_GENERIC_SECRET_RE / _S_JWT_SECRET_RE 미커버 변수명에 집중
+# 조건: 시크릿 컨텍스트 변수명 + 24자 이상 순수 Base64 + (+,/,= 중 1 이상 포함)
+_S_BASE64_SECRET_NAMES_RE = re.compile(
+    r'(?i)(?:hmac[_\-.]?(?:key|secret)'
+    r'|auth[_\-.]?key'
+    r'|signing[_\-.]?key'
+    r'|encode[d]?[_\-.]?(?:key|secret)'
+    r'|base64[_\-.]?(?:key|secret|token)'
+    r'|client[_\-.]?key'
+    r'|encrypt[_\-.]?key'
+    r'|decode[d]?[_\-.]?key'
+    r')\s*[=:]\s*["\']([A-Za-z0-9+/]{24,}={0,2})["\']',
+)
+# Base64 특성 문자 포함 여부 필터 — 단순 alphanumeric 제외
+_S_BASE64_CHARS_RE = re.compile(r'[+/=]')
 
 
 # ── [L] 민감정보 로깅 탐지 ──────────────────────────────────────────────────
@@ -252,6 +270,38 @@ _C_WEAK_ENCODER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── [보완 2] 하드코딩 IV(초기화 벡터) 탐지 ──────────────────────────────────
+# Pattern A: new IvParameterSpec("literal".getBytes())
+_C_IV_STRING_RE = re.compile(
+    r'new\s+IvParameterSpec\s*\(\s*"([^"]{8,})"\s*\.getBytes\s*\(',
+    re.IGNORECASE,
+)
+# Pattern B: new IvParameterSpec(new byte[]{...}) 인라인 배열
+_C_IV_BYTES_INLINE_RE = re.compile(
+    r'new\s+IvParameterSpec\s*\(\s*new\s+byte\s*\[\s*\]\s*\{[^}]{4,}\}',
+    re.IGNORECASE,
+)
+# Pattern C Step1: static final byte[] 상수 선언 (변수명 캡처)
+_C_STATIC_IV_DECL_RE = re.compile(
+    r'(?:static\s+final\s+|final\s+static\s+)(?:byte\s*\[\s*\]|byte\[\])\s+'
+    r'(\w+)\s*=\s*\{([^}]{4,})\}',
+    re.IGNORECASE,
+)
+# Pattern C Step2: IvParameterSpec(varName) 변수 참조
+_C_IV_VAR_REF_RE = re.compile(
+    r'new\s+IvParameterSpec\s*\(\s*([A-Za-z_]\w*)\s*\)',
+    re.IGNORECASE,
+)
+# 안전 제외 — SecureRandom 기반 IV 생성
+_C_SECURE_RANDOM_IV_RE = re.compile(
+    r'SecureRandom[^;]{0,200}IvParameterSpec'
+    r'|IvParameterSpec[^;]{0,200}SecureRandom'
+    r'|\.nextBytes\s*\([^;]{0,100}IvParameterSpec',
+    re.IGNORECASE | re.DOTALL,
+)
+# 배열 내용에 숫자 리터럴이 존재하는지 확인 (FP 방지: 메서드 호출 결과 등 제외)
+_C_IV_NUMERIC_VALS_RE = re.compile(r'(?:0x[0-9A-Fa-f]{1,2}|\b\d{1,3}\b)')
+
 
 # ── [J] JWT 검증 불완전 탐지 ────────────────────────────────────────────────
 
@@ -325,6 +375,30 @@ _D_LOMBOK_GETTER_RE = re.compile(r'@(?:Getter|Data|Value)\b')
 _D_MASKING_ANNOT_RE = re.compile(
     r'@(?:JsonSerialize|MaskingField|Masked|Sensitive|SensitiveData)\b',
     re.IGNORECASE,
+)
+
+# ── [보완 3] Lombok @ToString PII 노출 탐지 ──────────────────────────────────
+# 파일 내 @ToString 또는 @Data 존재 여부 확인 (클래스 레벨 toString() 생성 트리거)
+# ★ @Value 제외: Spring @Value("${...}")는 필드/메서드 레벨 어노테이션으로 toString() 생성 안 함.
+#   Lombok @Value(클래스 레벨)는 @Value 단독 또는 @Value(staticConstructor=...) 형태이나,
+#   실무에서 Spring @Value와 혼재 시 오탐 유발 → @ToString/@Data 로만 감지.
+_D_TOSTRING_ANNOT_RE = re.compile(r'@(?:ToString|Data)\b')
+# 안전 처리: @ToString(exclude=...) 또는 onlyExplicitlyIncluded=true
+_D_TOSTRING_SAFE_RE = re.compile(
+    r'@ToString\s*\([^)]*(?:exclude\s*=|onlyExplicitlyIncluded\s*=\s*true)[^)]*\)',
+    re.IGNORECASE,
+)
+# @ToString(exclude={"field1","field2"}) 에서 필드명 추출
+_D_TOSTRING_EXCLUDE_LIST_RE = re.compile(
+    r'@ToString\s*\([^)]*exclude\s*=\s*\{([^}]+)\}',
+    re.IGNORECASE,
+)
+# 필드 레벨 @ToString.Exclude
+_D_TOSTRING_FIELD_EXCL_RE = re.compile(r'@ToString\.Exclude\b')
+# 클래스 선언 전 N줄 내에 @ToString/@Data가 있는지 확인용 (per-class context)
+_D_CLASS_DECL_RE = re.compile(
+    r'(?:@ToString\b|@Data\b)[^\n]*(?:\n[^\n]*){0,8}(?:public|protected|private|abstract|final|\s)+class\s+',
+    re.MULTILINE,
 )
 
 
@@ -615,12 +689,72 @@ def scan_hardcoded_secrets(source_dir: Path) -> list[DPFinding]:
                  "환경변수 또는 외부 시크릿 관리 시스템으로 이관.",
                  needs_review=True)
 
+        # [보완 1] Base64 인코딩 시크릿
+        # - 변수명 컨텍스트(hmacKey, authKey, signingKey 등) + Base64 특성 문자(+,/,=) 필수
+        # - 기존 JWT/AWS/GENERIC 패턴과 중복 방지: 동일 줄에서 이미 탐지됐으면 skip
+        already_flagged_lines: set[int] = set()
+        for m in _S_JWT_SECRET_RE.finditer(content):
+            already_flagged_lines.add(_line_of(content, m.start()))
+        for m in _S_AWS_SECRET_RE.finditer(content):
+            already_flagged_lines.add(_line_of(content, m.start()))
+
+        for m in _S_BASE64_SECRET_NAMES_RE.finditer(content):
+            ln = _line_of(content, m.start())
+            if ln in safe_lines or ln in already_flagged_lines:
+                continue
+            val = m.group(1)
+            # Base64 특성 문자(+, /, 패딩=) 없으면 일반 alphanumeric — 기존 패턴에서 처리
+            if not _S_BASE64_CHARS_RE.search(val):
+                continue
+            _add("HARDCODED_SECRET",
+                 "Info" if is_test else "High",
+                 "Base64 인코딩 시크릿 하드코딩",
+                 (f"Base64 인코딩된 시크릿이 소스코드에 하드코딩됨 ({len(val)}자). "
+                  f"디코딩 시 원본 키 복원 가능. 운영 키 여부 추가 확인 필요."),
+                 rel, ln, _snippet(content, m.start()),
+                 "CWE-798", "A02:2021 Cryptographic Failures",
+                 "@Value(\"${key.property}\") 참조 + Jasypt ENC(...) 암호화 또는 Vault/KMS 이관.",
+                 result="정보" if is_test else "취약",
+                 needs_review=True)
+
     # ── 프로퍼티/YAML 파일 스캔 ─────────────────────────────────
+    # i18n / 예외 메시지 파일 판별: 파일명에 message/error/exception/locale 포함 시 FP 제외 대상
+    _I18N_NAME_RE = re.compile(
+        r'(?i)(message|error|exception|locale|label|text|notice|alert|mail_template)',
+    )
+
+    def _is_i18n_props_value(val: str) -> bool:
+        """프로퍼티 값이 i18n 안내 문구(FP)인지 판별.
+
+        다음 조건 중 하나라도 해당하면 오탐(FP)으로 처리:
+        1. 한글 유니코드 이스케이프 패턴(\\uXXXX) 포함 — 단순 UI 메시지
+        2. 공백 2개 이상인 문장형 문자열 — 설명 문구
+        3. 한글 문자(가-힣) 직접 포함 — 사용자 안내 메시지
+        4. 마침표/물음표/느낌표로 끝나는 자연어 문장
+        """
+        # 1) 유니코드 이스케이프 (\uXXXX) 포함
+        if re.search(r'\\u[0-9A-Fa-f]{4}', val):
+            return True
+        # 2) 공백 2개 이상 (문장형)
+        if val.count(' ') >= 2:
+            return True
+        # 3) 한글 직접 포함
+        if re.search(r'[\uAC00-\uD7A3]', val):
+            return True
+        # 4) 자연어 문장 종결 (마침표/느낌표/물음표로 끝남)
+        if re.search(r'[.!?]$', val.strip()):
+            return True
+        return False
+
     for fp in _iter_props(source_dir):
         content = _read(fp)
         if not content:
             continue
         rel = _rel(fp, source_dir)
+
+        # i18n / 메시지 파일 전체 스킵 (파일명 기반)
+        if _I18N_NAME_RE.search(fp.stem):
+            continue
 
         for m in _S_PROP_PASS_RE.finditer(content):
             ln = _line_of(content, m.start())
@@ -632,6 +766,9 @@ def scan_hardcoded_secrets(source_dir: Path) -> list[DPFinding]:
                 continue
             # 너무 짧거나 변수명/키워드처럼 보이는 값은 제외 (false positive 방지)
             if len(val) < 4 or val.lower() in ("true", "false", "null", "none", ""):
+                continue
+            # i18n 안내 문구 FP 제거 (유니코드 이스케이프, 문장형, 한글, 자연어 종결)
+            if _is_i18n_props_value(val):
                 continue
             _add("HARDCODED_SECRET",
                  "High",
@@ -722,9 +859,9 @@ def scan_sensitive_logging(source_dir: Path) -> list[DPFinding]:
                 finding_id=_make_id("SENSITIVE_LOGGING", counter[0]),
                 category="SENSITIVE_LOGGING",
                 severity="Critical",
-                title=f"민감정보(PII) 평문 로깅 — {len(hits)}건 ({rel.split('/')[-1]})",
+                title=f"민감정보 로그 노출 — {len(hits)}건 ({rel.split('/')[-1]})",
                 description=(
-                    f"info/warn/error/fatal 레벨 로그에 PII 변수(mbrId, cardNo 등)가 "
+                    f"info/warn/error/fatal 레벨 로그에 민감정보(mbrId, email, accessToken 등)가 "
                     f"마스킹 없이 출력됨. 상용 환경 로그 파일 접근자에게 개인정보 노출 가능. "
                     f"({len(hits)}개 라인 — 상세 위치는 vulnerable_lines 참조)"
                 ),
@@ -750,7 +887,7 @@ def scan_sensitive_logging(source_dir: Path) -> list[DPFinding]:
                 severity="Medium",
                 title=f"민감정보 로깅 (debug/trace, 수동확인) — {len(hits)}건 ({rel.split('/')[-1]})",
                 description=(
-                    f"debug/trace 레벨 로그에 PII 변수가 포함됨. "
+                    f"debug/trace 레벨 로그에 민감정보가 포함됨. "
                     f"상용 환경에서는 출력되지 않으나 개발·검증계 로그 노출 위험. "
                     f"({len(hits)}개 라인 — 상세 위치는 vulnerable_lines 참조)"
                 ),
@@ -774,9 +911,9 @@ def scan_sensitive_logging(source_dir: Path) -> list[DPFinding]:
                 finding_id=_make_id("SENSITIVE_LOGGING", counter[0]),
                 category="SENSITIVE_LOGGING",
                 severity="Info",
-                title=f"System.out PII 직접 출력 — {len(hits)}건 ({rel.split('/')[-1]})",
+                title=f"System.out 민감정보 직접 출력 — {len(hits)}건 ({rel.split('/')[-1]})",
                 description=(
-                    f"System.out.println으로 PII 변수가 직접 출력됨. "
+                    f"System.out.println으로 민감정보가 직접 출력됨. "
                     f"({len(hits)}개 라인 — 상세 위치는 vulnerable_lines 참조)"
                 ),
                 file=rel, line=first_ln,
@@ -801,7 +938,7 @@ def scan_sensitive_logging(source_dir: Path) -> list[DPFinding]:
                 severity="Info",
                 title=f"민감정보 로깅 (마스킹 유틸 근접 확인 필요) — {len(hits)}건 ({rel.split('/')[-1]})",
                 description=(
-                    "로그 구문에 PII 변수가 포함되나 근접 컨텍스트에서 마스킹 유틸 호출 확인. "
+                    "로그 구문에 민감정보가 포함되나 근접 컨텍스트에서 마스킹 유틸 호출 확인. "
                     "실제 마스킹이 해당 변수에 적용되었는지 수동 확인 필요."
                 ),
                 file=rel, line=first_ln,
@@ -876,6 +1013,111 @@ def scan_weak_crypto(source_dir: Path) -> list[DPFinding]:
                     recommendation=rec,
                     result="취약",
                     needs_review=False,
+                ))
+
+        # [보완 2] 하드코딩 IV(초기화 벡터) 탐지
+        # SecureRandom 기반 IV 생성이 있는 파일은 전체 skip (안전)
+        if _C_SECURE_RANDOM_IV_RE.search(content):
+            continue
+
+        _IV_REC = (
+            "SecureRandom을 사용하여 매 암호화마다 고유한 IV를 생성하세요:\n"
+            "  byte[] iv = new byte[16];\n"
+            "  new SecureRandom().nextBytes(iv);\n"
+            "  new IvParameterSpec(iv);\n"
+            "고정 IV 사용은 동일 키+IV 조합 반복으로 암호문 패턴 노출 취약점을 유발합니다."
+        )
+
+        # Pattern A: IvParameterSpec("literal".getBytes())
+        for m in _C_IV_STRING_RE.finditer(content):
+            ln = _line_of(content, m.start())
+            snip = _snippet(content, m.start())
+            if snip.lstrip().startswith(("//", "*", "/*")):
+                continue
+            counter[0] += 1
+            findings.append(DPFinding(
+                finding_id=_make_id("WEAK_CRYPTO", counter[0]),
+                category="WEAK_CRYPTO",
+                severity="High",
+                title="하드코딩 IV — 문자열 리터럴 직접 사용",
+                description=(
+                    f"IvParameterSpec에 문자열 리터럴 \"{m.group(1)[:20]}...\"을 "
+                    ".getBytes()로 변환하여 고정 IV로 사용. "
+                    "동일 키+IV 조합 반복 시 CBC 모드에서 암호문 패턴이 노출되어 "
+                    "Known-plaintext 공격에 취약합니다."
+                ),
+                file=rel, line=ln, code_snippet=snip,
+                cwe_id="CWE-329",
+                owasp_category="A02:2021 Cryptographic Failures",
+                recommendation=_IV_REC,
+                result="취약",
+                needs_review=False,
+            ))
+
+        # Pattern B: IvParameterSpec(new byte[]{0x00, 0x01, ...})
+        for m in _C_IV_BYTES_INLINE_RE.finditer(content):
+            ln = _line_of(content, m.start())
+            snip = _snippet(content, m.start())
+            if snip.lstrip().startswith(("//", "*", "/*")):
+                continue
+            # 배열 내용에 숫자 리터럴이 없으면 skip (메서드 호출 결과일 가능성)
+            array_body_m = re.search(r'\{([^}]+)\}', m.group())
+            if not array_body_m or not _C_IV_NUMERIC_VALS_RE.search(array_body_m.group(1)):
+                continue
+            counter[0] += 1
+            findings.append(DPFinding(
+                finding_id=_make_id("WEAK_CRYPTO", counter[0]),
+                category="WEAK_CRYPTO",
+                severity="High",
+                title="하드코딩 IV — 인라인 byte[] 리터럴 직접 사용",
+                description=(
+                    "IvParameterSpec에 고정 byte[] 배열 리터럴을 직접 전달. "
+                    "IV가 매 암호화마다 동일하여 암호문 패턴 노출 위험."
+                ),
+                file=rel, line=ln, code_snippet=snip,
+                cwe_id="CWE-329",
+                owasp_category="A02:2021 Cryptographic Failures",
+                recommendation=_IV_REC,
+                result="취약",
+                needs_review=False,
+            ))
+
+        # Pattern C: static final byte[] IV_BYTES = {...} + IvParameterSpec(IV_BYTES)
+        static_iv_vars: dict[str, int] = {}
+        for m in _C_STATIC_IV_DECL_RE.finditer(content):
+            var_name = m.group(1)
+            arr_body = m.group(2)
+            # 배열 내용에 숫자 리터럴이 있어야 상수 배열로 판단
+            if _C_IV_NUMERIC_VALS_RE.search(arr_body):
+                static_iv_vars[var_name] = _line_of(content, m.start())
+
+        if static_iv_vars:
+            for m in _C_IV_VAR_REF_RE.finditer(content):
+                var_name = m.group(1)
+                if var_name not in static_iv_vars:
+                    continue
+                ln = _line_of(content, m.start())
+                snip = _snippet(content, m.start())
+                if snip.lstrip().startswith(("//", "*", "/*")):
+                    continue
+                counter[0] += 1
+                findings.append(DPFinding(
+                    finding_id=_make_id("WEAK_CRYPTO", counter[0]),
+                    category="WEAK_CRYPTO",
+                    severity="Medium",
+                    title=f"하드코딩 IV — static final 상수 참조 ({var_name})",
+                    description=(
+                        f"IvParameterSpec에 static final byte[] 상수({var_name}, "
+                        f"선언 {static_iv_vars[var_name]}번 줄)를 참조. "
+                        "상수 IV는 매 암호화마다 동일하여 반복 패턴 노출 위험. "
+                        "FP 가능성: 해당 배열이 외부에서 주입된 경우 수동 확인 필요."
+                    ),
+                    file=rel, line=ln, code_snippet=snip,
+                    cwe_id="CWE-329",
+                    owasp_category="A02:2021 Cryptographic Failures",
+                    recommendation=_IV_REC,
+                    result="취약",
+                    needs_review=True,
                 ))
 
     return findings
@@ -997,24 +1239,143 @@ def scan_jwt_issues(source_dir: Path) -> list[DPFinding]:
 #  8. [D] DTO 민감정보 노출 스캔 (지시사항 2-1)
 # ============================================================
 
-def scan_dto_exposure(source_dir: Path, api_inventory: Optional[dict] = None) -> list[DPFinding]:
-    """Response DTO 내 PII 필드에 @JsonIgnore / 마스킹 어노테이션 누락 여부 탐지.
+def _build_handler_index(api_inventory: dict) -> dict[str, list[dict]]:
+    """API 인벤토리에서 handler 문자열 → 엔드포인트 목록 인덱스 구축."""
+    idx: dict[str, list[dict]] = {}
+    for ep in api_inventory.get("endpoints", []):
+        handler = ep.get("handler", "")
+        if handler:
+            idx.setdefault(handler, []).append(ep)
+    return idx
 
-    api_inventory가 있으면 실제 응답에 사용되는 DTO만 필터링하여 정확도 향상.
+
+def _classify_endpoint_type(ep: dict) -> str:
+    """엔드포인트 유형 분류: external / admin / internal / consumer."""
+    file_path = ep.get("file", "")
+    api_path = ep.get("api", "")
+    if "oki-admin-rest-api" in file_path:
+        return "admin"
+    if re.search(r"/internal/|/s2s/|/server/|/batch/", api_path):
+        return "internal"
+    if "consumer" in file_path.lower() or "batch" in file_path.lower():
+        return "consumer"
+    return "external"
+
+
+def _extract_ctrl_methods_using_dto(content: str, dto_class: str) -> list[str]:
+    """컨트롤러 파일에서 dto_class를 HTTP 응답/요청으로 사용하는 public 메서드 이름 목록 반환.
+
+    두 가지 케이스를 탐지:
+    1. 메서드 반환 타입 선언에 dto_class가 포함된 경우 (신뢰성 높음)
+       예: public ResponseEntity<ApiResponse<UserInfoResponse>> getInfo(...)
+    2. @RequestBody 파라미터로 dto_class를 받는 경우 (요청 DTO 노출)
+       예: public ... method(@RequestBody UserInfoRequest req)
+
+    단순 메서드 바디 내 변수 선언/사용은 제외 (FP 방지).
+    네스티드 제네릭 처리: 메서드명 추출 후 반환 타입 구간에 DTO 이름 존재 여부 확인.
     """
-    findings: list[DPFinding] = []
-    counter = [0]
+    _dto_word_re = re.compile(r'\b' + re.escape(dto_class) + r'\b')
 
-    # API 인벤토리에서 Response DTO 클래스명 수집
-    response_dto_names: set[str] = set()
-    if api_inventory:
-        for ep in api_inventory.get("endpoints", []):
-            rt = ep.get("return_type", "")
-            # ResponseEntity<XxxResponse>, XxxDto, XxxResponse 등 추출
-            for name in re.findall(r'\b([A-Z]\w+(?:Dto|Response|Result|Vo|VO|View|Info))\b', rt):
-                response_dto_names.add(name)
+    # 메서드 시그니처 전체 파싱:
+    # - 반환 타입 (제네릭 포함) + 메서드명 + '(' 까지 탐지
+    # - 패턴: public/protected ... MethodName(
+    _METH_SIG_RE = re.compile(
+        r'^\s*(?:public|protected)\s+([\w<>\[\],\s.]+?)\s+(\w+)\s*\(',
+        re.MULTILINE,
+    )
+    # RequestBody 파라미터 탐지 (메서드 파라미터 내에서)
+    _REQ_BODY_RE = re.compile(
+        r'@RequestBody\s+(?:\w+\s+)*\b' + re.escape(dto_class) + r'\b',
+    )
 
-    # DTO/Response 클래스 파일 스캔
+    method_names: list[str] = []
+    seen: set[str] = set()
+
+    # 메서드 시그니처 + 파라미터 범위를 한 번에 수집
+    lines = content.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        sig_m = _METH_SIG_RE.match(line)
+        if sig_m:
+            return_type_str = sig_m.group(1)
+            mname = sig_m.group(2)
+            # 파라미터 범위: 시그니처 라인부터 ')' 닫힘까지 (보통 1~3줄)
+            param_block = line
+            j = i + 1
+            while ')' not in param_block and j < min(i + 6, len(lines)):
+                param_block += " " + lines[j]
+                j += 1
+
+            # Case 1: 반환 타입에 DTO 포함 여부
+            if _dto_word_re.search(return_type_str) and mname not in seen:
+                seen.add(mname)
+                method_names.append(mname)
+            # Case 2: @RequestBody 파라미터에 DTO 포함 여부
+            elif _REQ_BODY_RE.search(param_block) and mname not in seen:
+                seen.add(mname)
+                method_names.append(mname)
+        i += 1
+
+    return method_names
+
+
+def _find_endpoint_usages(
+    dto_class: str,
+    source_dir: Path,
+    handler_idx: dict[str, list[dict]],
+) -> list[dict]:
+    """주어진 DTO 클래스를 사용하는 컨트롤러 엔드포인트 목록 반환."""
+    matched_eps: list[dict] = []
+    seen_handlers: set[str] = set()
+
+    _CTRL_FILE_RE = re.compile(r'(?i)controller\.(java|kt)$')
+    _CTRL_CLASS_RE = re.compile(r'class\s+(\w+)\b')
+
+    # 단순 substring 매칭 대신 단어경계 패턴 사용 (AdminUserResponse ≠ UserResponse 오탐 방지)
+    _dto_word_re = re.compile(r'\b' + re.escape(dto_class) + r'\b')
+
+    for fp in _iter_sources(source_dir):
+        if not _CTRL_FILE_RE.search(fp.name):
+            continue
+        content = _read(fp)
+        if not content or not _dto_word_re.search(content):
+            continue
+
+        cls_m = _CTRL_CLASS_RE.search(content)
+        if not cls_m:
+            continue
+        ctrl_class = cls_m.group(1)
+
+        method_names = _extract_ctrl_methods_using_dto(content, dto_class)
+        for mname in method_names:
+            handler_key = f"{ctrl_class}.{mname}()"
+            if handler_key in handler_idx and handler_key not in seen_handlers:
+                seen_handlers.add(handler_key)
+                for ep in handler_idx[handler_key]:
+                    ep_type = _classify_endpoint_type(ep)
+                    matched_eps.append({
+                        "method": ep.get("method", ""),
+                        "api": ep.get("api", ""),
+                        "handler": handler_key,
+                        "auth_required": ep.get("auth_required", False),
+                        "endpoint_type": ep_type,
+                        "file": ep.get("file", ""),
+                    })
+
+    return matched_eps
+
+
+def scan_dto_exposure(source_dir: Path, api_inventory: Optional[dict] = None) -> list[DPFinding]:
+    """Response DTO 내 민감 필드에 @JsonIgnore / 마스킹 어노테이션 누락 여부 탐지.
+
+    api_inventory가 있으면 실제 API 엔드포인트로 역추적하여 엔드포인트 단위로 결과 출력.
+    엔드포인트 매핑 불가(Consumer/내부 DTO 등)는 Info 처리 후 별도 요약.
+    """
+    # ── Step 1: DTO 파일에서 노출 필드 수집 ──────────────────────────────
+    # dto_class → [(field_snippet, file, line, has_lombok)]
+    dto_exposed: dict[str, list[tuple[str, str, int, bool]]] = {}
+
     dto_pattern = re.compile(
         r'(?i)(?:Dto|Response|Result|VO|View|Info|Payload)\.(java|kt)$'
     )
@@ -1022,7 +1383,6 @@ def scan_dto_exposure(source_dir: Path, api_inventory: Optional[dict] = None) ->
     for fp in _iter_sources(source_dir):
         if not dto_pattern.search(fp.name):
             continue
-
         content = _read(fp)
         if not content:
             continue
@@ -1031,73 +1391,329 @@ def scan_dto_exposure(source_dir: Path, api_inventory: Optional[dict] = None) ->
         if not class_name_m:
             continue
         class_name = class_name_m.group(1)
-
-        # API 인벤토리가 있으면 응답 DTO만 분석
-        if response_dto_names and class_name not in response_dto_names:
-            continue
-
         rel = _rel(fp, source_dir)
-
-        # Lombok @Getter / @Data 여부 (필드가 자동 직렬화됨)
         has_lombok = bool(_D_LOMBOK_GETTER_RE.search(content))
 
         lines_list = content.splitlines()
         for i, line in enumerate(lines_list, 1):
             if not _D_SENSITIVE_FIELD_NAMES_RE.search(line):
                 continue
-
-            # 바로 앞 줄(어노테이션)에서 보호 어노테이션 확인
             prev_ctx = "\n".join(lines_list[max(0, i - 4):i])
-            has_ignore  = bool(_D_JSON_IGNORE_RE.search(prev_ctx))
-            has_view    = bool(_D_JSON_VIEW_RE.search(prev_ctx))
-            has_masking = bool(_D_MASKING_ANNOT_RE.search(prev_ctx))
-
-            if has_ignore or has_masking:
-                continue  # 보호 어노테이션 존재 → 양호
-
+            if _D_JSON_IGNORE_RE.search(prev_ctx) or _D_MASKING_ANNOT_RE.search(prev_ctx):
+                continue  # 보호 어노테이션 → 양호
             stripped = line.strip()[:120]
-            if has_view:
-                # @JsonView는 있으나 실제 적용 범위 수동 확인 필요
-                counter[0] += 1
-                findings.append(DPFinding(
-                    finding_id=_make_id("DTO_EXPOSURE", counter[0]),
-                    category="DTO_EXPOSURE",
-                    severity="Info",
-                    title="DTO 민감 필드 — @JsonView 적용 (수동 확인 필요)",
-                    description=(
-                        f"{class_name}.{stripped.split()[-1] if stripped else '?'} 필드에 "
-                        "@JsonView 탐지. 해당 뷰가 모든 응답에 적용되는지 수동 확인 필요."
-                    ),
-                    file=rel, line=i, code_snippet=stripped,
-                    cwe_id="CWE-200",
-                    owasp_category="A04:2021 Insecure Design",
-                    recommendation="@JsonView가 실제 응답 엔드포인트에 일관되게 적용되는지 확인.",
-                    result="정보",
-                    needs_review=True,
-                ))
+            dto_exposed.setdefault(class_name, []).append((stripped, rel, i, has_lombok))
+
+    if not dto_exposed:
+        return []
+
+    # ── Step 2: 엔드포인트 매핑 ──────────────────────────────────────────
+    handler_idx: dict[str, list[dict]] = {}
+    if api_inventory:
+        handler_idx = _build_handler_index(api_inventory)
+
+    # endpoint_key → {"eps": [...], "dto_fields": [(dto_class, field_snippet, file, line)]}
+    ep_map: dict[str, dict] = {}
+    unmapped_dto_fields: list[tuple[str, str, str, int, bool]] = []  # (cls, field, file, line, has_lombok)
+
+    for dto_class, field_list in dto_exposed.items():
+        if handler_idx:
+            ep_list = _find_endpoint_usages(dto_class, source_dir, handler_idx)
+        else:
+            ep_list = []
+
+        if ep_list:
+            for ep in ep_list:
+                key = ep["handler"] + "|" + ep["api"]
+                if key not in ep_map:
+                    ep_map[key] = {"ep": ep, "dto_fields": []}
+                for field_snip, file_, line_, has_lombok_ in field_list:
+                    ep_map[key]["dto_fields"].append(
+                        (dto_class, field_snip, file_, line_, has_lombok_)
+                    )
+        else:
+            for field_snip, file_, line_, has_lombok_ in field_list:
+                unmapped_dto_fields.append((dto_class, field_snip, file_, line_, has_lombok_))
+
+    # ── Step 3: 엔드포인트 단위 Finding 생성 ─────────────────────────────
+    findings: list[DPFinding] = []
+    counter = [0]
+
+    _EP_TYPE_LABEL = {
+        "external": "외부 API",
+        "admin": "관리자 API",
+        "internal": "내부/S2S API",
+        "consumer": "컨슈머(비HTTP)",
+    }
+
+    # Safe-by-Design 필드 패턴: 토큰/인증 엔드포인트에서 반환 목적 필드
+    _TOKEN_EP_RE = re.compile(r'/token|/auth|/login|/logout', re.IGNORECASE)
+    _TOKEN_FIELD_RE = re.compile(r'(?i)(accessToken|refreshToken|idToken|jwtToken)\b')
+
+    for key, info in ep_map.items():
+        ep = info["ep"]
+        fields = info["dto_fields"]
+        ep_type = ep["endpoint_type"]
+        auth_req = ep["auth_required"]
+        api_path = ep.get("api", "")
+
+        # Safe-by-Design 판정: 토큰 엔드포인트에서 accessToken/refreshToken만 노출되는 경우
+        field_names = {f[1].split()[-1].rstrip(";") for f in fields}
+        is_token_endpoint = bool(_TOKEN_EP_RE.search(api_path))
+        all_fields_are_token_fields = all(
+            bool(_TOKEN_FIELD_RE.search(fn)) for fn in field_names
+        )
+        safe_by_design = is_token_endpoint and all_fields_are_token_fields
+
+        if safe_by_design:
+            sev = "Info"
+            result = "정보"
+        # severity: external + no_auth → High, external + auth → Medium, admin → Medium, internal → Info
+        elif ep_type == "external" and not auth_req:
+            sev = "High"
+            result = "취약"
+        elif ep_type == "external" and auth_req:
+            sev = "Medium"
+            result = "취약"
+        elif ep_type == "admin":
+            sev = "Medium"
+            result = "정보"
+        else:
+            sev = "Info"
+            result = "정보"
+
+        # 노출 필드 요약
+        field_summary = ", ".join(sorted(field_names))
+        dto_classes_involved = sorted({f[0] for f in fields})
+        ep_label = _EP_TYPE_LABEL.get(ep_type, ep_type)
+
+        desc_lines = [
+            f"[{ep_label}] {ep['method']} {ep['api']} 에서 민감 필드가 포함된 DTO가 응답으로 반환됩니다.",
+            f"관련 DTO 클래스: {', '.join(dto_classes_involved)}",
+            f"노출 민감 필드: {field_summary}",
+        ]
+        if safe_by_design:
+            desc_lines.append("※ Safe by Design: 토큰 발급 엔드포인트의 토큰 필드 반환은 의도된 설계입니다.")
+        elif not auth_req and ep_type == "external":
+            desc_lines.append("인증(auth_required=false) 없이 접근 가능하여 즉시 조치가 필요합니다.")
+
+        counter[0] += 1
+        findings.append(DPFinding(
+            finding_id=_make_id("DTO_EXPOSURE", counter[0]),
+            category="DTO_EXPOSURE",
+            severity=sev,
+            title=f"민감 필드 노출 DTO — {ep['method']} {ep['api']} ({field_summary})",
+            description="\n".join(desc_lines),
+            file=fields[0][2] if fields else "",
+            line=fields[0][3] if fields else 0,
+            code_snippet=fields[0][1] if fields else "",
+            cwe_id="CWE-200",
+            owasp_category="A01:2021 Broken Access Control",
+            recommendation=(
+                "1. 응답 DTO에서 불필요한 민감 필드는 @JsonIgnore 적용.\n"
+                "2. 마스킹이 필요한 경우 @JsonSerialize(using = MaskingSerializer.class) 적용.\n"
+                "3. 응답 전용 DTO를 별도로 정의하여 민감 필드를 제외할 것."
+            ),
+            result=result,
+            needs_review=(ep_type == "admin"),
+            evidence={
+                "endpoint": {
+                    "method": ep["method"],
+                    "api": ep["api"],
+                    "handler": ep["handler"],
+                    "auth_required": auth_req,
+                    "endpoint_type": ep_type,
+                },
+                "exposed_fields": [
+                    {"dto_class": f[0], "field": f[1], "file": f[2], "line": f[3]}
+                    for f in fields
+                ],
+            },
+        ))
+
+    # ── Step 4: 매핑 불가 DTO 필드 → 단일 요약 Finding ──────────────────
+    if unmapped_dto_fields:
+        cls_field_map: dict[str, list[str]] = {}
+        for dto_cls, field_snip, file_, line_, _ in unmapped_dto_fields:
+            cls_field_map.setdefault(dto_cls, []).append(field_snip.split()[-1].rstrip(";"))
+
+        cls_summary = "; ".join(
+            f"{cls}({', '.join(sorted(set(fs)))})" for cls, fs in sorted(cls_field_map.items())
+        )
+        counter[0] += 1
+        findings.append(DPFinding(
+            finding_id=_make_id("DTO_EXPOSURE", counter[0]),
+            category="DTO_EXPOSURE",
+            severity="Info",
+            title=f"엔드포인트 매핑 불가 DTO 민감 필드 ({len(unmapped_dto_fields)}건) — FP 검토 필요",
+            description=(
+                f"HTTP 엔드포인트로 역추적되지 않은 DTO 클래스의 민감 필드 {len(unmapped_dto_fields)}건이 탐지됨.\n"
+                "Consumer(Kafka/MQ), 내부 서비스 DTO, Redis 엔티티 등 HTTP 직렬화 경로 없는 경우 FP 가능성 높음.\n\n"
+                f"대상: {cls_summary}"
+            ),
+            file=unmapped_dto_fields[0][2],
+            line=unmapped_dto_fields[0][3],
+            code_snippet=unmapped_dto_fields[0][1],
+            cwe_id="CWE-200",
+            owasp_category="A04:2021 Insecure Design",
+            recommendation=(
+                "1. 각 DTO가 HTTP 응답 직렬화 경로에 있는지 수동 확인.\n"
+                "2. Consumer/내부 DTO는 조치 불필요(FP).\n"
+                "3. 실제 응답에 사용되는 경우 @JsonIgnore 또는 별도 응답 DTO 분리."
+            ),
+            result="정보",
+            needs_review=True,
+            evidence={
+                "unmapped_dtos": [
+                    {"dto_class": f[0], "field": f[1], "file": f[2], "line": f[3]}
+                    for f in unmapped_dto_fields
+                ],
+            },
+        ))
+
+    return findings
+
+
+# ============================================================
+#  8-2. [보완 3] Lombok @ToString PII 노출 스캔
+# ============================================================
+
+_CLS_DECL_SCAN_RE = re.compile(
+    r'(?:public|protected|private|abstract|final|\s)+class\s+\w+',
+    re.MULTILINE,
+)
+
+
+def _build_class_map(
+    lines_list: list[str],
+) -> tuple[list[int], list[tuple[bool, set[str], bool]]]:
+    """파일 내 모든 class 선언을 단일 패스로 사전 스캔.
+
+    O(N) 전처리 — scan_toString_exposure 내부 O(N²) 루프를 O(N log N) 으로 낮추기 위한
+    bisect 인덱스 구조 반환.
+
+    Returns:
+        cls_lines : class 선언 줄 번호 목록 (0-indexed, 정렬됨) — bisect 키
+        cls_meta  : 동일 인덱스의 (has_tostring, excluded_fields, has_safe_tostring) 튜플
+    """
+    content = "\n".join(lines_list)
+    cls_lines: list[int] = []
+    cls_meta: list[tuple[bool, set[str], bool]] = []
+
+    for cm in _CLS_DECL_SCAN_RE.finditer(content):
+        cls_line = content[: cm.start()].count("\n")  # 0-indexed
+        # ★ lookback 하한: 이전 class 선언 다음 줄 — class 경계를 넘어 이전 클래스의
+        #   @ToString 어노테이션을 가져오는 FP 방지 (다중 클래스 파일 대응)
+        prev_bound = cls_lines[-1] + 1 if cls_lines else 0
+        annot_start = max(prev_bound, cls_line - 15)
+        annot_ctx = "\n".join(lines_list[annot_start : cls_line + 1])
+        has_ts = bool(_D_TOSTRING_ANNOT_RE.search(annot_ctx))
+        has_safe = bool(_D_TOSTRING_SAFE_RE.search(annot_ctx))
+        excl_m = _D_TOSTRING_EXCLUDE_LIST_RE.search(annot_ctx)
+        excluded: set[str] = set(re.findall(r'"(\w+)"', excl_m.group(1))) if excl_m else set()
+        cls_lines.append(cls_line)
+        cls_meta.append((has_ts, excluded, has_safe))
+
+    return cls_lines, cls_meta  # finditer 순서 = 문서 순서 = 이미 정렬됨
+
+
+def scan_toString_exposure(source_dir: Path) -> list[DPFinding]:
+    """Lombok @ToString / @Data 사용 클래스에서 PII 필드 @ToString.Exclude 미처리 탐지.
+
+    @JsonIgnore는 JSON 직렬화만 차단하며 toString() 출력은 막지 못함.
+    log.info("request: {}", dto) 호출 시 toString()이 호출되어 PII가 로그에 노출 가능.
+
+    FP 방지:
+    - @ToString(exclude = {"fieldName"}) 에 해당 필드가 포함된 경우 → 양호
+    - @ToString(onlyExplicitlyIncluded = true) → 양호
+    - 필드 레벨 @ToString.Exclude → 양호
+    - @Data 없이 @JsonIgnore만 있는 경우 → @Getter가 없으면 toString FP 아님 → 체크
+    """
+    findings: list[DPFinding] = []
+    counter = [0]
+
+    for fp in _iter_sources(source_dir):
+        content = _read(fp)
+        if not content:
+            continue
+        # @ToString 또는 @Data (클래스 레벨 toString 생성 트리거) 없으면 skip
+        # ★ Spring @Value("${...}")는 포함 안 함 (필드 레벨 — toString 생성 안 함)
+        if not _D_TOSTRING_ANNOT_RE.search(content):
+            continue
+
+        # 추가 검증: @ToString/@Data가 실제 class 선언 앞에 있는지 확인
+        # → 파일 내 @ToString 존재 + class 선언 근접 여부 (FP 방지)
+        if not _D_CLASS_DECL_RE.search(content):
+            # @ToString/@Data가 있지만 class 선언 앞에 없는 경우 (인터페이스 등) skip
+            continue
+
+        rel = _rel(fp, source_dir)
+        lines_list = content.splitlines()
+
+        # ── O(N) 사전 계산: 파일 내 모든 class 선언 위치와 @ToString 메타데이터 ──────────────
+        # class_map 구조: cls_lines[k] = 클래스 선언 줄(0-indexed), cls_meta[k] = (has_ts, excluded, has_safe)
+        # 이후 per-field 탐색은 bisect.bisect_right → O(log N) → 전체 O(N log N) (구버전 O(N²) 대비)
+        cls_lines, cls_meta = _build_class_map(lines_list)
+
+        for i, line in enumerate(lines_list):  # i: 0-indexed
+            stripped = line.strip()
+            if stripped.startswith(("//", "*", "/*")):
+                continue
+            if not _D_SENSITIVE_FIELD_NAMES_RE.search(line):
                 continue
 
-            # 보호 어노테이션 없음
-            sev = "High" if has_lombok else "Medium"
-            desc = (
-                f"{class_name} DTO에 민감 필드({stripped.split()[-1] if stripped else '?'})가 존재하며 "
-                f"{'Lombok @Getter/@Data로 자동 직렬화되어 ' if has_lombok else ''}"
-                "@JsonIgnore / 마스킹 어노테이션이 없어 API 응답에 평문 노출될 수 있음."
+            # 필드명 추출
+            field_name_m = re.search(
+                r'(?:private|protected|public|var|val)\s+\S+\s+(\w+)\s*[;,=)]',
+                line,
             )
+            field_name = field_name_m.group(1) if field_name_m else None
+
+            # ── O(log N) 이분탐색: 해당 필드를 감싸는 가장 최근 class 선언 탐색 ──────────────
+            # bisect_right(cls_lines, i) - 1 → i(현재 줄) 이하 최대 class 선언 인덱스
+            idx = bisect.bisect_right(cls_lines, i) - 1
+            if idx < 0:
+                continue  # class 선언보다 앞에 있는 필드 (정상적 Java에서 없어야 함)
+            has_ts, excluded_by_class, has_safe_tostring = cls_meta[idx]
+            if not has_ts:
+                continue  # 해당 클래스에 @ToString/@Data 없음 → FP 방지
+
+            # 클래스 레벨 onlyExplicitlyIncluded=true → 명시 필드만 출력 → 양호
+            if has_safe_tostring:
+                continue
+
+            # 클래스 레벨 exclude 목록에 이 필드가 있는지 확인
+            if field_name and field_name in excluded_by_class:
+                continue
+
+            # 필드 바로 앞 3줄에서 @ToString.Exclude 확인 (i: 0-indexed → slice 그대로 사용)
+            prev_ctx = "\n".join(lines_list[max(0, i - 3):i])
+            if _D_TOSTRING_FIELD_EXCL_RE.search(prev_ctx):
+                continue  # 필드 레벨 제외 → 양호
+
+            # @JsonIgnore / @JsonProperty 는 toString 차단 불가 → 여전히 취약
+
             counter[0] += 1
             findings.append(DPFinding(
                 finding_id=_make_id("DTO_EXPOSURE", counter[0]),
                 category="DTO_EXPOSURE",
-                severity=sev,
-                title="DTO 민감 필드 @JsonIgnore 미적용",
-                description=desc,
-                file=rel, line=i, code_snippet=stripped,
-                cwe_id="CWE-200",
-                owasp_category="A04:2021 Insecure Design",
+                severity="Medium",
+                title=f"Lombok @ToString 민감정보 필드 노출 — @ToString.Exclude 미처리 ({rel.split('/')[-1]})",
+                description=(
+                    f"@ToString/@Data 사용 클래스에 PII 필드"
+                    f"({field_name or stripped[:30]})가 포함되어 "
+                    "toString() 호출 시 민감정보가 평문으로 로그에 노출될 수 있음. "
+                    "@JsonIgnore는 JSON 직렬화만 차단하며 toString() 출력을 막지 못함."
+                ),
+                file=rel, line=i + 1,  # 사용자 표시용 1-indexed 줄 번호
+                code_snippet=stripped[:120],
+                cwe_id="CWE-532",
+                owasp_category="A09:2021 Security Logging and Monitoring Failures",
                 recommendation=(
-                    "1. 응답에 불필요한 PII 필드는 @JsonIgnore 적용.\n"
-                    "2. 마스킹이 필요한 경우 커스텀 @JsonSerialize(using = MaskingSerializer.class) 적용.\n"
-                    "3. 필드 자체를 응답 DTO에서 제거하고 별도 내부 Entity 사용 권장."
+                    "1. 필드 레벨: @ToString.Exclude 추가.\n"
+                    "2. 클래스 레벨: @ToString(exclude = {\"" + (field_name or "fieldName") + "\"}) 설정.\n"
+                    "3. 또는 @ToString(onlyExplicitlyIncluded = true) + 노출 허용 필드에만 @ToString.Include 명시.\n"
+                    "4. @Data 대신 @Getter + 명시적 toString() 오버라이드 권장."
                 ),
                 result="취약",
                 needs_review=False,
@@ -1459,7 +2075,7 @@ def main():
     parser.add_argument("-o", "--output", default="state/task25_result.json",
                         help="결과 출력 경로 (기본: state/task25_result.json)")
     parser.add_argument("--skip", nargs="*", default=[],
-                        choices=["secret", "logging", "crypto", "jwt", "dto", "cors", "header"],
+                        choices=["secret", "logging", "crypto", "jwt", "dto", "tostring", "cors", "header"],
                         help="특정 진단 항목 건너뛰기")
     args = parser.parse_args()
 
@@ -1502,6 +2118,10 @@ def main():
     if "dto" not in skip:
         print("  [D] DTO 민감정보 노출 스캔...")
         all_findings.extend(scan_dto_exposure(source_dir, api_inventory))
+
+    if "tostring" not in skip:
+        print("  [D+] Lombok @ToString PII 노출 스캔...")
+        all_findings.extend(scan_toString_exposure(source_dir))
 
     cors_findings, cors_status = [], {}
     if "cors" not in skip:

@@ -5,6 +5,10 @@ fetch_bitbucket.py — Bitbucket 소스코드 자동 clone/pull (T-09)
 지정한 프로젝트/repo를 Bitbucket에서 clone하여 testbed/ 에 배치합니다.
 WSL2 환경에서 PowerShell 경유로 사내망에 접근합니다.
 
+디렉토리 명명 규칙:
+  testbed/{project}/{slug}@{branch}@{commit7}/
+  예) testbed/ocbsugar/ocb-sugar@master@f96d622/
+
 사용법:
   # 프로젝트 전체 clone
   python3 fetch_bitbucket.py --project OCBSUGAR
@@ -33,6 +37,7 @@ WSL2 환경에서 PowerShell 경유로 사내망에 접근합니다.
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -164,43 +169,49 @@ def _wsl_to_unc(path: Path) -> str:
     return "//wsl.localhost/Ubuntu" + str(path).replace("\\", "/")
 
 
-def clone_repo(clone_url: str, dest: Path, token: str,
-               branch: str = "master", depth: int | None = None) -> bool:
-    """
-    PowerShell 경유 git clone.
-    dest가 이미 존재하면 git pull로 업데이트.
-    """
-    unc_dest = _wsl_to_unc(dest)
-    git_header = f"http.extraHeader=Authorization: Bearer {token}"
-
-    if dest.exists() and (dest / ".git").exists():
-        # 이미 clone됨 → pull
-        print(f"  [PULL] {dest.name}")
-        script = (
-            f"git -c '{git_header}' "
-            f"-C '{unc_dest}' pull origin {branch} 2>&1"
-        )
-    else:
-        # 신규 clone
-        print(f"  [CLONE] {clone_url}")
-        depth_arg = f"--depth {depth}" if depth else ""
-        script = (
-            f"git -c '{git_header}' clone "
-            f"--branch {branch} {depth_arg} "
-            f"'{clone_url}' '{unc_dest}' 2>&1"
-        )
-
-    result = subprocess.run(
+def _git_ps(script: str) -> subprocess.CompletedProcess:
+    """PowerShell 경유 git 명령 실행."""
+    return subprocess.run(
         ["powershell.exe", "-Command", script],
         capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
 
+
+def clone_repo(clone_url: str, dest: Path, token: str,
+               branch: str = "master", depth: int | None = None) -> bool:
+    """PowerShell 경유 신규 git clone. dest는 존재하지 않아야 함."""
+    unc_dest = _wsl_to_unc(dest)
+    git_header = f"http.extraHeader=Authorization: Bearer {token}"
+    depth_arg = f"--depth {depth}" if depth else ""
+    print(f"  [CLONE] {clone_url}  →  {dest.name}")
+    script = (
+        f"git -c '{git_header}' clone "
+        f"--branch {branch} {depth_arg} "
+        f"'{clone_url}' '{unc_dest}' 2>&1"
+    )
+    result = _git_ps(script)
     if result.returncode != 0:
-        # PowerShell은 clone 진행 메시지를 stderr/returncode!=0으로 출력하는 경우 있음
-        # 실제로 dest가 생성됐는지로 판단
         if dest.exists() and (dest / ".git").exists():
-            return True
+            return True  # PowerShell이 비정상 코드 반환해도 성공인 경우
         print(f"  [ERROR] clone 실패")
+        if result.stderr:
+            print(f"  {result.stderr[:300]}")
+        return False
+    return True
+
+
+def pull_repo(dest: Path, token: str, branch: str = "master") -> bool:
+    """PowerShell 경유 git pull."""
+    unc_dest = _wsl_to_unc(dest)
+    git_header = f"http.extraHeader=Authorization: Bearer {token}"
+    print(f"  [PULL]  {dest.name}  (branch: {branch})")
+    script = (
+        f"git -c '{git_header}' "
+        f"-C '{unc_dest}' pull origin {branch} 2>&1"
+    )
+    result = _git_ps(script)
+    if result.returncode != 0:
+        print(f"  [ERROR] pull 실패")
         if result.stderr:
             print(f"  {result.stderr[:300]}")
         return False
@@ -217,6 +228,67 @@ def get_commit_hash(dest: Path) -> str:
         return result.stdout.strip()
     except Exception:
         return "unknown"
+
+
+def get_branch_name(dest: Path) -> str:
+    """로컬 repo의 현재 브랜치명 반환."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(dest), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True
+        )
+        return result.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def get_top_contributors(dest: Path, top_n: int = 5) -> list[str]:
+    """커밋 수 기준 상위 기여자 이름 목록 (머지 커밋 제외)."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(dest), "log", "--format=%an", "--no-merges"],
+            capture_output=True, text=True
+        )
+        from collections import Counter
+        names = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
+        return [name for name, _ in Counter(names).most_common(top_n)]
+    except Exception:
+        return []
+
+
+def write_fetch_meta(dest: Path, branch: str, commit: str,
+                     clone_url: str, contributors: list[str]) -> None:
+    """진단 도구가 참조할 .fetch_meta.json을 repo 루트에 기록."""
+    meta = {
+        "branch": branch,
+        "commit": commit,
+        "clone_url": clone_url,
+        "fetched_at": datetime.now().isoformat(),
+        "contributors": contributors,
+    }
+    (dest / ".fetch_meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def versioned_dir_name(slug: str, branch: str, commit: str) -> str:
+    """디렉토리 명명 규칙: {slug}@{branch}@{commit7}"""
+    # 브랜치명에서 '/' 등 파일시스템 비허용 문자 치환
+    safe_branch = branch.replace("/", "_").replace("\\", "_")
+    return f"{slug}@{safe_branch}@{commit}"
+
+
+def _find_existing_versioned_dir(parent: Path, slug: str, branch: str) -> Path | None:
+    """
+    {slug}@{branch}@* 패턴으로 기존 clone 디렉토리 탐색.
+    여러 개 존재하면 가장 최근 수정된 것 반환.
+    """
+    safe_branch = branch.replace("/", "_").replace("\\", "_")
+    prefix = f"{slug}@{safe_branch}@"
+    candidates = [d for d in parent.iterdir() if d.is_dir() and d.name.startswith(prefix)]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: d.stat().st_mtime)
 
 
 # ── 메인 로직 ────────────────────────────────────────────────────────────────
@@ -264,31 +336,67 @@ def fetch_repos(
             # 브랜치 결정
             target_branch = branch or get_default_branch(project_key, slug, token)
 
-            # testbed 경로: testbed/{PROJECT_KEY}/{slug}/
-            dest = TESTBED_DIR / project_key.lower() / slug
-            dest.parent.mkdir(parents=True, exist_ok=True)
+            parent_dir = TESTBED_DIR / project_key.lower()
+            parent_dir.mkdir(parents=True, exist_ok=True)
 
             print(f"\n  Repo: {slug} (branch: {target_branch})")
             print(f"  URL:  {clone_url}")
-            print(f"  Dest: {dest}")
 
             if dry_run:
-                print(f"  [DRY-RUN] 실제 clone 생략")
+                planned = parent_dir / versioned_dir_name(slug, target_branch, "<commit>")
+                print(f"  Dest: {planned}  [DRY-RUN]")
                 manifest_entries.append({
                     "project": project_key,
                     "repo": slug,
                     "branch": target_branch,
                     "clone_url": clone_url,
-                    "local_path": str(dest),
+                    "local_path": str(planned),
                     "commit": "dry-run",
                     "status": "dry-run",
                 })
                 continue
 
-            ok = clone_repo(clone_url, dest, token, branch=target_branch,
-                            depth=1 if shallow else None)
-            commit = get_commit_hash(dest) if ok else "error"
+            # 기존 versioned 디렉토리 탐색
+            existing = _find_existing_versioned_dir(parent_dir, slug, target_branch)
+
+            if existing:
+                # 기존 디렉토리 pull → commit 변경 시 rename
+                old_commit = get_commit_hash(existing)
+                ok = pull_repo(existing, token, branch=target_branch)
+                new_commit = get_commit_hash(existing) if ok else old_commit
+                dest = existing
+                if ok and new_commit != old_commit:
+                    new_dest = parent_dir / versioned_dir_name(slug, target_branch, new_commit)
+                    shutil.move(str(existing), str(new_dest))
+                    dest = new_dest
+                    print(f"  [RENAME] {existing.name} → {new_dest.name}")
+                commit = new_commit if ok else "error"
+            else:
+                # 신규 clone → tmp → rename
+                tmp_dest = parent_dir / f"{slug}_fetching"
+                if tmp_dest.exists():
+                    shutil.rmtree(tmp_dest)
+                ok = clone_repo(clone_url, tmp_dest, token,
+                                branch=target_branch,
+                                depth=1 if shallow else None)
+                if ok:
+                    commit = get_commit_hash(tmp_dest)
+                    dest = parent_dir / versioned_dir_name(slug, target_branch, commit)
+                    tmp_dest.rename(dest)
+                else:
+                    commit = "error"
+                    dest = tmp_dest  # 실패 디렉토리 그대로 유지
+
             status = "ok" if ok else "error"
+            print(f"  Dest: {dest}")
+
+            # 기여자 정보 수집 + 메타파일 기록
+            contributors: list[str] = []
+            if ok:
+                contributors = get_top_contributors(dest)
+                write_fetch_meta(dest, target_branch, commit, clone_url, contributors)
+                if contributors:
+                    print(f"  담당자(기여자): {', '.join(contributors)}")
 
             manifest_entries.append({
                 "project": project_key,
@@ -297,12 +405,13 @@ def fetch_repos(
                 "clone_url": clone_url,
                 "local_path": str(dest),
                 "commit": commit,
+                "contributors": contributors,
                 "status": status,
                 "fetched_at": datetime.now().isoformat(),
             })
 
             if ok:
-                print(f"  ✓ {status} (commit: {commit})")
+                print(f"  ✓ {status} (branch: {target_branch}, commit: {commit})")
             else:
                 print(f"  ✗ {status}")
 

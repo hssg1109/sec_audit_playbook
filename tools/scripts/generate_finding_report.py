@@ -76,6 +76,8 @@ CATEGORY_INFO = {
             "log_exposure": "로그 내 정보 노출",
             "hardcoded":    "하드코딩된 비밀정보",
             "weak_crypto":  "취약한 암호화 알고리즘",
+            "dto_exposure": "응답 DTO 민감 필드 노출",
+            "admin_api":    "관리자 API 접근 통제",
             "cors":         "CORS 설정 미흡",
             "jwt":          "JWT 취약점",
             "csrf":         "CSRF 보호 미흡",
@@ -160,14 +162,18 @@ SUBCATEGORY_EXTRA_KEYWORDS: dict[str, list[tuple[str, str]]] = {
         ("민감정보 노출",        "log_exposure"),  # 로그 노출 (단독은 DTO와 겹치므로 "노출"까지 포함)
         ("로깅",               "log_exposure"),
         ("logging",            "log_exposure"),
-        # DTO_EXPOSURE / ADMIN_SEPARATION → 정보 누출 (pii/logging보다 우선 체크)
-        ("dto_exposure",       "info_leak"),
-        ("admin_separation",   "info_leak"),
-        ("dto",                "info_leak"),
-        ("jsonignore",         "info_leak"),
-        ("@jsonignore",        "info_leak"),
-        ("관리자 api",          "info_leak"),
-        ("관리자 api 분리",     "info_leak"),
+        # DTO_EXPOSURE → 응답 DTO 민감 필드 노출
+        ("dto_exposure",            "dto_exposure"),
+        ("응답 dto 민감 필드",       "dto_exposure"),
+        ("dto 민감 필드",           "dto_exposure"),
+        ("dto",                     "dto_exposure"),
+        ("jsonignore",              "dto_exposure"),
+        ("@jsonignore",             "dto_exposure"),
+        # ADMIN_SEPARATION → 관리자 API 접근 통제
+        ("admin_separation",        "admin_api"),
+        ("관리자 api 분리",          "admin_api"),
+        ("관리자 api 접근",          "admin_api"),
+        ("관리자 api",              "admin_api"),
         # pii 단독: DTO 키워드 미매칭 시에만 도달 (위 dto/dto_exposure 후순위)
         ("pii",                "log_exposure"),
         # WEAK_CRYPTO — 취약한 암호화 알고리즘 (PasswordEncoder, MD5, SHA-1 등)
@@ -249,6 +255,21 @@ def _anchor(name: str) -> str:
     if ANCHOR_STYLE == "html":
         return ""
     return f"[[ANCHOR:{name}]]"
+
+
+_RESULT_COLORS = {
+    "취약": "#cc0000",   # 빨간색
+    "정보": "#0055cc",   # 파란색
+    "양호": "#007700",   # 초록색
+}
+
+
+def _colored_result(result: str) -> str:
+    """md2cf 모드에서 결과 텍스트에 색상 적용. 다른 모드는 원문 반환."""
+    color = _RESULT_COLORS.get(result)
+    if color and ANCHOR_STYLE == "md2cf":
+        return f'<span style="color:{color};font-weight:bold">{result}</span>'
+    return result
 
 
 def _html_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -1481,12 +1502,36 @@ def generate_summary_table(all_findings: dict[str, list[Finding]],
                 continue  # 그룹 finding 자체 행은 생성하지 않음
 
             # File 표시: 단건이면 파일명, 다건이면 "{대표 파일명} 외 OO건"
-            if len(f.instances) > 1:
+            # 우선순위: log_instances > instances > 콤마 구분 file > 단건 file
+            if f.log_instances:
+                # SENSITIVE_LOGGING: log_instances 파일 목록 기반
+                _rep = f.log_instances[0].get("file", "-")
+                _extra = len(f.log_instances) - 1
+                file_short = f"{_rep} 외 {_extra}건" if _extra > 0 else _rep
+            elif len(f.instances) > 1:
                 rep_file = f.file.split("/")[-1] if f.file else (f.instances[0].get("file", "").split("/")[-1] if f.instances else "")
                 extra = len(f.instances) - 1
                 file_short = f"{rep_file} 외 {extra}건" if rep_file else f"외 {extra}건"
+            elif f.file and "," in f.file:
+                # 콤마 구분 다중 파일 경로 (예: "a/Foo.java, b/Bar.java, c/Baz.java")
+                _parts = [p.strip() for p in f.file.split(",") if p.strip()]
+                _rep = _parts[0].split("/")[-1]
+                _extra = len(_parts) - 1
+                file_short = f"{_rep} 외 {_extra}건" if _extra > 0 else _rep
             elif f.file:
-                file_short = f.file.split("/")[-1]
+                _basename = f.file.split("/")[-1]
+                # scan artifact(.json) 또는 서술형 문자열이면 affected_endpoints 기반으로 대체
+                if _basename.endswith(".json") or "전체 목록" in f.file or "파일 외" in f.file:
+                    _eps = f.affected_endpoints
+                    if _eps:
+                        _ctrl = _eps[0].get("controller", "").split("(")[0].strip()
+                        _ctrl = _ctrl.split(" — ")[0].strip()
+                        _extra = len(_eps) - 1
+                        file_short = f"{_ctrl} 외 {_extra}건" if (_ctrl and _extra > 0) else (_ctrl or _basename)
+                    else:
+                        file_short = _basename
+                else:
+                    file_short = _basename
             else:
                 file_short = "-"
 
@@ -1499,7 +1544,7 @@ def generate_summary_table(all_findings: dict[str, list[Finding]],
 
             rows.append([
                 f.id, f.category, f.subcategory,
-                result, str(risk),
+                _colored_result(result), str(risk),
                 endpoint_display, file_short,
                 detail_link,
             ])
@@ -1576,7 +1621,7 @@ def generate_category_detail(category_id: str, findings: list[Finding],
             status = "-"
 
         lines.append(
-            f"| {f.id} | {f.subcategory} | {status} | {result} | {risk} | {cat_info['threat']} |"
+            f"| {f.id} | {f.subcategory} | {status} | {_colored_result(result)} | {risk} | {cat_info['threat']} |"
         )
 
     lines.append("")
@@ -1590,7 +1635,11 @@ def generate_category_detail(category_id: str, findings: list[Finding],
         if ANCHOR_STYLE == "md2cf":
             lines.append(_anchor(f"finding-{f.id}"))
             lines.append(f"#### finding-{f.id}\n")
-            lines.append(f"**＊ {finding_label} {f.id} {f.subcategory} ({result})**\n")
+            # 색상 span을 위해 <strong> HTML 직접 출력 (** 안에 <span> 넣으면 파싱 충돌)
+            _result_colored = _colored_result(result)
+            lines.append(
+                f"<strong>＊ {finding_label} {f.id} {f.subcategory} ({_result_colored})</strong>\n"
+            )
         else:
             lines.append(_anchor(f"finding-{f.id}"))
             lines.append(f"#### ＊ {finding_label} {f.id} {f.subcategory} ({result})\n")
@@ -1905,6 +1954,31 @@ def _render_asset_info_section(asset_info: dict) -> list[str]:
     return lines
 
 
+def _parse_versioned_dir(source_dir: Path) -> tuple[str | None, str | None]:
+    """
+    '{slug}@{branch}@{commit}' 형식의 디렉토리명에서 branch/commit 자동 파싱.
+    반환: (branch, commit) — 파싱 실패 시 (None, None).
+    """
+    name = source_dir.name
+    parts = name.split("@")
+    if len(parts) >= 3:
+        branch = parts[-2]
+        commit = parts[-1]
+        return branch, commit
+    return None, None
+
+
+def _load_fetch_meta(source_dir: Path) -> dict:
+    """source_dir/.fetch_meta.json 로드. 없으면 빈 dict."""
+    meta_path = source_dir / ".fetch_meta.json"
+    if meta_path.exists():
+        try:
+            return json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
 def generate_report(
     source_dir: Path,
     finding_files: list[Path],
@@ -1914,6 +1988,7 @@ def generate_report(
     repo: str | None = None,
     branch: str | None = None,
     commit: str | None = None,
+    maintainers: list[str] | None = None,
     domain: str | None = None,
     source_label: str | None = None,
     anchor_style: str | None = None,
@@ -1926,6 +2001,23 @@ def generate_report(
         ANCHOR_STYLE = anchor_style
 
     today = date.today().strftime("%Y.%m.%d")
+
+    # .fetch_meta.json 자동 로드 (fetch_bitbucket.py가 기록한 메타정보)
+    fetch_meta = _load_fetch_meta(source_dir)
+
+    # branch/commit: 명시 인자 → fetch_meta → 디렉토리명 파싱 순으로 우선순위
+    auto_branch, auto_commit = _parse_versioned_dir(source_dir)
+    branch = branch or fetch_meta.get("branch") or auto_branch
+    commit = commit or fetch_meta.get("commit") or auto_commit
+
+    # 담당자: 명시 인자 → fetch_meta contributors
+    if not maintainers:
+        maintainers = fetch_meta.get("contributors") or []
+
+    if branch or commit:
+        print(f"  소스 버전: branch={branch}, commit={commit}")
+    if maintainers:
+        print(f"  담당자: {', '.join(maintainers)}")
 
     # 자산 정보 로드 (task_11_result.json)
     asset_info: dict | None = None
@@ -2272,6 +2364,8 @@ def generate_report(
         report_lines.append(f"**브랜치:** `{branch}`\n")
     if commit:
         report_lines.append(f"**커밋:** `{commit}`\n")
+    if maintainers:
+        report_lines.append(f"**담당자:** {', '.join(maintainers)}\n")
     if domain:
         report_lines.append(f"**도메인:** `{domain}`\n")
     if target_modules:
@@ -2491,6 +2585,12 @@ def main():
         default=None,
     )
     parser.add_argument(
+        "--maintainer",
+        action="append", dest="maintainers", metavar="NAME",
+        help="담당자 (복수 지정 가능). 미지정 시 source_dir/.fetch_meta.json 자동 참조.",
+        default=None,
+    )
+    parser.add_argument(
         "--domain",
         help="도메인 정보",
         default=None,
@@ -2549,6 +2649,7 @@ def main():
         args.repo,
         args.branch,
         args.commit,
+        args.maintainers,
         args.domain,
         args.source_label,
         args.anchor_style,

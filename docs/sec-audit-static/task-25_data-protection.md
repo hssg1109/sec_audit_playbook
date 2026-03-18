@@ -98,7 +98,7 @@ flowchart TD
         LC["Step 3: CORS 심층 확인\nOrigin 우회 가능성"]
         LD["Step 4: DTO 민감 필드 직렬화 우회 확인"]
         LE["Step 5: HARDCODED_SECRET 파일/환경 단위 병합\n운영 자격증명 확정 → Critical 상향"]
-        LF["Step 6: SENSITIVE_LOGGING 심각도 단위 병합\nCritical 1건 + Info 1건 + FP 컨설턴트 노트"]
+        LF["Step 6: SENSITIVE_LOGGING 심각도 단위 병합\nCritical 1건 + Medium 1건 + FP 컨설턴트 노트"]
         LA & LB & LC & LD --> LE & LF --> OUT2["task25_llm.json\n(병합·확정 findings 전체)"]
     end
 ```
@@ -208,7 +208,7 @@ flowchart LR
 
 | ID | 병합 그룹 | 원본 건수 | 심각도 |
 |---|---|---|---|
-| DATA-SEC-001 | 운영 Java/Kotlin 소스 내 API Key | 1건 | High |
+| DATA-SEC-001 | 운영 Java/Kotlin 소스 내 API Key | 1건 | **Critical** |
 | DATA-SEC-002 | 운영 Java/Kotlin 소스 내 HMAC/JWT Key | 1건 | **Critical** |
 | DATA-SEC-003 | `resources/config.properties` (운영 공통) | 8건 | High |
 | DATA-SEC-004 | `resources/rabbitmq*.properties` (운영 MQ) | 2건 | High |
@@ -222,7 +222,7 @@ flowchart LR
 | ID | 버킷 | 원본 건수 | 심각도 | 결과 |
 |---|---|---|---|---|
 | DATA-LOG-001 | `info/warn/error/fatal` PII 로깅 | 117건 | **Critical** | 취약 |
-| DATA-LOG-002 | `debug/trace` PII 로깅 | 80건 | Info | 정보 |
+| DATA-LOG-002 | `debug/trace` PII 로깅 | 80건 | **Medium** | 정보 |
 
 ```json
 {
@@ -231,7 +231,7 @@ flowchart LR
     {
       "id": "DATA-SEC-001",
       "title": "API Key 하드코딩 — CoinConstants.java",
-      "severity": "High",
+      "severity": "Critical",
       "category": "HARDCODED_SECRET",
       "description": "(LLM 확정) 소스코드 내 API Key 평문 상수 하드코딩.",
       "evidence": {
@@ -244,7 +244,7 @@ flowchart LR
       "diagnosis_method": "자동스캔(SAST) + 수동진단(LLM)",
       "result": "취약",
       "needs_review": false,
-      "manual_review_note": "[케이스 A] src/main/java — 운영 코드. 운영 키 확정.",
+      "manual_review_note": "[케이스 A 자동 확정] src/main/java — 운영 코드 경로. 운영 키 확정. Critical 상향.",
       "recommendation": "@Value(\"${api.key}\") 또는 Vault/KMS 이관."
     },
     {
@@ -279,6 +279,7 @@ flowchart LR
 
 | 버전 | 날짜 | 요약 |
 |------|------|------|
+| v1.3.1 | 2026-03-16 | Step 5 케이스 A 강화: src/main/java 경로 → needs_review: false + Critical 자동 확정 (권고→강제); Step 6 low 버킷 severity Info→Medium (v4.9.5 스크립트 기준 반영); 예시 DATA-SEC-001 severity High→Critical; DATA-LOG-002 severity Info→Medium |
 | v1.3.0 | 2026-03-12 | Phase 3 병합 단계 추가: HARDCODED_SECRET 파일/환경 단위 8그룹, SENSITIVE_LOGGING 심각도 2그룹; task25_llm.json 병합 출력 구조 공식화; FP 컨설턴트 노트 기재 기준 추가 |
 | v1.2.0 | 2026-03-09 | severity 공식 등급 전면 적용: SENSITIVE_LOGGING Critical/Medium, WEAK_CRYPTO Medium, JWT parseUnsecuredClaims Critical, CORS Medium |
 | v1.1.0 | 2026-03-09 | 로그 레벨 차등화, 파일단위 그룹화, SEED/ECB 추가, 프로퍼티 token 키워드, JWT import 체크 확인 |
