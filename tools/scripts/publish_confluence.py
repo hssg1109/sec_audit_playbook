@@ -2268,24 +2268,25 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
             if not relevant:
                 return _llm_pt_row(tkey, tlabel, "")   # fallback to group_judgment logic
 
-            # affected_endpoints에서 path 기준으로 결과 집계
-            vuln_paths: set[str] = set()
-            info_paths: set[str] = set()
+            # affected_endpoints에서 (method, path) 튜플 기준으로 결과 집계
+            vuln_eps: set[tuple] = set()
+            info_eps: set[tuple] = set()
             for f in relevant:
                 r = f.get("result", "")
                 for ep in f.get("affected_endpoints", []):
                     path = ep.get("path", "")
                     if not path or path.startswith("/static/"):
                         continue   # API 인벤토리 외부(정적 JSP 등) 제외
+                    key = (ep.get("method", "").upper(), path)
                     if r == "취약":
-                        vuln_paths.add(path)
+                        vuln_eps.add(key)
                     elif r == "정보":
-                        info_paths.add(path)
+                        info_eps.add(key)
 
-            all_llm = vuln_paths | info_paths
+            all_llm = vuln_eps | info_eps
             # auto-scan 취약 중 LLM이 커버한 EP → LLM 결과로 대체
-            v = len(vuln_paths) + max(0, auto_v - len(all_llm))
-            i = len(info_paths) + max(0, auto_i - len(info_paths & all_llm))
+            v = len(vuln_eps) + max(0, auto_v - len(all_llm))
+            i = len(info_eps) + max(0, auto_i - len(info_eps & all_llm))
             s = total - v - i
             return [
                 tlabel,
