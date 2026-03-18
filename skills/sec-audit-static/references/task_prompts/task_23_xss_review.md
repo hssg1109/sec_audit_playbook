@@ -233,9 +233,41 @@ API 목록 → Controller (@Controller/@RestController 판별)
 |---|---|
 | HTTP 요청 파라미터(`@RequestParam`, `@RequestBody`, `@PathVariable`) → 직접 View 출력 | **취약** |
 | 사용자 입력이 암호화/서명되어 서버에 저장됐다가 복호화 후 출력 (공격자가 원본 값 주입 가능한 경우) | **취약** |
+| **JOSE/JWE/AES 등으로 암호화된 파라미터** — 복호화 키 없이 내부 필드 변조 불가 | **양호** |
 | 외부 서비스(PG사, API Gateway, KCP 등) 서버가 반환한 값 → View 출력 (사용자 직접 제어 불가) | **정보** |
 | 서버 내부 설정값(`@Value`, DB 조회 코드값, enum) → View 출력 | **양호** |
 | 외부 서비스 응답이지만 MITM/Supply Chain 공격 시나리오만 해당 | **정보** (악용 조건 명시) |
+
+**⚠️ 컨트롤러 다중 경로(성공/실패 분기) 분석 필수:**
+
+HTML_VIEW 컨트롤러가 조건 분기로 여러 JSP를 반환하는 경우, **스캐너가 어느 경로를 탐지했는지 확인하고 모든 경로를 분석**해야 한다.
+
+```
+예: tokenIssueAndRedirectionKcp():
+  if (Code == "0000") → redirectionToKcp.jsp  (성공 경로)
+  else                → callbackPageForError.jsp  (실패 경로)
+```
+
+- **LLM은 성공 경로 JSP만 보고 정보 판정 → error path 누락 → 취약 미탐지** 위험
+- 스캐너가 탐지한 `phase2_view.view_file` 경로를 반드시 확인하고, **해당 JSP의 데이터 소스를 추적**한다
+- 실패 경로 JSP에서 `errorCallbackUrl`, `errorMessage` 등이 사용자 입력에서 파생된 경우 → **취약**
+
+**⚠️ 테스트 엔드포인트 환경 분기 확인 필수:**
+
+`Test`, `Dev`, `Sample` 접미사가 붙은 엔드포인트는 환경 체크 로직이 있을 수 있다.
+
+```java
+// 예: prod/alp에서는 하드코딩 반환 → 취약 경로 미노출
+if ("alp".equals(active) || "real".equals(active)) {
+    modelAndView.addObject("errorCallbackUrl", "/error.html");
+    return modelAndView;
+}
+// dev/stage에서는 실제 로직 실행 → 취약
+return this.actualLogic(request);
+```
+
+- prod에서 취약 경로가 노출되지 않더라도 **취약 finding으로 기록** (severity는 Medium 하향 가능)
+- 테스트 엔드포인트가 prod/alp 배포본에서 실제 비활성화되는지 확인 권고 포함
 
 **정보 분류 시 필수 기재 사항:**
 - `diagnosis_type`: `[정보] View naked EL — 사용자 직접 입력 미확인 (외부 서비스 응답 의존)` 형태

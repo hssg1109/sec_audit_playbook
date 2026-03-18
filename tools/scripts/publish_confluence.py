@@ -2271,6 +2271,7 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
             # affected_endpoints에서 (method, path) 튜플 기준으로 결과 집계
             vuln_eps: set[tuple] = set()
             info_eps: set[tuple] = set()
+            good_eps: set[tuple] = set()   # 자동스캔 취약→LLM 양호 재분류
             for f in relevant:
                 r = f.get("result", "")
                 for ep in f.get("affected_endpoints", []):
@@ -2282,8 +2283,10 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
                         vuln_eps.add(key)
                     elif r == "정보":
                         info_eps.add(key)
+                    elif r == "양호":
+                        good_eps.add(key)
 
-            all_llm = vuln_eps | info_eps
+            all_llm = vuln_eps | info_eps | good_eps
             # auto-scan 취약 중 LLM이 커버한 EP → LLM 결과로 대체
             v = len(vuln_eps) + max(0, auto_v - len(all_llm))
             i = len(info_eps) + max(0, auto_i - len(info_eps & all_llm))
@@ -2441,9 +2444,13 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
         return _table(["해당없음 이유", "건수"], rows)
 
     def _llm_ep_sets(cat_keywords: list) -> tuple:
-        """LLM findings에서 (method, path) 튜플 기준 취약/정보 집합 반환."""
+        """LLM findings에서 (method, path) 튜플 기준 취약/정보/양호 집합 반환.
+        Returns: (vuln_eps, info_eps, good_eps)
+        good_eps: 자동스캔 취약이었으나 LLM이 양호로 재분류한 엔드포인트 (auto_v 차감용).
+        """
         vuln_eps: set = set()
         info_eps: set = set()
+        good_eps: set = set()
         for f in (llm_findings or []):
             if any(k in f.get("category", "").lower()
                    for k in ("filter", "misconfiguration")):
@@ -2462,7 +2469,9 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
                     vuln_eps.add(key)
                 elif r == "정보":
                     info_eps.add(key)
-        return vuln_eps, info_eps
+                elif r == "양호":
+                    good_eps.add(key)
+        return vuln_eps, info_eps, good_eps
 
     def _ep_key(ep: dict) -> tuple:
         return (ep.get("http_method", "").upper(), ep.get("request_mapping", ""))
@@ -2511,17 +2520,20 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
     r_vuln = [ep for ep in diagnoses if ep.get("reflected_xss") == "취약"]
     r_good = [ep for ep in diagnoses if ep.get("reflected_xss") == "양호"]
     r_na   = [ep for ep in diagnoses if ep.get("reflected_xss") == "해당없음"]
-    llm_r_vuln_eps, llm_r_info_eps = _llm_ep_sets(
+    llm_r_vuln_eps, llm_r_info_eps, llm_r_good_eps = _llm_ep_sets(
         ["view", "reflected", "html attribute"])
-    r_vuln_final   = [ep for ep in r_vuln if _ep_key(ep) not in llm_r_info_eps]
+    _r_llm_reclassified = llm_r_info_eps | llm_r_good_eps
+    r_vuln_final   = [ep for ep in r_vuln if _ep_key(ep) not in _r_llm_reclassified]
     r_vuln_to_info = [ep for ep in r_vuln if _ep_key(ep) in llm_r_info_eps]
+    r_vuln_to_good = [ep for ep in r_vuln if _ep_key(ep) in llm_r_good_eps]
     _r_head = f"취약 {len(r_vuln_final)}건"
     if r_vuln_to_info:
         _r_head += f" / 정보 {len(r_vuln_to_info)}건 (LLM 재분류)"
-    _r_head += f" / 양호 {len(r_good)}건"
+    _r_head += f" / 양호 {len(r_good) + len(r_vuln_to_good)}건"
     if r_na:
         _r_head += f" / 해당없음 {len(r_na)}건"
-    _r_suffix = " ⬆️ LLM 검토 반영" if r_vuln_to_info else ""
+    _r_llm_changed = bool(r_vuln_to_info or r_vuln_to_good)
+    _r_suffix = " ⬆️ LLM 검토 반영" if _r_llm_changed else ""
     parts.append(f"<h3>🔴 Reflected XSS — {_r_head}{_r_suffix}</h3>")
     parts.append(
         "<p>HTTP 요청 파라미터가 HTML 응답에 인코딩 없이 반사될 때 발생. "
@@ -2537,6 +2549,13 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
             "(외부 서비스 응답·서버 내부값) → 정보 하향.</p>"
         )
         parts.append(_render_vuln_group(r_vuln_to_info))
+    if r_vuln_to_good:
+        parts.append(f"<h4>✅ 양호 (LLM 재분류) — {len(r_vuln_to_good)}건</h4>")
+        parts.append(
+            "<p>자동스캔 취약 판정이나 LLM 수동 검토 결과 사용자 입력 제어 불가 확인 "
+            "(암호화된 입력 등) → 양호 재분류.</p>"
+        )
+        parts.append(_render_vuln_group(r_vuln_to_good))
     if r_good:
         parts.append(f"<h4>✅ 양호 — {len(r_good)}건 (판단 근거)</h4>")
         parts.append(_render_good_group_by_reason(r_good, "phase1_controller"))
@@ -2568,7 +2587,7 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
     rd_vuln = [ep for ep in diagnoses if ep.get("redirect_xss") == "취약"]
     rd_good = [ep for ep in diagnoses if ep.get("redirect_xss") == "양호"]
     rd_na   = [ep for ep in diagnoses if ep.get("redirect_xss") == "해당없음"]
-    llm_rd_vuln_eps, _ = _llm_ep_sets(["redirect", "open redirect"])
+    llm_rd_vuln_eps, _, _llm_rd_good_eps = _llm_ep_sets(["redirect", "open redirect"])
     llm_rd_findings = [
         f for f in (llm_findings or [])
         if not any(k in f.get("category", "").lower()
@@ -2610,17 +2629,20 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
     v_vuln = [ep for ep in diagnoses if ep.get("view_xss") == "취약"]
     v_na   = [ep for ep in diagnoses if ep.get("view_xss") == "해당없음"]
     v_good = [ep for ep in diagnoses if ep.get("view_xss") == "양호"]
-    llm_v_vuln_eps, llm_v_info_eps = _llm_ep_sets(["view", "html attribute"])
-    v_vuln_final   = [ep for ep in v_vuln if _ep_key(ep) not in llm_v_info_eps]
+    llm_v_vuln_eps, llm_v_info_eps, llm_v_good_eps = _llm_ep_sets(["view", "html attribute"])
+    _v_llm_reclassified = llm_v_info_eps | llm_v_good_eps
+    v_vuln_final   = [ep for ep in v_vuln if _ep_key(ep) not in _v_llm_reclassified]
     v_vuln_to_info = [ep for ep in v_vuln if _ep_key(ep) in llm_v_info_eps]
+    v_vuln_to_good = [ep for ep in v_vuln if _ep_key(ep) in llm_v_good_eps]
     _v_head = f"취약 {len(v_vuln_final)}건"
     if v_vuln_to_info:
         _v_head += f" / 정보 {len(v_vuln_to_info)}건 (LLM 재분류)"
-    if v_good:
-        _v_head += f" / 양호 {len(v_good)}건"
+    if v_good or v_vuln_to_good:
+        _v_head += f" / 양호 {len(v_good) + len(v_vuln_to_good)}건"
     if v_na:
         _v_head += f" / 해당없음 {len(v_na)}건"
-    _v_suffix = " ⬆️ LLM 검토 반영" if v_vuln_to_info else ""
+    _v_llm_changed = bool(v_vuln_to_info or v_vuln_to_good)
+    _v_suffix = " ⬆️ LLM 검토 반영" if _v_llm_changed else ""
     parts.append(f"<h3>🔴 View XSS (Server Template) — {_v_head}{_v_suffix}</h3>")
     parts.append(
         "<p>Thymeleaf, JSP, FreeMarker 등 서버 사이드 템플릿이 사용자 입력을 "
@@ -2636,6 +2658,13 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
             "(외부 서비스 응답·서버 내부값) → 정보 하향.</p>"
         )
         parts.append(_render_vuln_group(v_vuln_to_info))
+    if v_vuln_to_good:
+        parts.append(f"<h4>✅ 양호 (LLM 재분류) — {len(v_vuln_to_good)}건</h4>")
+        parts.append(
+            "<p>자동스캔 취약 판정이나 LLM 수동 검토 결과 사용자 입력 제어 불가 확인 "
+            "(암호화된 입력 등) → 양호 재분류.</p>"
+        )
+        parts.append(_render_vuln_group(v_vuln_to_good))
     if v_good:
         parts.append(f"<h4>✅ 양호 — {len(v_good)}건</h4>")
         parts.append(_render_good_group_by_reason(v_good, "phase2_view"))
