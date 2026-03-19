@@ -173,6 +173,32 @@ python3 tools/scripts/scan_injection_enhanced.py <source_dir> \
 
 ---
 
+### ⚠️ 완료 조건 자가 검증 (필수 — 미충족 시 Task 미완료)
+
+**출력 JSON 작성 전 반드시 아래 명령을 실행하고 수치를 확인하라:**
+
+```bash
+# 1. injection.json의 실제 정보 endpoint 수 확인
+python3 -c "
+import json
+d = json.load(open('state/<prefix>_injection.json'))
+eps = d.get('endpoint_diagnoses', [])
+info = [e for e in eps if e.get('overall_result')=='정보' or e.get('needs_review')]
+from collections import Counter
+dtype_cnt = Counter(e.get('diagnosis_type','') for e in info)
+print(f'총 정보 endpoint: {len(info)}건')
+for k,v in dtype_cnt.most_common(): print(f'  {v}건: {k}')
+"
+```
+
+**검증 기준:**
+- `sqli_endpoint_review.total_info_endpoints` 값 == 위 명령의 출력 수치 **일치 필수**
+- `group_judgments` 배열에 **모든 diagnosis_type 유형**이 각 1개 이상 포함 필수
+  - 예: 79건 자동판정불가 + 45건 DB접근미확인 + 2건 추적불가 → group_judgments 3개 이상
+- 각 group의 `endpoints_reviewed` 배열에 **실제 분석한 endpoint 목록** 기재 필수 (빈 배열 [] 금지)
+
+---
+
 ### 출력 형식
 
 자동스캔 결과(`<prefix>_injection.json`)에서 수동 확정이 필요한 항목만 findings로 출력합니다.

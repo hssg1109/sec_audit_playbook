@@ -1,7 +1,7 @@
 {
   "version": "3.0",
   "prefix": "",
-  "next_test_number": 32,
+  "next_test_number": 33,
   "root_page": {
     "source": "README.md",
     "type": "doc"
@@ -862,302 +862,379 @@
           "page_id": 741053778
         },
         {
-      "title": "테스트24 - GWS oki-fe 정적 진단 (2026-03-16)",
-      "page_id": 741052974,
-      "entries": [
-        {
-          "source": "state/t10_2601_gws_oki_fe_report.md",
-          "title": "테스트24 - GWS oki-fe (경유쇼핑 프론트엔드) 진단 보고서",
-          "type": "main_report",
-          "page_id": 741052975,
-          "task_sources": {
-            "api": "state/t10_2601_gws_oki_fe_api_inventory.json",
-            "injection": "state/t10_2601_gws_oki_fe_task22_llm.json",
-            "xss": "state/t10_2601_gws_oki_fe_task23_llm.json",
-            "file_handling": "state/t10_2601_gws_oki_fe_task24_llm.json",
-            "data_protection": "state/t10_2601_gws_oki_fe_task25_llm.json"
-          }
+          "title": "테스트24 - GWS oki-fe 정적 진단 (2026-03-16)",
+          "page_id": 741052974,
+          "entries": [
+            {
+              "source": "state/t10_2601_gws_oki_fe_report.md",
+              "title": "테스트24 - GWS oki-fe (경유쇼핑 프론트엔드) 진단 보고서",
+              "type": "main_report",
+              "page_id": 741052975,
+              "task_sources": {
+                "api": "state/t10_2601_gws_oki_fe_api_inventory.json",
+                "injection": "state/t10_2601_gws_oki_fe_task22_llm.json",
+                "xss": "state/t10_2601_gws_oki_fe_task23_llm.json",
+                "file_handling": "state/t10_2601_gws_oki_fe_task24_llm.json",
+                "data_protection": "state/t10_2601_gws_oki_fe_task25_llm.json"
+              }
+            },
+            {
+              "source": "state/t10_2601_gws_oki_fe_task25_llm.json",
+              "title": "테스트24 - 데이터 보호 진단 결과",
+              "type": "finding",
+              "page_id": 741052977
+            }
+          ]
         },
         {
-          "source": "state/t10_2601_gws_oki_fe_task25_llm.json",
-          "title": "테스트24 - 데이터 보호 진단 결과",
-          "type": "finding",
-          "page_id": 741052977
-        }
-      ]
-    },
-    {
-      "title": "테스트25 - OB front_resource 정적 진단 (2026-03-16)",
-      "page_id": 741053164,
-      "entries": [
-        {
-          "source": "state/t10_2601_ob_front_resource_report.md",
-          "title": "테스트25 - OB front_resource (프론트 리소스) 진단 보고서",
-          "type": "main_report",
-          "page_id": 741053165,
-          "task_sources": {
-            "api": "state/t10_2601_ob_front_resource_api_inventory.json",
-            "injection": "state/t10_2601_ob_front_resource_task22_llm.json",
-            "xss": "state/t10_2601_ob_front_resource_task23_llm.json",
-            "file_handling": "state/t10_2601_ob_front_resource_task24_llm.json",
-            "data_protection": "state/t10_2601_ob_front_resource_task25_llm.json"
-          }
+          "title": "테스트25 - OB front_resource 정적 진단 (2026-03-16)",
+          "page_id": 741053164,
+          "entries": [
+            {
+              "source": "state/t10_2601_ob_front_resource_report.md",
+              "title": "테스트25 - OB front_resource (프론트 리소스) 진단 보고서",
+              "type": "main_report",
+              "page_id": 741053165,
+              "task_sources": {
+                "api": "state/t10_2601_ob_front_resource_api_inventory.json",
+                "injection": "state/t10_2601_ob_front_resource_task22_llm.json",
+                "xss": "state/t10_2601_ob_front_resource_task23_llm.json",
+                "file_handling": "state/t10_2601_ob_front_resource_task24_llm.json",
+                "data_protection": "state/t10_2601_ob_front_resource_task25_llm.json"
+              }
+            },
+            {
+              "source": "state/t10_2601_ob_front_resource_task23_llm.json",
+              "title": "테스트25 - XSS 취약점 진단 결과",
+              "type": "finding",
+              "page_id": 741053167
+            },
+            {
+              "source": "state/t10_2601_ob_front_resource_task25_llm.json",
+              "title": "테스트25 - 데이터 보호 진단 결과",
+              "type": "finding",
+              "page_id": 741053169
+            }
+          ]
         },
         {
-          "source": "state/t10_2601_ob_front_resource_task23_llm.json",
-          "title": "테스트25 - XSS 취약점 진단 결과",
-          "type": "finding",
-          "page_id": 741053167
+          "title": "테스트26 - OB cashbagmall 정적 진단 (2026-03-16)",
+          "page_id": 741053192,
+          "entries": [
+            {
+              "source": "state/t10_2601_ob_cashbagmall_report.md",
+              "title": "테스트26 - OB cashbagmall (캐시백몰) 진단 보고서",
+              "type": "main_report",
+              "page_id": 741053193,
+              "task_sources": {
+                "api": "state/t10_2601_ob_cashbagmall_api_inventory.json",
+                "injection": "state/t10_2601_ob_cashbagmall_task22_llm.json",
+                "xss": "state/t10_2601_ob_cashbagmall_task23_llm.json",
+                "file_handling": "state/t10_2601_ob_cashbagmall_task24_llm.json",
+                "data_protection": "state/t10_2601_ob_cashbagmall_task25_llm.json"
+              }
+            },
+            {
+              "source": "state/t10_2601_ob_cashbagmall_api_inventory.json",
+              "title": "테스트26 - API 인벤토리 (419 엔드포인트)",
+              "type": "api_inventory"
+            },
+            {
+              "source": "state/t10_2601_ob_cashbagmall_task23_llm.json",
+              "title": "테스트26 - XSS 취약점 진단 결과",
+              "type": "finding",
+              "page_id": 741053195
+            },
+            {
+              "source": "state/t10_2601_ob_cashbagmall_task24_llm.json",
+              "title": "테스트26 - 파일 처리 진단 결과",
+              "type": "finding",
+              "page_id": 741053197
+            },
+            {
+              "source": "state/t10_2601_ob_cashbagmall_task25_llm.json",
+              "title": "테스트26 - 데이터 보호 진단 결과",
+              "type": "finding",
+              "page_id": 741053199
+            }
+          ]
         },
         {
-          "source": "state/t10_2601_ob_front_resource_task25_llm.json",
-          "title": "테스트25 - 데이터 보호 진단 결과",
-          "type": "finding",
-          "page_id": 741053169
-        }
-      ]
-    },
-    {
-      "title": "테스트26 - OB cashbagmall 정적 진단 (2026-03-16)",
-      "page_id": 741053192,
-      "entries": [
-        {
-          "source": "state/t10_2601_ob_cashbagmall_report.md",
-          "title": "테스트26 - OB cashbagmall (캐시백몰) 진단 보고서",
-          "type": "main_report",
-          "page_id": 741053193,
-          "task_sources": {
-            "api": "state/t10_2601_ob_cashbagmall_api_inventory.json",
-            "injection": "state/t10_2601_ob_cashbagmall_task22_llm.json",
-            "xss": "state/t10_2601_ob_cashbagmall_task23_llm.json",
-            "file_handling": "state/t10_2601_ob_cashbagmall_task24_llm.json",
-            "data_protection": "state/t10_2601_ob_cashbagmall_task25_llm.json"
-          }
+          "title": "테스트27 - OB ob-backend 정적 진단 (2026-03-16)",
+          "page_id": 741053577,
+          "entries": [
+            {
+              "source": "state/t10_2601_ob_ob_backend_report.md",
+              "title": "테스트27 - OB ob-backend (OCB 백엔드) 진단 보고서",
+              "type": "main_report",
+              "page_id": 741053578,
+              "task_sources": {
+                "api": "state/t10_2601_ob_ob_backend_api_inventory.json",
+                "injection": "state/t10_2601_ob_ob_backend_task22_llm.json",
+                "xss": "state/t10_2601_ob_ob_backend_task23_llm.json",
+                "file_handling": "state/t10_2601_ob_ob_backend_task24_llm.json",
+                "data_protection": "state/t10_2601_ob_ob_backend_task25_llm.json"
+              }
+            }
+          ]
         },
         {
-          "source": "state/t10_2601_ob_cashbagmall_api_inventory.json",
-          "title": "테스트26 - API 인벤토리 (419 엔드포인트)",
-          "type": "api_inventory"
+          "title": "테스트30 - OCBWEBVIEW ocb-service-frontend 정적 진단 (2026-03-18)",
+          "page_id": 741058854,
+          "entries": [
+            {
+              "source": "state/ocbwebview_svc_fe_dev_report.md",
+              "title": "테스트30 - OCB Service Frontend 보안진단 보고서",
+              "type": "main_report",
+              "page_id": 741058855,
+              "task_sources": {
+                "api": null,
+                "injection": "state/ocbwebview_svc_fe_dev_injection.json",
+                "xss": "state/ocbwebview_svc_fe_dev_xss.json",
+                "file_handling": "state/ocbwebview_svc_fe_dev_task24.json",
+                "data_protection": "state/ocbwebview_svc_fe_dev_task25.json"
+              }
+            },
+            {
+              "source": "state/ocbwebview_svc_fe_dev_xss.json",
+              "supplemental_sources": [
+                "state/ocbwebview_svc_fe_dev_task23_llm.json"
+              ],
+              "title": "테스트30 - XSS 취약점 진단 결과 (ocb-service-frontend)",
+              "type": "finding",
+              "page_id": 741058856
+            },
+            {
+              "source": "state/ocbwebview_svc_fe_dev_task25.json",
+              "supplemental_sources": [
+                "state/ocbwebview_svc_fe_dev_task25_llm.json"
+              ],
+              "title": "테스트30 - 데이터 보호 진단 결과 (ocb-service-frontend)",
+              "type": "finding",
+              "page_id": 741058857
+            }
+          ]
         },
         {
-          "source": "state/t10_2601_ob_cashbagmall_task23_llm.json",
-          "title": "테스트26 - XSS 취약점 진단 결과",
-          "type": "finding",
-          "page_id": 741053195
+          "title": "테스트31 - OCBWEBVIEW ocb-webview-frontend 정적 진단 (2026-03-18)",
+          "page_id": 741058859,
+          "entries": [
+            {
+              "source": "state/ocbwebview_wv_fe_dev_report.md",
+              "title": "테스트31 - OCB Webview Frontend 보안진단 보고서",
+              "type": "main_report",
+              "page_id": 741058860,
+              "task_sources": {
+                "api": null,
+                "injection": "state/ocbwebview_wv_fe_dev_injection.json",
+                "xss": "state/ocbwebview_wv_fe_dev_xss.json",
+                "file_handling": "state/ocbwebview_wv_fe_dev_task24.json",
+                "data_protection": "state/ocbwebview_wv_fe_dev_task25.json"
+              }
+            },
+            {
+              "source": "state/ocbwebview_wv_fe_dev_xss.json",
+              "supplemental_sources": [
+                "state/ocbwebview_wv_fe_dev_task23_llm.json"
+              ],
+              "title": "테스트31 - XSS 취약점 진단 결과 (ocb-webview-frontend)",
+              "type": "finding",
+              "page_id": 741058861
+            },
+            {
+              "source": "state/ocbwebview_wv_fe_dev_task25.json",
+              "supplemental_sources": [
+                "state/ocbwebview_wv_fe_dev_task25_llm.json"
+              ],
+              "title": "테스트31 - 데이터 보호 진단 결과 (ocb-webview-frontend)",
+              "type": "finding",
+              "page_id": 741058862
+            }
+          ]
         },
         {
-          "source": "state/t10_2601_ob_cashbagmall_task24_llm.json",
-          "title": "테스트26 - 파일 처리 진단 결과",
-          "type": "finding",
-          "page_id": 741053197
+          "title": "테스트29 - OCBWEBVIEW ocb-webview-api wv/pointcon+shoppingtab 정적 진단 (2026-03-18)",
+          "page_id": 741058829,
+          "entries": [
+            {
+              "source": "state/ocbwebview_wv_dev_report.md",
+              "title": "테스트29 - OCB Webview API (pointcon+shoppingtab) 보안진단 보고서",
+              "type": "main_report",
+              "page_id": 741058830,
+              "task_sources": {
+                "api": "state/ocbwebview_wv_dev_api_inventory_inscope.json",
+                "injection": "state/ocbwebview_wv_dev_injection_inscope.json",
+                "xss": "state/ocbwebview_wv_dev_xss_inscope.json",
+                "file_handling": "state/ocbwebview_wv_dev_task24.json",
+                "data_protection": "state/ocbwebview_wv_dev_task25_inscope.json"
+              }
+            },
+            {
+              "source": "state/ocbwebview_wv_dev_api_inventory_inscope.json",
+              "title": "테스트29 - API 인벤토리 (54 엔드포인트, pointcon+shoppingtab)",
+              "type": "api_inventory",
+              "page_id": 741061171
+            },
+            {
+              "source": "state/ocbwebview_wv_dev_injection_inscope.json",
+              "supplemental_sources": [
+                "state/ocbwebview_wv_dev_task22_llm.json"
+              ],
+              "title": "테스트29 - 인젝션 취약점 진단 결과 (pointcon+shoppingtab)",
+              "type": "finding",
+              "page_id": 741058832
+            },
+            {
+              "source": "state/ocbwebview_wv_dev_xss_inscope.json",
+              "supplemental_sources": [
+                "state/ocbwebview_wv_dev_task23_llm.json"
+              ],
+              "title": "테스트29 - XSS 취약점 진단 결과 (pointcon+shoppingtab)",
+              "type": "finding",
+              "page_id": 741058833
+            },
+            {
+              "source": "state/ocbwebview_wv_dev_task24.json",
+              "supplemental_sources": [
+                "state/ocbwebview_wv_dev_task24_llm.json"
+              ],
+              "title": "테스트29 - 파일 처리 진단 결과 (pointcon+shoppingtab)",
+              "type": "finding",
+              "page_id": 741058834
+            },
+            {
+              "source": "state/ocbwebview_wv_dev_task25_inscope.json",
+              "supplemental_sources": [
+                "state/ocbwebview_wv_dev_task25_llm.json"
+              ],
+              "title": "테스트29 - 데이터 보호 진단 결과 (pointcon+shoppingtab)",
+              "type": "finding",
+              "page_id": 741058835
+            }
+          ]
         },
         {
-          "source": "state/t10_2601_ob_cashbagmall_task25_llm.json",
-          "title": "테스트26 - 데이터 보호 진단 결과",
-          "type": "finding",
-          "page_id": 741053199
-        }
-      ]
-    },
-    {
-      "title": "테스트27 - OB ob-backend 정적 진단 (2026-03-16)",
-      "page_id": 741053577,
-      "entries": [
-        {
-          "source": "state/t10_2601_ob_ob_backend_report.md",
-          "title": "테스트27 - OB ob-backend (OCB 백엔드) 진단 보고서",
-          "type": "main_report",
-          "page_id": 741053578,
-          "task_sources": {
-            "api": "state/t10_2601_ob_ob_backend_api_inventory.json",
-            "injection": "state/t10_2601_ob_ob_backend_task22_llm.json",
-            "xss": "state/t10_2601_ob_ob_backend_task23_llm.json",
-            "file_handling": "state/t10_2601_ob_ob_backend_task24_llm.json",
-            "data_protection": "state/t10_2601_ob_ob_backend_task25_llm.json"
-          }
-        }
-      ]
-    },
-    {
-      "title": "테스트30 - OCBWEBVIEW ocb-service-frontend 정적 진단 (2026-03-18)",
-      "page_id": 741058854,
-      "entries": [
-        {
-          "source": "state/ocbwebview_svc_fe_dev_report.md",
-          "title": "테스트30 - OCB Service Frontend 보안진단 보고서",
-          "type": "main_report",
-          "page_id": 741058855,
-          "task_sources": {
-            "api": null,
-            "injection": "state/ocbwebview_svc_fe_dev_injection.json",
-            "xss": "state/ocbwebview_svc_fe_dev_xss.json",
-            "file_handling": "state/ocbwebview_svc_fe_dev_task24.json",
-            "data_protection": "state/ocbwebview_svc_fe_dev_task25.json"
-          }
+          "title": "테스트28 - OCBWEBVIEW ocb-webview-api 정적 진단 (2026-03-17)",
+          "page_id": 741055781,
+          "entries": [
+            {
+              "source": "state/ocbwebview_api_report.md",
+              "title": "테스트28 - OCB WebView API 보안진단 보고서",
+              "type": "main_report",
+              "page_id": 741055787,
+              "task_sources": {
+                "api": "state/ocbwebview_api_api_inventory.json",
+                "injection": "state/ocbwebview_api_injection.json",
+                "xss": "state/ocbwebview_api_xss.json",
+                "file_handling": "state/ocbwebview_api_task24.json",
+                "data_protection": "state/ocbwebview_api_task25.json"
+              }
+            },
+            {
+              "source": "state/ocbwebview_api_api_inventory.json",
+              "title": "테스트28 - API 인벤토리 (562 엔드포인트)",
+              "type": "api_inventory",
+              "page_id": 741055844
+            },
+            {
+              "source": "state/ocbwebview_api_injection.json",
+              "supplemental_sources": [
+                "state/ocbwebview_api_task22_llm.json"
+              ],
+              "title": "테스트28 - 인젝션 취약점 진단 결과",
+              "type": "finding",
+              "page_id": 741055848
+            },
+            {
+              "source": "state/ocbwebview_api_xss.json",
+              "supplemental_sources": [
+                "state/ocbwebview_api_task23_llm.json"
+              ],
+              "title": "테스트28 - XSS 취약점 진단 결과",
+              "type": "finding",
+              "page_id": 741055850
+            },
+            {
+              "source": "state/ocbwebview_api_task24.json",
+              "supplemental_sources": [
+                "state/ocbwebview_api_task24_llm.json"
+              ],
+              "title": "테스트28 - 파일 처리 진단 결과",
+              "type": "finding",
+              "page_id": 741055852
+            },
+            {
+              "source": "state/ocbwebview_api_task25.json",
+              "supplemental_sources": [
+                "state/ocbwebview_api_task25_llm.json"
+              ],
+              "title": "테스트28 - 데이터 보호 진단 결과",
+              "type": "finding",
+              "page_id": 741055854
+            }
+          ]
         },
         {
-          "source": "state/ocbwebview_svc_fe_dev_xss.json",
-          "supplemental_sources": ["state/ocbwebview_svc_fe_dev_task23_llm.json"],
-          "title": "테스트30 - XSS 취약점 진단 결과 (ocb-service-frontend)",
-          "type": "finding",
-          "page_id": 741058856
-        },
-        {
-          "source": "state/ocbwebview_svc_fe_dev_task25.json",
-          "supplemental_sources": ["state/ocbwebview_svc_fe_dev_task25_llm.json"],
-          "title": "테스트30 - 데이터 보호 진단 결과 (ocb-service-frontend)",
-          "type": "finding",
-          "page_id": 741058857
-        }
-      ]
-    },
-    {
-      "title": "테스트31 - OCBWEBVIEW ocb-webview-frontend 정적 진단 (2026-03-18)",
-      "page_id": 741058859,
-      "entries": [
-        {
-          "source": "state/ocbwebview_wv_fe_dev_report.md",
-          "title": "테스트31 - OCB Webview Frontend 보안진단 보고서",
-          "type": "main_report",
-          "page_id": 741058860,
-          "task_sources": {
-            "api": null,
-            "injection": "state/ocbwebview_wv_fe_dev_injection.json",
-            "xss": "state/ocbwebview_wv_fe_dev_xss.json",
-            "file_handling": "state/ocbwebview_wv_fe_dev_task24.json",
-            "data_protection": "state/ocbwebview_wv_fe_dev_task25.json"
-          }
-        },
-        {
-          "source": "state/ocbwebview_wv_fe_dev_xss.json",
-          "supplemental_sources": ["state/ocbwebview_wv_fe_dev_task23_llm.json"],
-          "title": "테스트31 - XSS 취약점 진단 결과 (ocb-webview-frontend)",
-          "type": "finding",
-          "page_id": 741058861
-        },
-        {
-          "source": "state/ocbwebview_wv_fe_dev_task25.json",
-          "supplemental_sources": ["state/ocbwebview_wv_fe_dev_task25_llm.json"],
-          "title": "테스트31 - 데이터 보호 진단 결과 (ocb-webview-frontend)",
-          "type": "finding",
-          "page_id": 741058862
-        }
-      ]
-    },
-    {
-      "title": "테스트29 - OCBWEBVIEW ocb-webview-api wv/pointcon+shoppingtab 정적 진단 (2026-03-18)",
-      "page_id": 741058829,
-      "entries": [
-        {
-          "source": "state/ocbwebview_wv_dev_report.md",
-          "title": "테스트29 - OCB Webview API (pointcon+shoppingtab) 보안진단 보고서",
-          "type": "main_report",
-          "page_id": 741058830,
-          "task_sources": {
-            "api": "state/ocbwebview_wv_dev_api_inventory.json",
-            "injection": "state/ocbwebview_wv_dev_injection.json",
-            "xss": "state/ocbwebview_wv_dev_xss.json",
-            "file_handling": "state/ocbwebview_wv_dev_task24.json",
-            "data_protection": "state/ocbwebview_wv_dev_task25.json"
-          }
-        },
-        {
-          "source": "state/ocbwebview_wv_dev_api_inventory.json",
-          "title": "테스트29 - API 인벤토리 (602 엔드포인트, wv 전체)",
-          "type": "api_inventory",
-          "page_id": 741058831
-        },
-        {
-          "source": "state/ocbwebview_wv_dev_injection.json",
-          "supplemental_sources": ["state/ocbwebview_wv_dev_task22_llm.json"],
-          "title": "테스트29 - 인젝션 취약점 진단 결과 (pointcon+shoppingtab)",
-          "type": "finding",
-          "page_id": 741058832
-        },
-        {
-          "source": "state/ocbwebview_wv_dev_xss.json",
-          "supplemental_sources": ["state/ocbwebview_wv_dev_task23_llm.json"],
-          "title": "테스트29 - XSS 취약점 진단 결과 (pointcon+shoppingtab)",
-          "type": "finding",
-          "page_id": 741058833
-        },
-        {
-          "source": "state/ocbwebview_wv_dev_task24.json",
-          "supplemental_sources": ["state/ocbwebview_wv_dev_task24_llm.json"],
-          "title": "테스트29 - 파일 처리 진단 결과 (pointcon+shoppingtab)",
-          "type": "finding",
-          "page_id": 741058834
-        },
-        {
-          "source": "state/ocbwebview_wv_dev_task25.json",
-          "supplemental_sources": ["state/ocbwebview_wv_dev_task25_llm.json"],
-          "title": "테스트29 - 데이터 보호 진단 결과 (pointcon+shoppingtab)",
-          "type": "finding",
-          "page_id": 741058835
-        }
-      ]
-    },
-    {
-      "title": "테스트28 - OCBWEBVIEW ocb-webview-api 정적 진단 (2026-03-17)",
-      "page_id": 741055781,
-      "entries": [
-        {
-          "source": "state/ocbwebview_api_report.md",
-          "title": "테스트28 - OCB WebView API 보안진단 보고서",
-          "type": "main_report",
-          "page_id": 741055787,
-          "task_sources": {
-            "api": "state/ocbwebview_api_api_inventory.json",
-            "injection": "state/ocbwebview_api_injection.json",
-            "xss": "state/ocbwebview_api_xss.json",
-            "file_handling": "state/ocbwebview_api_task24.json",
-            "data_protection": "state/ocbwebview_api_task25.json"
-          }
-        },
-        {
-          "source": "state/ocbwebview_api_api_inventory.json",
-          "title": "테스트28 - API 인벤토리 (562 엔드포인트)",
-          "type": "api_inventory",
-          "page_id": 741055844
-        },
-        {
-          "source": "state/ocbwebview_api_injection.json",
-          "supplemental_sources": [
-            "state/ocbwebview_api_task22_llm.json"
+          "title": "테스트32 - OCBWEBVIEW ocb-webview-api wv/pointcon+shoppingtab 재진단 (2026-03-18)",
+          "entries": [
+            {
+              "source": "state/ocbwebview_wv_dev_r2_report.md",
+              "title": "테스트32 - OCB Webview API (pointcon+shoppingtab) 보안진단 보고서 (재진단)",
+              "type": "main_report",
+              "task_sources": {
+                "api": "state/ocbwebview_wv_dev_r2_api_inventory_inscope.json",
+                "injection": "state/ocbwebview_wv_dev_r2_injection_inscope.json",
+                "xss": "state/ocbwebview_wv_dev_r2_xss_inscope.json",
+                "file_handling": "state/ocbwebview_wv_dev_r2_task24_inscope.json",
+                "data_protection": "state/ocbwebview_wv_dev_r2_task25_inscope.json"
+              },
+              "page_id": 741061399
+            },
+            {
+              "source": "state/ocbwebview_wv_dev_r2_api_inventory_inscope.json",
+              "title": "테스트32 - API 인벤토리 (54 엔드포인트, pointcon+shoppingtab)",
+              "type": "api_inventory",
+              "page_id": 741061400
+            },
+            {
+              "source": "state/ocbwebview_wv_dev_r2_injection_inscope.json",
+              "supplemental_sources": [
+                "state/ocbwebview_wv_dev_r2_task22_llm.json"
+              ],
+              "title": "테스트32 - 인젝션 취약점 진단 결과 (pointcon+shoppingtab)",
+              "type": "finding",
+              "page_id": 741061401
+            },
+            {
+              "source": "state/ocbwebview_wv_dev_r2_xss_inscope.json",
+              "supplemental_sources": [
+                "state/ocbwebview_wv_dev_r2_task23_llm.json"
+              ],
+              "title": "테스트32 - XSS 취약점 진단 결과 (pointcon+shoppingtab)",
+              "type": "finding",
+              "page_id": 741061402
+            },
+            {
+              "source": "state/ocbwebview_wv_dev_r2_task24_inscope.json",
+              "supplemental_sources": [
+                "state/ocbwebview_wv_dev_r2_task24_llm.json"
+              ],
+              "title": "테스트32 - 파일 처리 진단 결과 (pointcon+shoppingtab)",
+              "type": "finding",
+              "page_id": 741061403
+            },
+            {
+              "source": "state/ocbwebview_wv_dev_r2_task25_inscope.json",
+              "supplemental_sources": [
+                "state/ocbwebview_wv_dev_r2_task25_llm.json"
+              ],
+              "title": "테스트32 - 데이터 보호 진단 결과 (pointcon+shoppingtab)",
+              "type": "finding",
+              "page_id": 741061404
+            }
           ],
-          "title": "테스트28 - 인젝션 취약점 진단 결과",
-          "type": "finding",
-          "page_id": 741055848
-        },
-        {
-          "source": "state/ocbwebview_api_xss.json",
-          "supplemental_sources": [
-            "state/ocbwebview_api_task23_llm.json"
-          ],
-          "title": "테스트28 - XSS 취약점 진단 결과",
-          "type": "finding",
-          "page_id": 741055850
-        },
-        {
-          "source": "state/ocbwebview_api_task24.json",
-          "supplemental_sources": [
-            "state/ocbwebview_api_task24_llm.json"
-          ],
-          "title": "테스트28 - 파일 처리 진단 결과",
-          "type": "finding",
-          "page_id": 741055852
-        },
-        {
-          "source": "state/ocbwebview_api_task25.json",
-          "supplemental_sources": [
-            "state/ocbwebview_api_task25_llm.json"
-          ],
-          "title": "테스트28 - 데이터 보호 진단 결과",
-          "type": "finding",
-          "page_id": 741055854
+          "page_id": 741061398
         }
-      ]
-    }
       ],
       "entries": []
     }

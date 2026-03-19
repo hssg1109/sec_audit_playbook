@@ -383,6 +383,35 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 
 ---
 
+### ⚠️ 완료 조건 자가 검증 (필수 — 미충족 시 Task 미완료)
+
+출력 JSON 작성 전 반드시 아래 기준을 자가 검증하라:
+
+```
+□ xss_endpoint_review.group_judgments 배열 각 항목의 endpoints_reviewed 비어있지 않음
+  - [] 빈 배열이면 실제 분석 미수행 → 미완료
+
+□ WEB-INF 외부 JSP 확인 수행 여부 명시
+  명령: find src/main/webapp -name "*.jsp" ! -path "*/WEB-INF/*"
+  결과 없으면: "WEB-INF 외부 JSP 없음" 명시
+  결과 있으면: 각 JSP 내 사용자 입력(request.getParameter) 출력 패턴 확인
+
+□ HTML_VIEW 반환 컨트롤러가 있는 경우: 다중 경로 분석 수행
+  확인 사항:
+  - 컨트롤러의 성공 경로 JSP + 실패/오류 경로 JSP 모두 확인
+  - 자동스캔이 탐지한 경로가 성공 경로인지 실패 경로인지 명시
+  - 각 경로에서 사용자 입력(errorCallbackUrl 등) 출력 확인
+
+□ 전역 XSS 필터 finding (XSS-FILTER-001 또는 동등 항목) 포함 여부
+  - findings 배열에 전역 필터 평가 항목 필수
+
+□ xss_endpoint_review.total_info_endpoints == xss.json의 실제 정보 endpoint 수
+  확인: python3 -c "import json; d=json.load(open('state/<prefix>_xss.json'));
+    print(d.get('summary',{}))"
+```
+
+---
+
 ### 출력 형식
 
 자동스캔 결과(`<prefix>_xss.json`)에서 수동 확정이 필요한 항목만 findings로 출력합니다.

@@ -67,22 +67,242 @@ Phase 4: 보고서 생성 + Confluence 게시 [필수]
 - `task_prompts/task_24_file_handling.md`
 - `task_prompts/task_25_data_protection.md`
 
+## 진단 범위 제한 (Module-Scoped Audit)
+
+> **적용 조건**: 진단 대상이 repo 전체가 아니라 **특정 서브모듈/패키지 경로**만 해당할 경우
+> 예: 하나의 repo에서 `wv/pointcon`, `wv/shoppingtab` 두 모듈만 진단
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  스코프 지정 진단 전체 흐름 (테스트29 패턴)                   │
+│                                                             │
+│  Phase 2: 전체 repo 스캔 → 원본 JSON (602 endpoints)        │
+│      ↓                                                      │
+│  Phase 2.5: _inscope JSON 생성 (54 endpoints)  ← 신규       │
+│      ↓                                                      │
+│  Phase 3: LLM 분석 → _inscope JSON 기준, 범위 내만 판정      │
+│      ↓                                                      │
+│  Phase 4: _inscope JSON으로 보고서 생성 + Confluence 게시    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Step 0: 스코프 정의 (진단 시작 전 필수 확정)
+
+```
+DIAGNOSIS_SCOPE = ["wv/pointcon", "wv/shoppingtab"]   # 진단 대상 모듈 경로 키워드
+PREFIX          = "ocbwebview_wv_dev"                  # state 파일 prefix
+```
+
+스코프가 정의된 경우 아래 Phase 2.5 → Phase 3 → Phase 4 절차를 일반 전체 repo 진단과 **다르게** 수행한다.
+
+---
+
+### Phase 2: 자동스캔 — 전체 repo 대상 실행 (변경 없음)
+
+스캔 스크립트는 항상 전체 repo를 대상으로 실행한다. `--modules` 지원 스크립트는 API 인벤토리 기반 필터링을 사용할 수 있으나, **scan_file_processing.py / scan_data_protection.py는 `--modules` 미지원**이므로 전체 스캔 후 Phase 2.5에서 필터링한다.
+
+| 스크립트 | --modules 지원 | Phase 2 실행 방식 |
+|---|---|---|
+| `scan_injection_enhanced.py` | ✅ | `--modules` 옵션 사용 가능 (API 인벤토리 기반) |
+| `scan_xss.py` | ✅ | `--modules` 옵션 사용 가능 (API 인벤토리 기반) |
+| `scan_file_processing.py` | ❌ | 전체 repo 스캔 → Phase 2.5 필터링 |
+| `scan_data_protection.py` | ❌ | 전체 repo 스캔 → Phase 2.5 필터링 |
+
+> **원본 JSON은 절대 수정하지 않는다.** 전체 repo 스캔 결과는 증거로 보존한다.
+
+---
+
+### Phase 2.5: _inscope JSON 생성 ⬅ 스코프 지정 시 필수 신규 단계
+
+Phase 2 완료 후, **Confluence 게시 및 보고서 생성에 사용할 필터링 JSON을 별도로 생성**한다.
+
+#### 생성 대상 파일
+
+| 원본 (전체 repo) | 필터링본 (in-scope) | 필터링 기준 필드 |
+|---|---|---|
+| `<prefix>_api_inventory.json` | `<prefix>_api_inventory_inscope.json` | `file` |
+| `<prefix>_injection.json` | `<prefix>_injection_inscope.json` | `process_file` |
+| `<prefix>_xss.json` | `<prefix>_xss_inscope.json` | `process_file` |
+| `<prefix>_task24.json` | `<prefix>_task24_inscope.json` | `file` (findings 없으면 원본 그대로 사용) |
+| `<prefix>_task25.json` | `<prefix>_task25_inscope.json` | `file` |
+
+#### 필터링 스크립트 (Python 인라인)
+
+```python
+import json, copy
+
+SCOPE  = ("wv/pointcon", "wv/shoppingtab")   # DIAGNOSIS_SCOPE 키워드
+PREFIX = "state/ocbwebview_wv_dev"            # state 파일 경로 prefix
+
+def in_scope(path):
+    return any(s in (path or '') for s in SCOPE)
+
+# ── API 인벤토리
+with open(f"{PREFIX}_api_inventory.json") as f: api = json.load(f)
+orig = api.get("endpoints", [])
+api_f = copy.deepcopy(api)
+api_f["endpoints"] = [e for e in orig if in_scope(e.get("file", ""))]
+api_f["original_endpoint_count"] = len(orig)
+api_f["scan_summary"] = {**api_f.get("scan_summary", {}),
+                          "total_endpoints": len(api_f["endpoints"])}
+with open(f"{PREFIX}_api_inventory_inscope.json", "w") as f:
+    json.dump(api_f, f, ensure_ascii=False, indent=2)
+
+# ── Injection
+with open(f"{PREFIX}_injection.json") as f: inj = json.load(f)
+orig = inj.get("endpoint_diagnoses", [])
+inj_f = copy.deepcopy(inj)
+inj_f["endpoint_diagnoses"] = [e for e in orig if in_scope(e.get("process_file", ""))]
+inj_f["scan_metadata"] = {**inj_f.get("scan_metadata", {}),
+                           "scope_filter": list(SCOPE),
+                           "original_endpoint_count": len(orig),
+                           "filtered_endpoint_count": len(inj_f["endpoint_diagnoses"])}
+with open(f"{PREFIX}_injection_inscope.json", "w") as f:
+    json.dump(inj_f, f, ensure_ascii=False, indent=2)
+
+# ── XSS
+with open(f"{PREFIX}_xss.json") as f: xss = json.load(f)
+orig = xss.get("endpoint_diagnoses", [])
+xss_f = copy.deepcopy(xss)
+xss_f["endpoint_diagnoses"] = [e for e in orig if in_scope(e.get("process_file", ""))]
+xss_f["scan_metadata"] = {**xss_f.get("scan_metadata", {}),
+                           "scope_filter": list(SCOPE),
+                           "original_endpoint_count": len(orig)}
+with open(f"{PREFIX}_xss_inscope.json", "w") as f:
+    json.dump(xss_f, f, ensure_ascii=False, indent=2)
+
+# ── Data Protection
+with open(f"{PREFIX}_task25.json") as f: t25 = json.load(f)
+orig = t25.get("findings", [])
+t25_f = copy.deepcopy(t25)
+t25_f["findings"] = [f for f in orig if in_scope(f.get("file", ""))]
+t25_f["original_finding_count"] = len(orig)
+t25_f["filtered_finding_count"] = len(t25_f["findings"])
+with open(f"{PREFIX}_task25_inscope.json", "w") as f:
+    json.dump(t25_f, f, ensure_ascii=False, indent=2)
+
+# ── File Processing (findings가 없는 경우 원본 그대로 복사)
+with open(f"{PREFIX}_task24.json") as f: t24 = json.load(f)
+orig = t24.get("findings", [])
+t24_f = copy.deepcopy(t24)
+t24_f["findings"] = [f for f in orig if in_scope(f.get("file", ""))]
+with open(f"{PREFIX}_task24_inscope.json", "w") as f:
+    json.dump(t24_f, f, ensure_ascii=False, indent=2)
+```
+
+> `task24.json`에 in-scope findings가 0건이면 원본(`task24.json`)을 Phase 4에서 직접 사용해도 무방 (LLM이 생성한 `task24_llm.json`의 "해당없음" finding으로 커버됨).
+
+---
+
+### Phase 3: LLM 수동분석 — _inscope JSON 기준으로 수행
+
+Phase 3 LLM 분석의 **입력은 원본 JSON이 아닌 `_inscope.json`을 사용**한다.
+
+```
+입력: <prefix>_injection_inscope.json   →  출력: <prefix>_task22_llm.json
+입력: <prefix>_xss_inscope.json        →  출력: <prefix>_task23_llm.json
+입력: <prefix>_task24_inscope.json     →  출력: <prefix>_task24_llm.json
+입력: <prefix>_task25_inscope.json     →  출력: <prefix>_task25_llm.json
+```
+
+**in-scope 필터링 추가 규칙:**
+
+1. LLM이 직접 소스 파일을 읽어 확인할 때도 `DIAGNOSIS_SCOPE` 경로 외 파일은 분석하지 않는다
+2. `_inscope.json`에 없는 finding(out-of-scope)을 LLM 독자 발견으로 추가 금지
+3. in-scope 내 해당 진단 유형 finding이 0건이면 "해당없음" finding 1건 필수 생성 (findings `[]` 금지)
+
+---
+
+### Phase 4: 보고서 생성 + Confluence 게시 — _inscope JSON 사용
+
+#### 보고서 생성
+
+```bash
+python3 tools/scripts/generate_finding_report.py \
+    <source_dir> \
+    state/<prefix>_injection_inscope.json \
+    state/<prefix>_xss_inscope.json \
+    state/<prefix>_task24_inscope.json \
+    state/<prefix>_task25_inscope.json \
+    --modules <scope1> <scope2> \
+    --asset-info state/<prefix>_task11.json \
+    --anchor-style md2cf \
+    --page-map tools/confluence_page_map.json \
+    -o state/<prefix>_report.md
+```
+
+#### confluence_page_map.json 등록 — _inscope 파일로 지정
+
+```json
+{
+  "title": "테스트NN - 프로젝트명 (모듈명) 정적 진단",
+  "entries": [
+    {
+      "source": "state/<prefix>_report.md",
+      "type": "main_report",
+      "task_sources": {
+        "api":             "state/<prefix>_api_inventory_inscope.json",
+        "injection":       "state/<prefix>_injection_inscope.json",
+        "xss":             "state/<prefix>_xss_inscope.json",
+        "file_handling":   "state/<prefix>_task24_inscope.json",
+        "data_protection": "state/<prefix>_task25_inscope.json"
+      }
+    },
+    {
+      "source": "state/<prefix>_api_inventory_inscope.json",
+      "title": "테스트NN - API 인벤토리 (N 엔드포인트, <모듈명>)",
+      "type": "api_inventory"
+    },
+    {
+      "source": "state/<prefix>_injection_inscope.json",
+      "supplemental_sources": ["state/<prefix>_task22_llm.json"],
+      "title": "테스트NN - 인젝션 취약점 진단 결과 (<모듈명>)",
+      "type": "finding"
+    },
+    {
+      "source": "state/<prefix>_xss_inscope.json",
+      "supplemental_sources": ["state/<prefix>_task23_llm.json"],
+      "title": "테스트NN - XSS 취약점 진단 결과 (<모듈명>)",
+      "type": "finding"
+    },
+    {
+      "source": "state/<prefix>_task24_inscope.json",
+      "supplemental_sources": ["state/<prefix>_task24_llm.json"],
+      "title": "테스트NN - 파일 처리 진단 결과 (<모듈명>)",
+      "type": "finding"
+    },
+    {
+      "source": "state/<prefix>_task25_inscope.json",
+      "supplemental_sources": ["state/<prefix>_task25_llm.json"],
+      "title": "테스트NN - 데이터 보호 진단 결과 (<모듈명>)",
+      "type": "finding"
+    }
+  ]
+}
+```
+
+> **전체 repo 진단(스코프 미지정)** 시에는 `_inscope` 파일 없이 원본 JSON을 그대로 사용한다.
+
+---
+
 ## 실행 순서
 
 ### Phase 2: 자동스캔 (스크립트)
 
+> 스코프 지정 여부와 무관하게 **항상 전체 repo를 스캔**한다. 필터링은 Phase 2.5에서 수행.
+
 ```bash
 # 1. testbed에 소스코드 배치
 
-# 2-a. DTO 카탈로그 선행 추출 (API 인벤토리의 @RequestBody 내부 필드 해석에 사용)
+# 2-a. DTO 카탈로그 선행 추출
 python3 tools/scripts/scan_dto.py <source_dir> -o state/<prefix>_dto_catalog.json
 
-# 2-b. API 인벤토리 (--dto-catalog 옵션으로 DTO 필드 자동 해석)
+# 2-b. API 인벤토리 (전체 repo)
 python3 tools/scripts/scan_api.py <source_dir> \
     --dto-catalog state/<prefix>_dto_catalog.json \
     -o state/<prefix>_api_inventory.json
 
-# 3. 자동스캔 (병렬 가능)
+# 3. 자동스캔 — 전체 repo (병렬 가능)
 python3 tools/scripts/scan_injection_enhanced.py <source_dir> \
     --api-inventory state/<prefix>_api_inventory.json \
     -o state/<prefix>_injection.json
@@ -98,29 +318,130 @@ python3 tools/scripts/scan_file_processing.py <source_dir> \
 python3 tools/scripts/scan_data_protection.py <source_dir> \
     --api-inventory state/<prefix>_api_inventory.json \
     -o state/<prefix>_task25.json
+
+# 4. [스코프 지정 시만] Phase 2.5 — _inscope JSON 생성
+#    → 위 "진단 범위 제한" 섹션의 필터링 스크립트 실행
+#    → state/<prefix>_*_inscope.json 5개 생성
 ```
 
 ### Phase 3: LLM 수동분석 보완 (이 프롬프트의 역할)
 
+**[스코프 미지정 — 전체 repo 진단]**
 ```
-입력: <prefix>_injection.json (자동스캔)
-출력: <prefix>_task22_llm.json  ← supplemental (별도 finding 페이지 X)
-
-입력: <prefix>_xss.json (자동스캔)
-출력: <prefix>_task23_llm.json  ← supplemental (별도 finding 페이지 X)
-
-입력: <prefix>_task24.json (자동스캔)
-출력: <prefix>_task24_llm.json  ← supplemental (별도 finding 페이지 X)
-
-입력: <prefix>_task25.json (자동스캔)
-출력: <prefix>_task25_llm.json  ← supplemental (별도 finding 페이지 X)
+입력: <prefix>_injection.json   →  출력: <prefix>_task22_llm.json
+입력: <prefix>_xss.json        →  출력: <prefix>_task23_llm.json
+입력: <prefix>_task24.json     →  출력: <prefix>_task24_llm.json
+입력: <prefix>_task25.json     →  출력: <prefix>_task25_llm.json
 ```
+
+**[스코프 지정 — 모듈 단위 진단] Phase 2.5 완료 후**
+```
+입력: <prefix>_injection_inscope.json   →  출력: <prefix>_task22_llm.json
+입력: <prefix>_xss_inscope.json        →  출력: <prefix>_task23_llm.json
+입력: <prefix>_task24_inscope.json     →  출력: <prefix>_task24_llm.json
+입력: <prefix>_task25_inscope.json     →  출력: <prefix>_task25_llm.json
+```
+
+> LLM 출력(`_llm.json`)은 스코프와 무관하게 동일 파일명을 사용한다. `_inscope` 접미사를 붙이지 않는다.
 
 각 task의 상세 분석 기준:
 - 인젝션: `task_prompts/task_22_injection_review.md`
 - XSS: `task_prompts/task_23_xss_review.md`
 - 파일 처리: `task_prompts/task_24_file_handling.md`
 - 데이터 보호: `task_prompts/task_25_data_protection.md`
+
+---
+
+### Phase 3 완료 조건 체크리스트 ⚠️ 필수
+
+**각 Task 완료 전 아래 조건을 반드시 자가 검증하라. 조건 미충족 시 해당 Task는 미완료로 간주한다.**
+
+#### Task 3-2: 인젝션 (task22_llm.json)
+
+```
+□ injection.json의 needs_review(정보) endpoint 수를 확인
+  → python3 -c "import json; d=json.load(open('state/<prefix>_injection.json'));
+     eps=[e for e in d.get('endpoint_diagnoses',[]) if e.get('overall_result')=='정보' or e.get('needs_review')];
+     print(len(eps), 'info endpoints')"
+
+□ sqli_endpoint_review.total_info_endpoints == 위에서 확인한 수
+  (주의: 3건만 검토했는데 126건이면 미완료)
+
+□ diagnosis_type 모든 종류가 group_judgments에 커버됨
+  확인 대상 유형: "자동 판정 불가", "DB 접근 미확인", "추적 불가", "외부 의존성 호출", "XML 미발견 패턴 추정"
+  → 각 유형별로 1개 이상 group_judgment 존재해야 함
+
+□ MyBatis/iBatis XML ${} 패턴 전수 확인 완료 여부 명시
+  → mybatis_xml_check 필드에 결과 기록
+```
+
+#### Task 3-3: XSS (task23_llm.json)
+
+```
+□ xss.json의 정보 endpoint 수 확인
+  → python3 -c "import json; d=json.load(open('state/<prefix>_xss.json'));
+     print(d.get('summary',{}))"
+
+□ 잠재적위협(Persistent XSS) 그룹: endpoints_reviewed 배열이 비어있지 않음
+  (빈 배열 []이면 실제 분석 미수행)
+
+□ HTML_VIEW 반환 컨트롤러가 있는 경우: 다중 경로 분석 수행 여부 명시
+  → 성공 경로 JSP + 실패/오류 경로 JSP 모두 확인
+  → 각 JSP에서 사용자 입력 taint 경로 확인
+
+□ WEB-INF 외부 JSP 확인 수행 여부 명시
+  → find src/main/webapp -name "*.jsp" ! -path "*/WEB-INF/*"
+  → 존재 시: 직접 URL 접근 가능성 + EL/스크립틀릿 사용자 입력 확인
+
+□ 전역 XSS 필터 finding 포함 여부
+  → XSS-FILTER-001 또는 동등한 전역 필터 평가 finding 필수
+```
+
+#### Task 3-4: 파일처리 (task24_llm.json)
+
+```
+□ [모듈 스코프 있는 경우] in-scope 필터링 수행 여부 확인
+  → task24.json findings를 파일 경로 기준으로 in-scope / out-of-scope 분류
+  → out-of-scope findings는 file_handling_assessment.out_of_scope_finding 섹션에만 요약 기록
+
+□ in-scope finding 0건 여부 확인
+  → 0건이면 "해당없음" finding 1건 필수 생성 (findings: [] 금지)
+  → FILE-SCOPE-001 패턴 준수 (result: "해당없음", diagnosis_method: SAST+LLM)
+
+□ in-scope finding 1건 이상이면 업로드/다운로드/LFI 항목별 판정 수행
+```
+
+#### Task 3-5: 데이터보호 (task25_llm.json)
+
+```
+□ [모듈 스코프 있는 경우] in-scope 필터링 수행 여부 확인
+  → task25.json findings를 파일 경로 기준으로 in-scope / out-of-scope 분류
+  → out-of-scope findings는 data_protection_assessment.out_of_scope 섹션에 요약 기록
+
+□ SENSITIVE_LOGGING 병합: 로그 레벨 기준 2버킷 (모듈별 분리 금지)
+  → info/warn/error/fatal 레벨 PII 로깅 전체 → DATA-LOG-001 (Critical) 1건으로 통합
+  → debug/trace 레벨 PII 로깅 전체 → DATA-LOG-002 (Medium) 1건으로 통합
+  → 여러 모듈에 걸쳐 동일 PII가 있어도 레벨 버킷으로만 분류 (모듈별 분리 금지)
+  ⚠️ DATA-LOG-001(shoppingtab), DATA-LOG-002(pointcon) 식 모듈별 분리 → 잘못된 패턴
+
+□ DTO_EXPOSURE: 스크립트 역추적 결과 확인
+  → task25.json DTO finding의 affected_endpoints 배열 확인
+  → affected_endpoints 비어 있음 → INTERNAL/Consumer DTO → FP 처리
+  → affected_endpoints 있음 → Controller 코드 직접 확인 후 Safe by Design 또는 취약 판정
+
+□ data_protection_review 블록 작성 여부
+  → 구조: { "hardcoded_secrets": {...}, "pii_logging": {...}, "overall_judgment": "..." }
+
+□ 하드코딩 시크릿: Prod/Stage/Test 환경 판별 명시
+  → task25.json의 시크릿 후보들 중 실제 운영 영향 여부 기록
+
+□ PII 로깅: 마스킹 적용 여부 케이스별 판정
+  → 케이스 A: 마스킹 완전 적용 → 양호
+  → 케이스 B: 일부 마스킹 누락 → 취약
+  → 케이스 C: 마스킹 전혀 없음 → 취약
+```
+
+---
 
 ### Phase 4: Confluence 게시
 

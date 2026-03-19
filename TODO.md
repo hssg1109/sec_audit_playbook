@@ -35,7 +35,7 @@
 | T-02 | 보안진단 완료 후 PoC/테스트 코드 자동 생성<br>(JUnit / Fuzz / ZAP 활용, 검증용) | 🔴 | XL | ⬜ 대기 | `scan_injection_enhanced.py`<br>`skills/sec-audit-static/` | - | - | - |
 | T-03 | 검증 절차 자동화<br>1차: AI 진단 → 보고서 자동 생성<br>2차: 인력 검토 → Confirm<br>오탐/과탐 체크 워크플로우<br>• Phase 3.5 설계 완료: `generate_review_sheet.py` + `apply_review.py` 신규 구현 예정 | 🔴 | L | 🔄 진행중 | 전체 파이프라인 | 2026-03-13 | - | 방안 A(Review Sheet 방식) 채택 |
 | T-09 | **Bitbucket 소스코드 자동 다운로드 → testbed 진단 파이프라인**<br>• `fetch_bitbucket.py` 구현 완료 (PowerShell 경유 사내망 접근)<br>• `CUSTOMER_BB_TOKEN` 계정 단위 토큰 발급 완료 → 300+ 프로젝트 접근 가능 확인<br>• 기능: --project/--repo/--branch/--shallow/--list-projects/--list-repos/--dry-run<br>• 결과: `state/<prefix>_fetch_manifest.json`<br>• ⏳ 다음 단계: 비전금법 OCB 진단 대상 프로젝트 선정 (다음주) | 🔴 | M | 🔄 진행중 | `tools/scripts/fetch_bitbucket.py`<br>`.env` CUSTOMER_BB_TOKEN | 2026-03-13 | - | `python3 fetch_bitbucket.py --project <KEY> --shallow` |
-| T-10 | **OCB 서비스군 repo별 정적 진단 (비전금법 대상, ~2026-03)**<br>• 1차 대상: 비전금법 OCB 서비스 (Fortify 1분기 OCB 진단 대상 참조)<br>• repo별 `/sec-audit-static` 전체 워크플로 실행 → 결과 Confluence 게시<br>• 진단 완료 후 FP/FN 검증 및 고도화:<br>  - LLM 판정 결과 ↔ Fortify 진단 결과 교차 검증<br>  - 오탐 패턴 분석 → 스캔 룰 개선<br>  - Phase 1 이후 단계 확장(T-03 검증 절차 적용)<br>• ⏳ 다음 단계: 비전금법 OCB 진단 대상 프로젝트 키 확정 (다음주) | 🔴 | L | 🔄 진행중 | 전체 파이프라인<br>`tools/scripts/` | 2026-03-13 | 2026-03-31 | Fortify 1분기 OCB 진단 대상 목록 참조 |
+| T-10 | **OCB 서비스군 repo별 정적 진단 (비전금법 대상, ~2026-03)**<br>• 1차 대상: 비전금법 OCB 서비스 (Fortify 1분기 OCB 진단 대상 참조)<br>• repo별 `/sec-audit-static` 전체 워크플로 실행 → 결과 Confluence 게시<br>• 진단 완료 후 FP/FN 검증 및 고도화:<br>  - LLM 판정 결과 ↔ Fortify 진단 결과 교차 검증<br>  - 오탐 패턴 분석 → 스캔 룰 개선<br>  - Phase 1 이후 단계 확장(T-03 검증 절차 적용)<br>• ✅ OCBWEBVIEW 3개 레포 완료 (테스트29~31, 2026-03-18~19)<br>  - 테스트29: ocb-webview-api wv/pointcon+shoppingtab — LLM Phase 3 전수 재분석 완료<br>    (126건 injection, 294건 XSS, WEB-INF 외부 JSP Reflected XSS 신규 발견)<br>  - 테스트30: ocb-service-frontend / 테스트31: ocb-webview-frontend<br>• ⏳ 다음 단계: 비전금법 OCB 진단 대상 프로젝트 키 확정 (2026-03 중) | 🔴 | L | 🔄 진행중 | 전체 파이프라인<br>`tools/scripts/` | 2026-03-13 | 2026-03-31 | Fortify 1분기 OCB 진단 대상 목록 참조 |
 | T-04 | Diff 기반 seed 설정 + RAG 형식 프롬프트 연동<br>(변경된 코드 diff를 RAG로 구성하여 진단 프롬프트에 추가) | 🟡 | L | ⬜ 대기 | `scan_injection_enhanced.py`<br>`skills/` 프롬프트 | - | - | [참고: hoyeon](https://github.com/team-attention/hoyeon) |
 | T-05 | Redis / 파일 DB (Elasticsearch 등) 대상 진단 지원 | 🟡 | L | ⬜ 대기 | `scan_injection_enhanced.py`<br>`skills/sec-audit-static/` | - | - | - |
 | T-06 | 보고서 출력 개발자 친화적 개선<br>(실제 코드 수정 가이드 포함, 취약 라인 직접 링크) | 🟡 | M | ⬜ 대기 | `publish_confluence.py`<br>`generate_finding_report.py` | - | - | - |
@@ -109,6 +109,10 @@
 | ✅ | `scan_xss.py` P1: 전역 XSS 필터 결함 탐지 3종 (Fail-Open, 불충분한 블랙리스트, getInputStream 미필터) | 2026-03-11 | v4.10.0 | `_P3_FAILOPEN_RE`, `_count_blacklist_items`, `_getinputstream_missing_filter` 신규 |
 | ✅ | `scan_xss.py` P2: HTML_VIEW 오탐 제거 (DTO/Collection 반환타입, `@RequestBody` 파라미터 강제 REST_JSON 분류) | 2026-03-11 | v4.10.0 | `_P1_PROTO_API_RT_RE` 확장 + `has_request_body_param` 감지 |
 | ✅ | Task 2-5 데이터보호 진단 병합/고도화 — HARDCODED_SECRET 23→8건, SENSITIVE_LOGGING 197→2건 | 2026-03-12 | v4.10.1 | `task25_llm.json` + task_prompt Step 5/6 + docs 갱신 |
+| ✅ | Phase 3 완료 조건 자가 검증 체크리스트 도입 (task_22~25) | 2026-03-19 | v4.15.0 | LLM 재작업 누락 방지 — 건수 불일치/WEB-INF외부JSP/SENSITIVE_LOGGING 병합 기준 |
+| ✅ | Module-Scoped Audit Phase 2.5 절차 명문화 (`workflow.md`) | 2026-03-19 | v4.15.0 | 서브모듈 한정 진단 시 _inscope JSON 생성 흐름 표준화 |
+| ✅ | `generate_finding_report.py` 상세목록 순번 연속화 (양호 항목 번호 공백 제거) | 2026-03-19 | v4.15.0 | enumerate(rows/reportable, 1) 적용 — 상세목록 No 컬럼 전역 순차, 카테고리 내 순차 |
+| ✅ | `task_24` FILE-SCOPE-001 severity "Info" → "Low" 수정 (해당없음 → 보고서 미노출) | 2026-03-19 | v4.15.0 | RISK_MAP["info"]="정보" 매핑으로 해당없음 항목이 상세목록 노출되던 버그 |
 
 ---
 

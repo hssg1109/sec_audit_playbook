@@ -10,6 +10,62 @@
 
 ---
 
+## [v4.15.0] - 2026-03-19
+
+### Added — Phase 3 완료 조건 자가 검증 체크리스트 + Module-Scoped Audit 절차 명문화
+
+#### 1. Phase 3 완료 조건 자가 검증 (`task_22~25` task prompt 전체)
+
+테스트29 LLM 재분석 과정에서 발견된 누락 패턴을 방지하기 위해 각 task prompt에 **출력 JSON 작성 전 필수 자가 검증** 항목 추가.
+
+**task_22_injection_review.md**
+- 완료 조건: `total_info_endpoints` 수치 실제 count 일치, `group_judgments[].endpoints_reviewed` 비어있지 않음, `diagnosis_type` 전 종류 커버, `mybatis_xml_check` 수행 여부
+
+**task_23_xss_review.md**
+- 완료 조건: `group_judgments[].endpoints_reviewed` 비어있지 않음, WEB-INF 외부 JSP 확인 수행(`find src/main/webapp -name "*.jsp" ! -path "*/WEB-INF/*"`), HTML_VIEW 다중 경로 분석, `xss_endpoint_review.total_info_endpoints` 실제 수치 일치
+
+**task_25_data_protection.md**
+- 완료 조건: SENSITIVE_LOGGING 병합 기준 — 모듈별 분리 **금지**, **로그 레벨 기준** 통합
+  - `info/warn/error/fatal` 레벨 → DATA-LOG-001 **Critical** (기존 Medium → 상향 수정)
+  - `debug/trace` 레벨 → DATA-LOG-002 **Medium** (기존 Low → 상향 수정)
+  - `data_protection_assessment` 블록 존재 필수
+
+#### 2. Module-Scoped Audit Phase 2.5 절차 명문화 (`workflow.md`)
+
+하나의 repo에서 특정 서브모듈만 진단할 때의 표준 절차(테스트29 패턴) 명문화:
+
+```
+Phase 2: 전체 repo 스캔 → 원본 JSON (602 endpoints)
+    ↓
+Phase 2.5: _inscope JSON 생성 (54 endpoints)  ← 신규
+    ↓
+Phase 3: LLM 분석 → _inscope JSON 기준, 범위 내만 판정
+    ↓
+Phase 4: _inscope JSON으로 보고서 생성 + Confluence 게시
+```
+
+- `confluence_page_map.json`의 `supplemental_sources`, `task_sources` 모두 `_inscope.json` 경로로 설정
+- `generate_finding_report.py` 호출 시 positional 인수도 `_inscope.json` 사용
+
+### Fixed
+
+#### 3. `generate_finding_report.py`: 상세목록 순번 연속화
+
+**버그**: 양호(Low severity) 항목에도 내부 ID가 부여(`2-1`, `2-2`, `2-3`...)되어 상세목록에 가시적으로 보이는 항목만 남으면 번호에 공백 발생 (`2-2`, `2-4` — `2-1`, `2-3` 없음).
+
+**수정**:
+- `generate_summary_table()`: `for seq, row in enumerate(rows, 1)` 으로 변경 → No 컬럼 전역 순차 번호
+- `generate_category_detail()`: 요약 표 + 상세 섹션 헤딩 모두 `enumerate(reportable, 1)` → 카테고리 내 순차 번호
+- 앵커 링크는 기존 내부 ID(`finding-{f.id}`) 유지 — 링크 정합성 보장
+
+#### 4. `task_24_file_handling.md`: FILE-SCOPE-001 템플릿 severity 수정
+
+- `severity: "Info"` → `"Low"` 수정
+- 배경: RISK_MAP에서 `"info" → ("정보", 1)`으로 매핑되어 "해당없음" 결과임에도 상세목록에 노출됨
+- `"low" → ("양호", 2)`로 매핑되므로 상세목록에서 자동 제외됨
+
+---
+
 ## [v4.14.0] - 2026-03-17
 
 ### Fixed — scan_injection_enhanced.py v4.7.0: HTTP 클라이언트 추적 버그 3종 수정

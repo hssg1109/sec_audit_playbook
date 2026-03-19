@@ -10,6 +10,44 @@
 
 ---
 
+### ⚠️ 모듈 스코프 제한 시 필수 절차
+
+> `scan_file_processing.py`는 `--modules` 옵션을 지원하지 않아 **항상 전체 repo를 스캔**한다.
+> 진단 범위가 특정 서브모듈로 제한된 경우 아래 절차를 반드시 따른다.
+
+#### Step 0: in-scope 필터링
+
+`DIAGNOSIS_SCOPE` (예: `wv/pointcon`, `wv/shoppingtab`)가 정의된 경우:
+
+1. `state/<prefix>_task24.json`의 모든 findings를 **파일 경로 기준**으로 분류
+   - **in-scope**: `file` 경로에 `DIAGNOSIS_SCOPE` 모듈명 포함 → 이후 단계에서 분석
+   - **out-of-scope**: 해당 없음 → `out_of_scope_findings` 섹션에 요약만 기록, 분석 생략
+
+2. **in-scope finding이 0건인 경우 → 아래 필수 finding을 반드시 생성한다**
+
+```json
+{
+  "id": "FILE-SCOPE-001",
+  "title": "파일 처리 관련 엔드포인트/기능 없음 — <모듈명>",
+  "severity": "Low",
+  "category": "파일 처리 (File Handling) — 범위 확인",
+  "description": "진단 대상 모듈(<모듈명>) 내 파일 업로드(MultipartFile), 파일 다운로드(FileInputStream/Resource), 파일 경로 직접 처리(LFI) 패턴을 자동스캔 및 수동 확인한 결과 해당 기능이 존재하지 않음.",
+  "affected_files": [],
+  "cwe_id": "N/A",
+  "owasp_category": "N/A",
+  "diagnosis_method": "자동스캔(SAST) + 수동진단(LLM)",
+  "result": "해당없음",
+  "needs_review": false,
+  "manual_review_note": "<구체적 확인 근거 — 예: MultipartFile, FileInputStream 패턴 0건 확인>",
+  "recommendation": "해당없음 — 파일 처리 기능 미구현. 향후 추가 시 확장자 whitelist, UUID 파일명, MIME 검증 적용 필요."
+}
+```
+
+> **이 finding이 없으면 Confluence 세부 페이지에서 파일 처리 진단 수행 여부를 확인할 수 없다.**
+> findings 배열을 비워(`[]`) 두는 것은 절대 금지한다.
+
+---
+
 ### 컨텍스트
 `scan_file_processing.py` 1차 자동스캔 결과에서 **파일 업로드**, **파일 다운로드**, **Path Traversal**, **LFI/RFI** 취약점의 `needs_review: true` 항목 및 자동 탐지 한계 구간(권한 검증·우회 기법·무해화)에 대해 LLM이 심층 분석합니다.
 

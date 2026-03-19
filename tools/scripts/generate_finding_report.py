@@ -1555,10 +1555,10 @@ def generate_summary_table(all_findings: dict[str, list[Finding]],
     else:
         lines.append("| No | 점검 구분 | 점검 항목 | 결과 | 위험도 | Request Mapping | File | 상세 |")
         lines.append("|:--:|:-------:|:-------:|:---:|:-----:|:----------------|:-----|:----:|")
-        for row in rows:
+        for seq, row in enumerate(rows, 1):
             fid = row[0]
             lines.append(
-                f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]} | "
+                f"| {seq} | {row[1]} | {row[2]} | {row[3]} | {row[4]} | "
                 f"{row[5]} | {row[6]} | {_anchor_link(f'finding-{fid}', '상세')} |"
             )
         lines.append("")
@@ -1594,7 +1594,7 @@ def generate_category_detail(category_id: str, findings: list[Finding],
     lines.append("| No | 취약점 항목 | 현황 | 결과 | 위험도 | 보안 위협 |")
     lines.append("|:--:|:----------|:-----|:---:|:-----:|:---------|")
 
-    for f in reportable:
+    for seq, f in enumerate(reportable, 1):
         result, risk = RISK_MAP.get(f.severity, ("정보", 4))
         # 현황 요약: title 기반 (suffix 제거 후 사용, description 말줄임 없음)
         import re as _re_s
@@ -1621,13 +1621,13 @@ def generate_category_detail(category_id: str, findings: list[Finding],
             status = "-"
 
         lines.append(
-            f"| {f.id} | {f.subcategory} | {status} | {_colored_result(result)} | {risk} | {cat_info['threat']} |"
+            f"| {seq} | {f.subcategory} | {status} | {_colored_result(result)} | {risk} | {cat_info['threat']} |"
         )
 
     lines.append("")
 
     # 각 취약점 상세
-    for f in reportable:
+    for seq, f in enumerate(reportable, 1):
         result, risk = RISK_MAP.get(f.severity, ("정보", 4))
 
         finding_label = "취약점"
@@ -1638,11 +1638,11 @@ def generate_category_detail(category_id: str, findings: list[Finding],
             # 색상 span을 위해 <strong> HTML 직접 출력 (** 안에 <span> 넣으면 파싱 충돌)
             _result_colored = _colored_result(result)
             lines.append(
-                f"<strong>＊ {finding_label} {f.id} {f.subcategory} ({_result_colored})</strong>\n"
+                f"<strong>＊ {finding_label} {seq} {f.subcategory} ({_result_colored})</strong>\n"
             )
         else:
             lines.append(_anchor(f"finding-{f.id}"))
-            lines.append(f"#### ＊ {finding_label} {f.id} {f.subcategory} ({result})\n")
+            lines.append(f"#### ＊ {finding_label} {seq} {f.subcategory} ({result})\n")
 
         # 영향 받는 엔드포인트/파일 (단순 단일 표시)
         if not f.affected_endpoints:
