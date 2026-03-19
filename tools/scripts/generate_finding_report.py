@@ -686,7 +686,12 @@ def load_findings(filepath: Path, source_dir: Path,
         # JSON result 필드로 severity 보정 (LLM 최종 결과 우선)
         _severity = f.get("severity", "info").lower()
         _json_result = f.get("result", "").strip()
-        if _json_result == "양호" and _severity not in ("high", "critical"):
+        _scope_note = f.get("scope_note", "")
+        # scope_note에 "out-of-scope"가 명시된 보충 finding은 양호 버킷으로 분류
+        # (in-scope 상세 목록 및 매트릭스 취약/정보 집계에서 제외, Confluence 세부 페이지에만 수록)
+        if _scope_note and "out-of-scope" in _scope_note.lower():
+            _severity = "low"
+        elif _json_result in ("양호", "해당없음") and _severity not in ("high", "critical"):
             _severity = "low"
         elif _json_result == "취약" and _severity not in ("high", "critical"):
             # LLM이 "취약"으로 판정한 경우 medium/info → high(취약)로 상향
@@ -1058,42 +1063,60 @@ def load_endpoint_group_findings(filepath: Path,
                         + "\n".join(_chains)
                     )
 
-                desc = (
-                    f"{_filter_state_desc}에서 자유 텍스트 파라미터가 필터링 없이 DB에 저장되는 "
-                    f"**{len(eps)}개 엔드포인트**가 Persistent XSS 위험에 노출됩니다.\n\n"
-                    "**공통 패턴:** `@RestController` / `@ResponseBody` — JSON 응답으로 "
-                    "현재 아키텍처에서 직접 HTML 렌더링 경로는 없으나, 동일 데이터를 소비하는 "
-                    "프론트엔드(React/Vue) 또는 관리자 화면에서 적절한 출력 인코딩이 없을 경우 "
-                    "Stored XSS가 발현됩니다."
-                    + _taint_note
-                    + llm_note
-                )
-
-                # 대응방안: 필터 유무에 따라 다르게 생성
-                if _filter_level == "none":
-                    rec = (
-                        "저장 시점 XSS 입력 필터 적용 (Defense-in-Depth):\n"
-                        "1. Spring Lucy XSS Filter (naver/lucy-xss-servlet) 전역 적용 — "
-                        "JSON 요청(`Content-Type: application/json`) 포함 처리\n"
-                        "2. 또는 Jackson `ObjectMapper`에 커스텀 `JsonDeserializer` 적용으로 "
-                        "HTML 특수문자(< > ' \" 등) Sanitize\n"
-                        "3. 소비자(프론트엔드/관리자 앱) 측 출력 인코딩 별도 적용 권고 "
-                        "(저장 측 필터와 상호보완)"
+                if llm_j == "양호":
+                    # LLM이 전역 XSS 필터를 직접 확인하여 양호 판정 → 긍정 서술
+                    desc = (
+                        f"**{len(eps)}개 엔드포인트**의 Persistent XSS 잠재 위협을 LLM이 "
+                        "직접 검토하여 **양호**로 확정하였습니다.\n\n"
+                        "**전역 XSS 필터 확인:** 자동스캔에서 잠재 위협으로 분류된 엔드포인트가 "
+                        "실제로는 전역 XSS 필터(Jackson `XSSStringDeserializer` 등)가 적용되어 "
+                        "모든 `@RequestBody` String 필드가 입력 단계에서 자동 이스케이핑됩니다.\n\n"
+                        "**공통 패턴:** `@RestController` / `@ResponseBody` — JSON 응답만 반환하며 "
+                        "직접 HTML 렌더링 경로 없음. 전역 필터가 저장 시점 XSS 정제를 수행함."
+                        + llm_note
                     )
-                elif _has_lucy:
                     rec = (
-                        "Lucy XSS 필터 설정 보완:\n"
-                        "1. `skipXss` 기본값을 `false`로 설정하여 전체 요청에 필터 적용\n"
-                        "2. `multipart/form-data` 요청에 `multipartFilter` 설정 추가\n"
-                        "3. JSON `Content-Type` 요청 처리 여부 확인 및 보완"
+                        "현재 전역 XSS 필터(XSSStringDeserializer) 적용 상태를 유지하십시오.\n"
+                        "1. JSON Content-Type 요청 전체 커버리지 주기적 재확인\n"
+                        "2. `multipart/form-data` 등 비-JSON 경로가 추가될 경우 필터 커버리지 재검토\n"
+                        "3. 소비자(프론트엔드/관리자 앱) 측 출력 인코딩 병행 적용 권고"
                     )
                 else:
-                    rec = (
-                        "전역 XSS 필터 적용 강화:\n"
-                        "1. Lucy XSS Filter 또는 OWASP AntiSamy 전역 적용\n"
-                        "2. 모든 Content-Type 요청 커버 여부 확인\n"
-                        "3. 소비자 측 출력 인코딩 병행 적용"
+                    desc = (
+                        f"{_filter_state_desc}에서 자유 텍스트 파라미터가 필터링 없이 DB에 저장되는 "
+                        f"**{len(eps)}개 엔드포인트**가 Persistent XSS 위험에 노출됩니다.\n\n"
+                        "**공통 패턴:** `@RestController` / `@ResponseBody` — JSON 응답으로 "
+                        "현재 아키텍처에서 직접 HTML 렌더링 경로는 없으나, 동일 데이터를 소비하는 "
+                        "프론트엔드(React/Vue) 또는 관리자 화면에서 적절한 출력 인코딩이 없을 경우 "
+                        "Stored XSS가 발현됩니다."
+                        + _taint_note
+                        + llm_note
                     )
+                    # 대응방안: 필터 유무에 따라 다르게 생성
+                    if _filter_level == "none":
+                        rec = (
+                            "저장 시점 XSS 입력 필터 적용 (Defense-in-Depth):\n"
+                            "1. Spring Lucy XSS Filter (naver/lucy-xss-servlet) 전역 적용 — "
+                            "JSON 요청(`Content-Type: application/json`) 포함 처리\n"
+                            "2. 또는 Jackson `ObjectMapper`에 커스텀 `JsonDeserializer` 적용으로 "
+                            "HTML 특수문자(< > ' \" 등) Sanitize\n"
+                            "3. 소비자(프론트엔드/관리자 앱) 측 출력 인코딩 별도 적용 권고 "
+                            "(저장 측 필터와 상호보완)"
+                        )
+                    elif _has_lucy:
+                        rec = (
+                            "Lucy XSS 필터 설정 보완:\n"
+                            "1. `skipXss` 기본값을 `false`로 설정하여 전체 요청에 필터 적용\n"
+                            "2. `multipart/form-data` 요청에 `multipartFilter` 설정 추가\n"
+                            "3. JSON `Content-Type` 요청 처리 여부 확인 및 보완"
+                        )
+                    else:
+                        rec = (
+                            "전역 XSS 필터 적용 강화:\n"
+                            "1. Lucy XSS Filter 또는 OWASP AntiSamy 전역 적용\n"
+                            "2. 모든 Content-Type 요청 커버 여부 확인\n"
+                            "3. 소비자 측 출력 인코딩 병행 적용"
+                        )
             else:  # 수동확인필요
                 subcategory = "Reflected XSS"
                 llm_note = _xss_llm_note("수동확인필요")
@@ -1347,7 +1370,12 @@ def generate_stats_matrix(all_findings: dict[str, list[Finding]],
         cat_summary = scan_summaries.get(cat_id, {})
 
         # 진단 대상 수: endpoint 전수 스캔 task만 표시
+        # _inscope 파일(스코프 지정 진단)에는 filtered_endpoint_count가 우선 사용됨
         total_ep = cat_summary.get("total_endpoints")
+        _sm = cat_summary.get("_scan_metadata", {})
+        _filtered_ep = _sm.get("filtered_endpoint_count")
+        if _filtered_ep is not None:
+            total_ep = _filtered_ep
         target_str = f"{total_ep:,} EP" if total_ep else "-"
 
         # subtype별 카운터 초기화 (중복 제거)
@@ -2174,15 +2202,25 @@ def generate_report(
                 continue
             sqli_rev = sp_data.get("sqli_endpoint_review", {})
             if sqli_rev and sqli_rev.get("overall_sqli_judgment") == "양호":
-                auto_sqli = scan_summaries.get("injection", {}).get("sqli", {})
-                # endpoint_summary.정보 값이 있으면 사용 (LLM 최종 잔여 정보 건수)
                 ep_sum = sp_data.get("endpoint_summary", {})
-                llm_info_count = ep_sum.get("정보", 0) if isinstance(ep_sum, dict) else 0
-                llm_matrix_overrides[("injection", "SQL 인젝션")] = {
-                    "safe": auto_sqli.get("양호", 0) + auto_sqli.get("정보", 0) - llm_info_count,
-                    "info": llm_info_count,
-                    "vuln": auto_sqli.get("취약", 0),
-                }
+                _ep_total = ep_sum.get("총", 0) or ep_sum.get("total", 0) if isinstance(ep_sum, dict) else 0
+                if _ep_total > 0:
+                    # LLM endpoint_summary에 in-scope 총 건수가 있으면 직접 사용
+                    # (스코프 지정 진단 시 full-repo 집계 대신 실제 진단 대상 수 반영)
+                    llm_matrix_overrides[("injection", "SQL 인젝션")] = {
+                        "safe": ep_sum.get("양호", 0),
+                        "info": ep_sum.get("정보", 0),
+                        "vuln": ep_sum.get("취약", 0),
+                    }
+                else:
+                    # Fallback: full-repo auto-scan summary 기반 계산
+                    auto_sqli = scan_summaries.get("injection", {}).get("sqli", {})
+                    llm_info_count = ep_sum.get("정보", 0) if isinstance(ep_sum, dict) else 0
+                    llm_matrix_overrides[("injection", "SQL 인젝션")] = {
+                        "safe": auto_sqli.get("양호", 0) + auto_sqli.get("정보", 0) - llm_info_count,
+                        "info": llm_info_count,
+                        "vuln": auto_sqli.get("취약", 0),
+                    }
             gfa = sp_data.get("global_findings_analysis", {})
             os_entries = gfa.get("os_command", []) if isinstance(gfa.get("os_command"), list) else []
             if os_entries:
@@ -2217,11 +2255,20 @@ def generate_report(
                                 "vuln": _confirmed,
                             }
                         elif judgment == "양호":
-                            # LLM이 잠재위협 전체를 양호로 확인 → 취약 → 양호로 이동
-                            llm_matrix_overrides[("xss", "Persistent XSS")] = {
-                                "safe": pt.get("양호", 0) + pt.get("해당없음", 0) + pt.get("취약", 0),
-                                "info": pt.get("정보", 0),
-                                "vuln": 0,
+                            # LLM이 잠재위협 전체를 양호로 확인 → 정보/취약 → 양호로 이동
+                            # 스코프 지정 시: filtered_endpoint_count 있으면 in-scope 전체를 safe으로
+                            _xss_filtered = auto_xss_sum.get("_scan_metadata", {}).get("filtered_endpoint_count")
+                            if _xss_filtered:
+                                llm_matrix_overrides[("xss", "Persistent XSS")] = {
+                                    "safe": _xss_filtered,
+                                    "info": 0,
+                                    "vuln": 0,
+                                }
+                            else:
+                                llm_matrix_overrides[("xss", "Persistent XSS")] = {
+                                    "safe": pt.get("양호", 0) + pt.get("해당없음", 0) + pt.get("취약", 0) + pt.get("정보", 0),
+                                    "info": 0,
+                                    "vuln": 0,
                             }
                         elif judgment == "정보":
                             # LLM이 취약 → 정보(Entry Point 경고)로 재판정 → 취약 건수를 정보로 이동
@@ -2256,6 +2303,18 @@ def generate_report(
                                 "info": sum(1 for e in eps if e.get("result") == "정보"),
                                 "vuln": sum(1 for e in eps if e.get("result") == "취약") + pt.get("취약", 0),
                             }
+                # 스코프 지정 진단 + 전체 양호 판정 시:
+                # LLM 그룹 override가 없는 XSS 서브타입도 in-scope 전체 기준으로 보완
+                # (수동확인필요 그룹 없음 = 모든 in-scope EP의 해당 XSS 유형 양호)
+                _xss_filtered_total = auto_xss_sum.get("_scan_metadata", {}).get("filtered_endpoint_count")
+                if xss_rev.get("overall_xss_info_judgment") == "양호" and _xss_filtered_total:
+                    for _xss_subtype in ("Reflected XSS", "Open Redirect"):
+                        if ("xss", _xss_subtype) not in llm_matrix_overrides:
+                            llm_matrix_overrides[("xss", _xss_subtype)] = {
+                                "safe": _xss_filtered_total,
+                                "info": 0,
+                                "vuln": 0,
+                            }
             # DOM XSS: LLM 검토 결과 모두 양호(FP)이면 auto-scan 카운트를 safe으로 override
             dom_llm = [f for f in sp_data.get("findings", [])
                        if "dom" in f.get("category", "").lower()]
@@ -2274,7 +2333,7 @@ def generate_report(
                         "info": 0,
                         "vuln": 0,
                     }
-            # SSI/SSTI: LLM가 전체 FP 확정(result=양호) 시 → safe=1
+            # SSI/SSTI: LLM가 전체 FP/out-of-scope 확정 시 → safe=1
             ssi_related = [f for f in sp_data.get("findings", [])
                            if any(k in f.get("category", "").lower()
                                   for k in ("ssi", "ssti", "spel", "server-side"))]
@@ -2284,6 +2343,15 @@ def generate_report(
                     llm_matrix_overrides[("injection", "SSI/SSTI 인젝션")] = {
                         "safe": 1, "info": 0, "vuln": 0,
                     }
+            # global_findings_analysis.ssi가 out-of-scope로 확정된 경우도 safe override
+            gfa_ssi = sp_data.get("global_findings_analysis", {}).get("ssi", [])
+            if (isinstance(gfa_ssi, list) and gfa_ssi
+                    and all("out-of-scope" in str(s.get("result", "")).lower()
+                            or s.get("result") == "양호" for s in gfa_ssi)
+                    and ("injection", "SSI/SSTI 인젝션") not in llm_matrix_overrides):
+                llm_matrix_overrides[("injection", "SSI/SSTI 인젝션")] = {
+                    "safe": 1, "info": 0, "vuln": 0,
+                }
             # 데이터보호 assessment 기반 카테고리별 양호 override
             dp_assessment = sp_data.get("data_protection_assessment", {})
             if dp_assessment:

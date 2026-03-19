@@ -1,0 +1,77 @@
+rules:
+  # Rule 1: RedisTemplate Bean without explicit serializer — JDK deserialization 기본 적용
+  # Spring RedisTemplate의 기본 직렬화는 JdkSerializationRedisSerializer로,
+  # Redis에 악의적인 직렬화 데이터 주입 시 RCE가 가능합니다.
+  - id: redis-template-missing-serializer
+    patterns:
+      - pattern: |
+          @Bean
+          public RedisTemplate<$K, $V> $METHOD(...) {
+            RedisTemplate<$K, $V> $T = new RedisTemplate<>();
+            $T.setConnectionFactory($FACTORY);
+            ...
+            return $T;
+          }
+      - pattern-not: |
+          @Bean
+          public RedisTemplate<$K, $V> $METHOD(...) {
+            RedisTemplate<$K, $V> $T = new RedisTemplate<>();
+            ...
+            $T.setDefaultSerializer(...);
+            ...
+            return $T;
+          }
+      - pattern-not: |
+          @Bean
+          public RedisTemplate<$K, $V> $METHOD(...) {
+            RedisTemplate<$K, $V> $T = new RedisTemplate<>();
+            ...
+            $T.setValueSerializer(...);
+            ...
+            return $T;
+          }
+    message: >
+      RedisTemplate Bean에 직렬화 설정이 없습니다.
+      기본값인 JdkSerializationRedisSerializer가 적용되어
+      Redis에 악의적인 직렬화 데이터 주입 시 역직렬화 RCE(Remote Code Execution)가 가능합니다.
+      GenericJackson2JsonRedisSerializer 또는 Jackson2JsonRedisSerializer를 명시적으로 설정하세요:
+        redisTemplate.setDefaultSerializer(new GenericJackson2JsonRedisSerializer());
+    languages: [java]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: CWE-502
+      owasp: A08:2021 Software and Data Integrity Failures
+      feedback_tp: TP-04
+      source: ssc_feedback_ruleset
+
+  # Rule 2: StringRedisTemplate은 StringRedisSerializer 고정이므로 제외,
+  #         그러나 ReactiveRedisTemplate도 동일 위험 → 추가 탐지
+  - id: reactive-redis-template-missing-serializer
+    patterns:
+      - pattern: |
+          @Bean
+          public ReactiveRedisTemplate<$K, $V> $METHOD(...) {
+            ReactiveRedisTemplate<$K, $V> $T = new ReactiveRedisTemplate<>(...);
+            ...
+            return $T;
+          }
+      - pattern-not: |
+          @Bean
+          public ReactiveRedisTemplate<$K, $V> $METHOD(...) {
+            ...
+            RedisSerializationContext<...> $CTX = ...;
+            ...
+          }
+    message: >
+      ReactiveRedisTemplate에 직렬화 컨텍스트(RedisSerializationContext)가 설정되지 않았습니다.
+      기본 JDK 직렬화 적용 → 역직렬화 RCE 위험.
+      RedisSerializationContext.fromSerializer(new GenericJackson2JsonRedisSerializer())로 설정하세요.
+    languages: [java]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: CWE-502
+      owasp: A08:2021 Software and Data Integrity Failures
+      feedback_tp: TP-04
+      source: ssc_feedback_ruleset

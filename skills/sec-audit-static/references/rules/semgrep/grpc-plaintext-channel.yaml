@@ -1,0 +1,67 @@
+rules:
+  # Rule 1: gRPC ManagedChannelBuilder.usePlaintext() — TLS 비활성화
+  # ──────────────────────────────────────────────────────────────────────────
+  # MSA / 서비스 메시 컨텍스트 주의사항
+  #
+  # Kubernetes + Istio / Linkerd 등 서비스 메시 환경에서는 애플리케이션 레벨의
+  # usePlaintext()가 정상 아키텍처일 수 있습니다 (sidecar proxy가 mTLS 담당).
+  # 따라서 이 룰의 severity는 INFO(정보/잠재적 위협)로 설정하며,
+  # LLM 판정 시 반드시 인프라 아키텍처를 확인한 뒤 최종 판정하십시오.
+  #
+  # 최종 판정 기준:
+  #   취약: 서비스 메시 없는 환경, 또는 클러스터 외부 서비스 통신
+  #   정보: 서비스 메시(Istio/Linkerd) 확인 요망 — 인프라팀 협의 필요
+  #   양호(FP): localhost/127.0.0.1 전용 테스트 코드, 또는 서비스 메시 mTLS 확인됨
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: grpc-managed-channel-plaintext
+    pattern-either:
+      - pattern: ManagedChannelBuilder.forAddress(...).usePlaintext()
+      - pattern: ManagedChannelBuilder.forTarget(...).usePlaintext()
+      - patterns:
+          - pattern: $BUILDER.usePlaintext()
+          - pattern-inside: |
+              ManagedChannelBuilder.$METHOD(...);
+              ...
+    message: >
+      [잠재적 위협] gRPC ManagedChannel에 usePlaintext()가 설정되어 TLS가 비활성화되어
+      있습니다. 평문 gRPC 통신은 내부망 스니핑 시 데이터 노출 위험이 있습니다.
+
+      ⚠️  MSA/Kubernetes 환경 확인 필수:
+      - Istio, Linkerd 등 서비스 메시가 mTLS를 담당하는 경우 → 애플리케이션 레벨 FP (양호)
+      - 서비스 메시 없는 환경, 또는 클러스터 외부 서비스 통신 → 취약
+      - localhost/127.0.0.1 전용 → 양호(FP)
+
+      인프라 아키텍처 확인 전까지는 "정보/검토필요"로 분류하십시오.
+    languages: [java]
+    severity: INFO
+    metadata:
+      category: security
+      cwe: CWE-319
+      owasp: A02:2021 Cryptographic Failures
+      confidence: LOW
+      msa_fp_risk: HIGH
+      triage_note: >
+        서비스 메시(Istio/Linkerd) 사용 여부를 인프라팀에 확인하거나
+        k8s manifest/helm chart에서 istio.io/inject 어노테이션 유무 확인.
+      feedback_tp: TP-03
+      source: ssc_feedback_ruleset
+
+  # Kotlin
+  - id: grpc-managed-channel-plaintext-kotlin
+    pattern-either:
+      - pattern: ManagedChannelBuilder.forAddress(...).usePlaintext()
+      - pattern: ManagedChannelBuilder.forTarget(...).usePlaintext()
+    message: >
+      [잠재적 위협] gRPC 채널에 usePlaintext()가 설정되어 TLS가 비활성화되어 있습니다.
+      서비스 메시(Istio 등)의 mTLS 담당 여부를 인프라 아키텍처에서 확인하세요.
+      확인 전까지 "정보/검토필요"로 분류.
+    languages: [kotlin]
+    severity: INFO
+    metadata:
+      category: security
+      cwe: CWE-319
+      owasp: A02:2021 Cryptographic Failures
+      confidence: LOW
+      msa_fp_risk: HIGH
+      feedback_tp: TP-03
+      source: ssc_feedback_ruleset

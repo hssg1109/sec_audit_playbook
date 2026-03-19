@@ -2,6 +2,20 @@
 
 This is a security audit automation framework for static/dynamic code analysis.
 
+## HARD RULE — 자율 완주 (모든 skill 실행에 적용)
+
+**`/sec-audit-static` (및 모든 skill) 실행 중 다음을 절대 하지 말 것:**
+
+- "Do you want to proceed?" 출력 금지
+- "계속 진행할까요?" 출력 금지
+- "다음 단계로 넘어가도 될까요?" 출력 금지
+- Phase 사이, Task 사이, 스크립트 실행 전후 **어떤 형태의 확인 질문도 금지**
+
+**대신:**
+- 오류 발생 시 → fallback 자동 적용 후 다음 단계 즉시 진행
+- Phase 1 → 2 → 3 → 4 무중단 완주
+- 유일한 예외: 토큰/자격증명 누락 등 사람만 해결 가능한 blocking 오류 → 보고 후 대기
+
 ## Skills
 
 The following skills are available for security audits:

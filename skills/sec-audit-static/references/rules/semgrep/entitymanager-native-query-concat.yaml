@@ -1,0 +1,188 @@
+rules:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # EntityManager.createNativeQuery() 동적 SQL 탐지 — 통합 룰셋 v2
+  #
+  # 탐지 전략: createNativeQuery()에 전달되는 인자가 동적으로 조립되는
+  # 모든 AST 패턴을 6개 카테고리로 포괄.
+  # resultClass 인자를 받는 2-인자 오버로드(createNativeQuery(sql, Class))도 각 룰에 포함.
+  #
+  # confidence 레벨:
+  #   HIGH   — 탐지 자체가 취약 패턴을 직접 의미 (String.format 등)
+  #   MEDIUM — 변수 흐름 추적 필요, LLM 2차 검증 권장
+  #   LOW    — 메서드 반환값 경유, 내부 구현 확인 필수
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 카테고리 1: 인라인 + 연산자 (가장 광범위)
+  #
+  # Semgrep은 `$A + $B` 를 이진 덧셈 AST 노드로 매칭하므로,
+  # `(a + b + c) + d` 형태의 n항 결합도 바깥 노드를 포착함.
+  # 따라서 단일 패턴으로 임의 깊이의 + 연산자 체인을 포괄.
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: entitymanager-nativequery-inline-concat
+    pattern-either:
+      - pattern: $EM.createNativeQuery($A + $B)
+      - pattern: $EM.createNativeQuery($A + $B, $CLASS)
+    message: >
+      [SQL Injection] EntityManager.createNativeQuery() 인자에 + 연산자를 통한 문자열
+      결합이 직접 사용됩니다. 결합 변수($A 또는 $B)가 @RequestParam / @RequestBody 등
+      외부 입력에서 유래하는 경우 SQL Injection이 가능합니다.
+      JPA Named Parameter (:param + setParameter())로 교체하세요.
+    languages: [java]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: CWE-89
+      owasp: A03:2021 Injection
+      confidence: MEDIUM
+      note: >
+        두 리터럴만 결합하는 경우("a" + "b")는 FP. Semgrep taint 모드 미지원 시
+        LLM이 결합 변수 출처를 반드시 추적 확인.
+      feedback_tp: TP-01
+      source: ssc_feedback_ruleset
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 카테고리 2: String.format / String.join 경유
+  #
+  # String.format("DELETE FROM %s WHERE id='%s'", table, id)
+  # String.join(" ", "SELECT", col, "FROM", table)
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: entitymanager-nativequery-string-format
+    pattern-either:
+      - pattern: $EM.createNativeQuery(String.format($FMT, ...))
+      - pattern: $EM.createNativeQuery(String.format($FMT, ...), $CLASS)
+      - pattern: $EM.createNativeQuery(String.join($SEP, ...))
+      - pattern: $EM.createNativeQuery(String.join($SEP, ...), $CLASS)
+    message: >
+      [SQL Injection] createNativeQuery()에 String.format() 또는 String.join()으로
+      조립된 SQL이 전달됩니다. 포맷 인자가 외부 입력인 경우 SQL Injection이 가능합니다.
+      setParameter(:param)으로 교체하세요.
+    languages: [java]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: CWE-89
+      owasp: A03:2021 Injection
+      confidence: HIGH
+      feedback_tp: TP-01
+      source: ssc_feedback_ruleset
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 카테고리 3: 로컬 변수 경유 — 선언 시 + 결합 초기화
+  #
+  # String query = "DELETE FROM " + tableName + " WHERE mbr_id='" + mbrId + "'";
+  # ...
+  # entityManager.createNativeQuery(query).executeUpdate();
+  #
+  # pattern-inside는 "변수가 + 결합으로 초기화된 블록 안"으로 스코프를 좁힘.
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: entitymanager-nativequery-variable-init-concat
+    patterns:
+      - pattern-inside: |
+          String $QUERY = $A + $B;
+          ...
+      - pattern-either:
+          - pattern: $EM.createNativeQuery($QUERY)
+          - pattern: $EM.createNativeQuery($QUERY, $CLASS)
+    message: >
+      [SQL Injection] + 결합으로 초기화된 String 변수($QUERY)가 createNativeQuery()에
+      전달됩니다. 결합 구성 요소($A, $B)가 외부 입력에서 유래하는지 확인하세요.
+    languages: [java]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: CWE-89
+      owasp: A03:2021 Injection
+      confidence: MEDIUM
+      feedback_tp: TP-01
+      source: ssc_feedback_ruleset
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 카테고리 4: 로컬 변수 경유 — += 누적 패턴
+  #
+  # String query = "SELECT * FROM ";
+  # query += tableName;           ← 동적 누적
+  # query += " WHERE mbr_id='" + mbrId + "'";
+  # entityManager.createNativeQuery(query).executeUpdate();
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: entitymanager-nativequery-variable-plus-assign
+    patterns:
+      - pattern-inside: |
+          $QUERY += $PART;
+          ...
+      - pattern-either:
+          - pattern: $EM.createNativeQuery($QUERY)
+          - pattern: $EM.createNativeQuery($QUERY, $CLASS)
+    message: >
+      [SQL Injection] += 로 동적 누적 조립된 String 변수($QUERY)가 createNativeQuery()에
+      전달됩니다. 누적된 값($PART)이 외부 입력에서 유래하는지 확인하세요.
+    languages: [java]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: CWE-89
+      owasp: A03:2021 Injection
+      confidence: MEDIUM
+      feedback_tp: TP-01
+      source: ssc_feedback_ruleset
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 카테고리 5: StringBuilder / StringBuffer 경유
+  #
+  # StringBuilder sb = new StringBuilder("DELETE FROM ");
+  # sb.append(tableName);
+  # sb.append(" WHERE mbr_id='").append(mbrId).append("'");
+  # entityManager.createNativeQuery(sb.toString()).executeUpdate();
+  #
+  # pattern-inside로 append() 가 최소 한 번 호출된 스코프를 확보한 뒤
+  # sb.toString()을 인자로 하는 createNativeQuery를 탐지.
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: entitymanager-nativequery-stringbuilder
+    patterns:
+      - pattern-inside: |
+          $SB.append($X);
+          ...
+      - pattern-either:
+          - pattern: $EM.createNativeQuery($SB.toString())
+          - pattern: $EM.createNativeQuery($SB.toString(), $CLASS)
+    message: >
+      [SQL Injection] StringBuilder/StringBuffer로 조립된 SQL이 createNativeQuery()에
+      전달됩니다. append()된 값($X)이 외부 입력이면 SQL Injection이 가능합니다.
+      setParameter(:param)으로 교체하세요.
+    languages: [java]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: CWE-89
+      owasp: A03:2021 Injection
+      confidence: MEDIUM
+      feedback_tp: TP-01
+      source: ssc_feedback_ruleset
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 카테고리 6: helper 메서드 반환값 경유 (낮은 신뢰도 — 검토 트리거)
+  #
+  # entityManager.createNativeQuery(buildDeleteQuery(tableName, mbrId))
+  # → buildDeleteQuery() 내부에서 동적 조립 여부를 LLM이 추적해야 함.
+  #
+  # pattern-not으로 상수/리터럴 단독 전달 제외.
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: entitymanager-nativequery-helper-method
+    patterns:
+      - pattern: $EM.createNativeQuery($METHOD($PARAM, ...))
+      - pattern-not: $EM.createNativeQuery($LITERAL_ONLY)
+      - pattern-not: $EM.createNativeQuery($NAMED_PARAM_QUERY)
+    message: >
+      [검토필요] createNativeQuery()에 메서드 반환값이 직접 전달됩니다.
+      $METHOD() 내부에서 동적 SQL 문자열을 조립하는지 확인하세요.
+      내부에서 + 결합 / String.format / StringBuilder 사용 시 취약.
+    languages: [java]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: CWE-89
+      owasp: A03:2021 Injection
+      confidence: LOW
+      note: FP 가능성 높음. LLM이 $METHOD 구현체를 반드시 Read하여 동적 조립 여부 확인.
+      feedback_tp: TP-01
+      source: ssc_feedback_ruleset

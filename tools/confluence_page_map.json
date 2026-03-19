@@ -1,7 +1,7 @@
 {
   "version": "3.0",
   "prefix": "",
-  "next_test_number": 33,
+  "next_test_number": 35,
   "root_page": {
     "source": "README.md",
     "type": "doc"
@@ -1234,6 +1234,75 @@
             }
           ],
           "page_id": 741061398
+        },
+        {
+          "title": "테스트33 - OCBWEBVIEW ocb-webview-api Fortify SSC 정합성 검증 (2026-03-19)",
+          "entries": [
+            {
+              "source": "state/ocbwebview_api_ssc_report.md",
+              "title": "Fortify SSC 정합성 검증 보고서",
+              "type": "doc"
+            }
+          ]
+        },
+        {
+          "title": "테스트34 - OCB Community API (오글) 정적 진단",
+          "page_id": 741063757,
+          "entries": [
+            {
+              "source": "state/ocbwebview_community_진단보고서.md",
+              "title": "테스트34 - OCB Community API (오글) 통합 진단 보고서",
+              "type": "main_report",
+              "page_id": 741063762,
+              "task_sources": {
+                "api": "state/ocbwebview_community_api_inventory.json",
+                "injection": "state/ocbwebview_community_injection.json",
+                "xss": "state/ocbwebview_community_xss.json",
+                "file_handling": "state/ocbwebview_community_task24.json",
+                "data_protection": "state/ocbwebview_community_task25.json"
+              }
+            },
+            {
+              "source": "state/ocbwebview_community_api_inventory.json",
+              "title": "테스트34 - API 인벤토리 (OCB Community API 오글)",
+              "type": "api_inventory",
+              "page_id": 741063763
+            },
+            {
+              "source": "state/ocbwebview_community_injection.json",
+              "supplemental_sources": ["state/ocbwebview_community_task22_llm.json"],
+              "title": "테스트34 - 인젝션 취약점 진단 결과 (OCB Community API)",
+              "type": "finding",
+              "page_id": 741063764
+            },
+            {
+              "source": "state/ocbwebview_community_xss.json",
+              "supplemental_sources": ["state/ocbwebview_community_task23_llm.json"],
+              "title": "테스트34 - XSS 취약점 진단 결과 (OCB Community API)",
+              "type": "finding",
+              "page_id": 741063765
+            },
+            {
+              "source": "state/ocbwebview_community_task24.json",
+              "supplemental_sources": ["state/ocbwebview_community_task24_llm.json"],
+              "title": "테스트34 - 파일 처리 진단 결과 (OCB Community API)",
+              "type": "finding",
+              "page_id": 741063766
+            },
+            {
+              "source": "state/ocbwebview_community_task25.json",
+              "supplemental_sources": ["state/ocbwebview_community_task25_llm.json"],
+              "title": "테스트34 - 데이터 보호 진단 결과 (OCB Community API)",
+              "type": "finding",
+              "page_id": 741063767
+            },
+            {
+              "source": "state/ocbwebview_community_sca.json",
+              "title": "테스트34 - SCA (오픈소스 취약점) 진단 결과 (OCB Community API)",
+              "type": "sca",
+              "page_id": 741063768
+            }
+          ]
         }
       ],
       "entries": []

@@ -43,6 +43,16 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
 - `references/task_prompts/task_24_file_handling.md` - 파일 처리 검토 (Upload/Download/LFI/RFI)
 - `references/task_prompts/task_25_data_protection.md` - 데이터 보호 검토 (CORS/Secrets/Admin/JWT)
 
+### 실행 원칙 (CRITICAL — 반드시 준수)
+
+> **자율 완주 (Autonomous Execution)**: `/sec-audit-static` 실행 중에는
+> "do you want to proceed?", "계속할까요?", "다음 단계로 진행할까요?" 등
+> **어떠한 확인 질문도 하지 않는다.**
+>
+> - Phase 1 → Phase 2 → Phase 3 → Phase 4 전 구간을 중단 없이 진행한다.
+> - 스크립트 실패·빌드 오류·파일 없음 등 예상 범위 내 오류는 fallback을 자동 적용하고 계속 진행한다.
+> - 예외: 토큰/자격증명 누락처럼 사람만 해결할 수 있는 blocking 오류 발생 시에만 보고 후 대기한다.
+
 ### Step 3: Execute tasks
 
 **Phase 1**: Asset identification (task 1-1).
@@ -83,6 +93,15 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
 - Publish: `tools/scripts/publish_confluence.py` (필수 — dry-run 확인 후 실행)
   - `confluence_page_map.json`에 해당 진단 항목이 등록되어 있어야 함
   - `workflow.md` Phase 4 참조: main_report / api_inventory / finding / supplemental 구조
+
+**Phase 5** (선택): SSC 정합성 검증 — Fortify SSC High/Critical findings를 소스코드와 교차검증 후 별도 보고서 생성.
+- `references/ssc_verification.md` 전체 절차 참조.
+- Step 5-0: **브랜치/커밋 일치 검증** (필수) — `--testbed` 옵션으로 SSC 스캔 버전 vs testbed 소스 일치 확인
+- Step 5-1: `tools/scripts/fetch_ssc.py --project <name> --testbed <path> -o state/<prefix>_ssc_findings.json`
+- Step 5-2: LLM이 각 finding의 소스코드 위치를 직접 확인 → TP/FP/검토필요 판정
+- Step 5-3: 검증 결과 → `state/<prefix>_ssc_report.md` 생성
+- Step 5-4: SSC TP → SAST 피드백 환류 — 미탐 원인 분석 + Semgrep 룰 / task prompt 개선 적용 (`references/ssc_feedback_ruleset.md`)
+- 기존 Phase 1~4와 독립 실행 가능 (testbed 소스코드만 있으면 됨)
 
 ### Step 4: Output validation
 - Every task output **must** include `metadata.source_repo_url`, `metadata.source_repo_path`, `metadata.source_modules`.
@@ -132,6 +151,8 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
 - `references/verification_policy.md` - Commit-specific remediation
 - `references/rule_validation.md` - Post-rule validation
 - `references/secret_scanning.md` - Gitleaks secret detection
+- `references/ssc_verification.md` - SSC High/Critical findings 정합성 검증 (Phase 5)
+- `references/ssc_feedback_ruleset.md` - SSC TP → SAST 피드백 룰셋 (미탐 분석 + 개선 액션 누적)
 
 ### rules/
 - `references/rules/semgrep/kotlin-sql-string-template.yaml`

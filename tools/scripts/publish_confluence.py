@@ -535,6 +535,7 @@ def md_to_xhtml(md_text):
     xhtml = _postprocess_escape_foreign_ns(xhtml)
     xhtml = _postprocess_escape_unknown_tags(xhtml)
     xhtml = _postprocess_anchor_links(xhtml)
+    xhtml = _postprocess_severity_in_tables(xhtml)  # 심각도 키워드 → 컬러 배지
     return xhtml
 
 # ---------------------------------------------------------------------------
@@ -604,10 +605,18 @@ def _code_macro(code_text: str, lang: str = "text", theme: str = _CODE_THEME) ->
 
 
 def _severity_badge(severity):
-    """Return Confluence status macro for severity level."""
+    """Return Confluence status macro for severity level.
+
+    Colour mapping:
+      Critical → Red     (즉시 조치)
+      High     → Yellow  (Confluence에 Orange 없음 — Yellow가 amber/주황으로 렌더링)
+      Medium   → Yellow
+      Low      → Blue
+      Info     → Grey
+    """
     color_map = {
         "Critical": "Red",
-        "High": "Red",
+        "High": "Yellow",
         "Medium": "Yellow",
         "Low": "Blue",
         "Info": "Grey",
@@ -619,6 +628,28 @@ def _severity_badge(severity):
         f'<ac:parameter ac:name="title">{html_escape(severity)}</ac:parameter>'
         f'</ac:structured-macro>'
     )
+
+
+def _postprocess_severity_in_tables(xhtml: str) -> str:
+    """Markdown 테이블 셀의 심각도 키워드를 Confluence 상태 배지(컬러)로 자동 변환.
+
+    대상 키워드: Critical, High, Medium, Low, Info (대소문자 무관)
+    패턴: <td>Critical</td> → <td><ac:structured-macro ...Red...Critical.../></td>
+
+    Fortify SSC 보고서 표준 양식 — 향후 모든 doc 타입 페이지에 자동 적용.
+    """
+    _SEV_RE = re.compile(
+        r'<td>\s*(Critical|High|Medium|Low|Info)\s*</td>',
+        re.IGNORECASE,
+    )
+
+    def _repl(m):
+        raw = m.group(1)
+        # 원본 표기 보존, badge 함수는 정규 casing을 사용
+        canon = raw.capitalize()
+        return f'<td>{_severity_badge(canon)}</td>'
+
+    return _SEV_RE.sub(_repl, xhtml)
 
 
 def _table(headers, rows):

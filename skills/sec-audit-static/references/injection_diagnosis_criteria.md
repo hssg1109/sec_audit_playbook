@@ -18,7 +18,33 @@ Framework/ORM별 SQL Injection 진단 기준. scan_injection_enhanced.py (v3.1+)
 | `@Query("... :param ...")` | 양호 | Named parameter 바인딩 |
 | `@Query("... " + param + " ...")` | 취약 | 문자열 연결 |
 | `Specification` / `Criteria API` | 양호 | 타입 안전 쿼리 빌더 |
-| `EntityManager.createNativeQuery(str)` | 검토 | 동적 SQL 여부 확인 필요 |
+| `EntityManager.createNativeQuery(str)` | **검토 → 반드시 추적** | 동적 SQL 여부 확인 필요 — 아래 상세 기준 참조 |
+| `EntityManager.createNativeQuery("..." + var + "...")` | **취약** | 문자열 결합 직접 확인 → 즉시 취약 판정 |
+| `EntityManager.createNativeQuery(String.format(...))` | **취약** | 포맷 인자가 외부 입력인 경우 |
+| `EntityManager.createQuery("... :param ...")` + `setParameter` | 양호 | Named parameter 바인딩 |
+
+#### EntityManager.createNativeQuery() 심층 탐지 절차 (SSC TP-01 피드백)
+
+`@Query(nativeQuery=true)` 어노테이션 스캐너가 잡지 못하는 **메서드 바디 동적 SQL 패턴**을 별도 확인한다.
+
+```bash
+# Step 1: createNativeQuery 직접 호출 전체 탐지
+grep -rn "createNativeQuery" <src> | grep -v "@Query"
+
+# Step 2: 해당 라인 ±30줄 Read → SQL 문자열 구성 방식 확인
+#   - 변수로 구성 후 전달? → 해당 변수의 구성 코드 추적
+#   - "..." + var + "..." 패턴? → 즉시 취약 판정
+
+# Step 3: 해당 메서드의 호출 경로 추적 (멀티홉 테인트)
+grep -rn "<메서드명>" <src>
+#   → Controller에서 requestBody/requestParam 값을 파라미터로 전달하면 취약
+#   → 내부 하드코딩 상수만 전달하면 tableName 취약 아님 (단, mbrId 등 동반 파라미터 추가 확인)
+```
+
+**판정 기준**:
+- SQL 문자열에 `+` 결합 / `String.format` / `StringBuilder.append`가 있고, 그 값이 Controller 파라미터에서 유래 → **취약**
+- tableName만 하드코딩이고 모든 조건 파라미터가 `:param`으로 바인딩 → **양호**
+- tableName 하드코딩 + 조건 파라미터도 문자열 결합 → **취약** (mbrId 등 결합 파라미터 확인)
 
 ## 3. JDBC / NamedParameterJdbcTemplate
 

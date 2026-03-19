@@ -21,6 +21,9 @@ import re
 import sys
 import argparse
 import functools
+import subprocess
+import shutil
+import tempfile
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -71,6 +74,227 @@ _KT_KEYWORDS: frozenset = frozenset({
     'true', 'false', 'class', 'object', 'companion', 'by', 'and',
     'or', 'not',
 })
+
+# ============================================================
+#  0-B. Joern 연동 (선택적 — --jar 옵션 제공 시만 활성화)
+# ============================================================
+
+_JOERN_SCRIPT = Path(__file__).parent / "joern_sqli_taint.sc"
+
+# MyBatis 안전 바인딩 패턴: Joern sink 탐지 결과에서 false-positive 필터링용
+_MYBATIS_SAFE_BIND_RE = re.compile(r'#\{')
+
+
+def _check_joern_available(joern_home: Optional[Path]) -> Optional[Path]:
+    """joern 실행 파일 경로를 반환한다. 없으면 None."""
+    candidates = []
+    if joern_home:
+        candidates.append(joern_home / "joern")
+        candidates.append(joern_home / "bin" / "joern")
+    # PATH에서도 탐색
+    found = shutil.which("joern")
+    if found:
+        candidates.append(Path(found))
+    for c in candidates:
+        if c.exists() and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def _find_joern_parse(joern_home: Optional[Path]) -> Optional[Path]:
+    """joern-parse 실행 파일 경로를 반환한다."""
+    candidates = []
+    if joern_home:
+        candidates.append(joern_home / "joern-parse")
+        candidates.append(joern_home / "bin" / "joern-parse")
+    found = shutil.which("joern-parse")
+    if found:
+        candidates.append(Path(found))
+    for c in candidates:
+        if c.exists() and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def run_joern_taint_analysis(
+    jar_path: Path,
+    source_dir: Path,
+    joern_home: Optional[Path],
+    state_dir: Path = Path("state"),
+) -> dict:
+    """Joern CPG 기반 SQLi taint 분석을 실행한다.
+
+    Returns:
+        {
+          "available": bool,          # Joern 설치 여부
+          "analyzed": bool,           # 분석 실행 여부
+          "jar_path": str,
+          "flows": [                  # taint flow 목록
+              {
+                "source_method": str,
+                "source_class": str,
+                "source_file": str,
+                "source_line": int,
+                "sink_method": str,
+                "sink_class": str,
+                "sink_file": str,
+                "sink_line": int,
+                "flow_repr": str,
+              }
+          ],
+          "error": str | None,
+        }
+    """
+    base = {"available": False, "analyzed": False, "jar_path": str(jar_path),
+            "flows": [], "error": None}
+
+    joern_bin = _check_joern_available(joern_home)
+    if not joern_bin:
+        base["error"] = "joern 실행 파일을 찾을 수 없습니다. --joern-home 또는 PATH를 확인하세요."
+        return base
+    base["available"] = True
+
+    if not _JOERN_SCRIPT.exists():
+        base["error"] = f"Joern 스크립트를 찾을 수 없습니다: {_JOERN_SCRIPT}"
+        return base
+
+    # ── 작업 디렉토리 (임시) ──────────────────────────────────────
+    with tempfile.TemporaryDirectory(prefix="joern_cpg_") as tmpdir:
+        tmp = Path(tmpdir)
+        cpg_bin = tmp / "cpg.bin"
+        taint_out = state_dir / "joern_sqli_taint.json"
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. CPG 생성 (joern-parse)
+        joern_parse = _find_joern_parse(joern_home)
+        if joern_parse:
+            print("  [Joern] CPG 생성 중 (joern-parse)...")
+            try:
+                parse_proc = subprocess.run(
+                    [str(joern_parse), str(jar_path), "-o", str(cpg_bin)],
+                    capture_output=True, text=True, timeout=300,
+                )
+                if parse_proc.returncode != 0:
+                    base["error"] = f"joern-parse 실패: {parse_proc.stderr[:300]}"
+                    return base
+            except subprocess.TimeoutExpired:
+                base["error"] = "joern-parse 타임아웃 (300초)"
+                return base
+        else:
+            # joern-parse 없이 소스 디렉토리로 직접 분석 (느리지만 가능)
+            cpg_bin = None
+            print("  [Joern] joern-parse 없음 — 소스 디렉토리 직접 분석 시도")
+
+        # 2. Joern 스크립트 실행
+        print(f"  [Joern] taint 분석 실행 중... 출력: {taint_out}")
+        try:
+            script_params = f"out={taint_out}"
+            cmd = [str(joern_bin), "--script", str(_JOERN_SCRIPT),
+                   "--params", script_params]
+            if cpg_bin and cpg_bin.exists():
+                cmd += ["--import", str(cpg_bin)]
+            else:
+                # 소스 디렉토리 import
+                cmd += ["--import", str(jar_path)]
+
+            joern_proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=600,
+                cwd=str(source_dir),
+            )
+            if joern_proc.returncode != 0:
+                base["error"] = f"joern 스크립트 실패: {joern_proc.stderr[:300]}"
+                return base
+        except subprocess.TimeoutExpired:
+            base["error"] = "joern 분석 타임아웃 (600초)"
+            return base
+
+        # 3. 결과 파싱
+        if not taint_out.exists():
+            base["error"] = f"joern 출력 파일 없음: {taint_out}"
+            return base
+
+        try:
+            with open(taint_out, encoding="utf-8") as f:
+                flows_raw = json.load(f)
+        except json.JSONDecodeError as e:
+            base["error"] = f"joern 출력 JSON 파싱 실패: {e}"
+            return base
+
+        base["analyzed"] = True
+        base["flows"] = flows_raw if isinstance(flows_raw, list) else []
+        print(f"  [Joern] taint flow 탐지: {len(base['flows'])}건")
+        return base
+
+
+def _build_joern_flow_index(joern_result: dict) -> dict:
+    """Joern taint flow를 source_method 기준으로 인덱싱한다.
+
+    Returns:
+        {
+          "ControllerMethodName": [flow_dict, ...],
+          ...
+        }
+    """
+    index: dict = {}
+    for flow in joern_result.get("flows", []):
+        method = flow.get("source_method", "")
+        if method:
+            index.setdefault(method, []).append(flow)
+    return index
+
+
+def _merge_joern_into_diagnoses(
+    diagnoses: list,
+    joern_result: dict,
+) -> list:
+    """Joern taint 분석 결과를 기존 source-based 진단에 병합한다.
+
+    병합 원칙:
+    - Joern이 사용 불가이거나 분석 실패 → 기존 결과 그대로 반환 (no-op)
+    - Joern이 taint flow 확인 + 기존 result가 "정보" → "취약"으로 상향
+    - Joern이 taint flow 확인 + 기존 result가 "양호" → 유지 (conservative)
+      단, evidence에 주의 노트 추가 (오탐 재검토 요청)
+    - Joern이 taint flow 미확인 → 기존 결과 유지 (Joern은 false-negative 가능)
+    """
+    if not joern_result.get("available") or not joern_result.get("analyzed"):
+        return diagnoses
+
+    flow_index = _build_joern_flow_index(joern_result)
+    if not flow_index:
+        return diagnoses
+
+    for diag in diagnoses:
+        handler = diag.method_name or ""
+        if not handler or handler not in flow_index:
+            continue
+
+        matched_flows = flow_index[handler]
+        # flow가 있으면 taint_confirmed 업데이트
+        if diag.result == "정보" and diag.needs_review:
+            # 정보 → 취약으로 상향
+            diag.result = "취약"
+            diag.needs_review = False
+            diag.diagnosis_method = "SAST+Joern"
+            flow_reprs = [f.get("flow_repr", "") for f in matched_flows[:3]]
+            diag.evidence = list(diag.evidence) + [{
+                "joern_taint_flow": flow_reprs,
+                "note": "Joern CPG taint 분석에서 HTTP 파라미터 → SQL sink 직접 flow 확인",
+            }]
+            # db_operations의 taint_confirmed 업데이트
+            for db_op in diag.db_operations:
+                if isinstance(db_op, dict) and db_op.get("taint_confirmed") is None:
+                    db_op["taint_confirmed"] = True
+        elif diag.result == "양호":
+            # 양호이지만 Joern이 flow 탐지 → 보수적으로 주의 표시만
+            diag.evidence = list(diag.evidence) + [{
+                "joern_warning": "Joern CPG가 이 메서드에서 SQL sink로의 taint flow를 감지했습니다. "
+                                 "source-based 분석에서는 양호로 판정되었으나 수동 검토를 권장합니다.",
+                "joern_flow_repr": [f.get("flow_repr", "") for f in matched_flows[:2]],
+            }]
+            diag.needs_review = True
+
+    return diagnoses
+
 
 # [P2] HTTP 클라이언트 패턴: 해당 클래스/메서드 본문에서 발견되면 DB 직접 접근 없음 → 양호
 _HTTP_CLIENT_RE = re.compile(
@@ -3719,8 +3943,15 @@ def format_params(params: list) -> str:
 def run_diagnosis(source_dir: Path, inventory_path: Path,
                   modules: list = None,
                   context_lines: int = 3,
-                  extra_source_dirs: list = None) -> dict:
-    """전체 진단 실행"""
+                  extra_source_dirs: list = None,
+                  jar_path: Optional[Path] = None,
+                  joern_home: Optional[Path] = None) -> dict:
+    """전체 진단 실행
+
+    Args:
+        jar_path:   (선택) Joern 분석용 JAR/WAR 경로. None이면 Joern 분석 생략.
+        joern_home: (선택) Joern 설치 디렉토리. None이면 PATH에서 탐색.
+    """
 
     # 1. API 인벤토리 로드
     endpoints = load_api_inventory(inventory_path, modules)
@@ -3794,6 +4025,28 @@ def run_diagnosis(source_dir: Path, inventory_path: Path,
     print(f"  OS Command Injection: {global_findings['os_command_injection']['total']}건")
     print(f"  SSI Injection: {global_findings['ssi_injection']['total']}건")
 
+    # 5. [선택] Joern CPG 기반 taint 분석 — jar_path 제공 시만 실행
+    joern_result: dict = {"available": False, "analyzed": False, "flows": [], "error": None}
+    if jar_path is not None:
+        print(f"\n[Joern] CPG 기반 taint 분석 시작: {jar_path}")
+        state_dir = Path("state")
+        joern_result = run_joern_taint_analysis(
+            jar_path=jar_path,
+            source_dir=source_dir,
+            joern_home=joern_home,
+            state_dir=state_dir,
+        )
+        if joern_result.get("error"):
+            print(f"  ⚠️  Joern 분석 오류 (source 분석 결과로 계속 진행): {joern_result['error']}")
+        elif joern_result.get("analyzed"):
+            print(f"  ✅ Joern 병합 완료: {len(joern_result['flows'])}개 flow 탐지")
+            diagnoses = _merge_joern_into_diagnoses(diagnoses, joern_result)
+            # 통계 재계산
+            sqli_stats = {"양호": 0, "취약": 0, "정보": 0, "N/A": 0}
+            for d in diagnoses:
+                sqli_stats[d.result] = sqli_stats.get(d.result, 0) + 1
+            print(f"  Joern 병합 후 통계: {sqli_stats}")
+
     return {
         "task_id": "2-2",
         "status": "completed",
@@ -3805,7 +4058,14 @@ def run_diagnosis(source_dir: Path, inventory_path: Path,
             "total_classes_indexed": len(class_index),
             "total_mybatis_mappings": len(mybatis_index),
             "scanned_at": datetime.now().isoformat(),
-            "script_version": "4.8.0",
+            "script_version": "4.9.0",
+            "joern_analysis": {
+                "available": joern_result.get("available", False),
+                "analyzed": joern_result.get("analyzed", False),
+                "jar_analyzed": joern_result.get("jar_path"),
+                "flows_found": len(joern_result.get("flows", [])),
+                "error": joern_result.get("error"),
+            },
         },
         "endpoint_diagnoses": [
             # 양호 결과는 service_calls/repository_calls/db_operations 제거해 파일 크기 절감
@@ -3866,6 +4126,23 @@ def main():
         help="멀티 모듈 프로젝트 루트. 지정 시 하위 */src/main/{java,kotlin,resources}를 "
              "자동 탐색하여 형제 모듈 클래스를 class_index에 포함",
     )
+    parser.add_argument(
+        "--jar",
+        type=str,
+        default=None,
+        metavar="JAR_PATH",
+        help="[Joern 연동] 분석할 JAR/WAR 아티팩트 경로. "
+             "build_target.py --output 의 primary_jar 값을 사용. "
+             "미지정 시 Joern 분석 생략 (기존 source-based 분석만 수행).",
+    )
+    parser.add_argument(
+        "--joern-home",
+        type=str,
+        default=None,
+        metavar="JOERN_DIR",
+        help="[Joern 연동] Joern 설치 디렉토리 (예: /opt/joern/joern-cli). "
+             "미지정 시 PATH에서 자동 탐색.",
+    )
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir)
@@ -3887,9 +4164,18 @@ def main():
         for d in extra_dirs:
             print(f"  + {d}")
 
+    # Joern 파라미터 처리
+    jar_path = Path(args.jar) if args.jar else None
+    if jar_path and not jar_path.exists():
+        print(f"⚠️  --jar 경로가 존재하지 않습니다: {jar_path}. Joern 분석을 건너뜁니다.")
+        jar_path = None
+    joern_home = Path(args.joern_home) if args.joern_home else None
+
     result = run_diagnosis(source_dir, inventory_path,
                            args.modules, args.context_lines,
-                           extra_source_dirs=extra_dirs if extra_dirs else None)
+                           extra_source_dirs=extra_dirs if extra_dirs else None,
+                           jar_path=jar_path,
+                           joern_home=joern_home)
 
     # 파일 출력
     if args.output:

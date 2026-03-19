@@ -293,6 +293,129 @@ task25.json DTO finding
 
 ---
 
+### Step 8: TLS 클라이언트 설정 / gRPC 채널 보안 / Redis 직렬화 (Semgrep 스캔 결과 기반)
+
+> **파이프라인**: Phase 2에서 Semgrep SSC 피드백 룰이 사전 실행되어
+> `state/<prefix>_ssc_feedback_semgrep.json`에 결과가 저장된다.
+> LLM은 해당 JSON을 읽어 판정만 수행한다. grep 직접 실행 금지.
+
+#### Step 8 입력 데이터 확인
+
+```
+1. state/<prefix>_ssc_feedback_semgrep.json 파일 존재 여부 확인
+   - 존재: 아래 8-1~8-3 절차로 findings 판정
+   - 미존재: workflow.md Phase 2 Semgrep 스캔 단계를 먼저 수행 요청
+             (scan_data_protection.py 이후 Semgrep 추가 실행 필요)
+
+2. JSON 구조 확인:
+   results[].check_id     → 룰 ID (ssl-client-bypass, grpc-plaintext-channel, redis-template-*)
+   results[].path         → 탐지 파일 경로
+   results[].start.line   → 탐지 라인
+   results[].extra.message → 룰 메시지
+```
+
+#### 8-1. SSL 인증서 검증 우회 (check_id: ssl-client-bypass)
+
+**판정 기준**:
+
+| 조건 | 판정 |
+|------|------|
+| `src/test/` 경로 내 탐지 | 양호(FP) — 테스트 전용 |
+| `src/main/` + `NoopHostnameVerifier` | **취약** (severity 4) |
+| `src/main/` + `loadTrustMaterial(null, ...)` | **취약** (severity 4) |
+| `src/main/` + `verify=False` | **취약** (severity 3) |
+| 외부 결제사/금융사 통신에 적용 시 | severity 5로 상향 |
+
+**Finding 템플릿 (DATA-TLS-001)**:
+
+```json
+{
+  "finding_id": "DATA-TLS-001",
+  "category": "INSECURE_TLS_CLIENT",
+  "title": "HTTP 클라이언트 SSL 인증서 검증 비활성화",
+  "severity": 4,
+  "result": "취약",
+  "evidence": {
+    "file": "<semgrep results[].path>",
+    "line": "<semgrep results[].start.line>",
+    "code_snippet": "<Read 툴로 해당 파일 ±5줄 확인 후 기재>"
+  },
+  "recommendation": "loadTrustMaterial 제거. 필요 시 해당 CA 인증서만 TrustStore에 등록. NoopHostnameVerifier → DefaultHostnameVerifier 교체.",
+  "diagnosis_method": "Semgrep(ssl-client-bypass) + LLM검증"
+}
+```
+
+#### 8-2. gRPC 채널 평문 전송 (check_id: grpc-plaintext-channel)
+
+> ⚠️ **MSA/서비스 메시 환경 오탐 주의**: Kubernetes + Istio/Linkerd 환경에서
+> `usePlaintext()`는 sidecar proxy가 mTLS를 담당하는 정상 구성일 수 있다.
+> 인프라 아키텍처를 확인하기 전까지 "정보/검토필요"로만 분류한다.
+
+**판정 기준**:
+
+| 조건 | 판정 |
+|------|------|
+| `localhost` / `127.0.0.1` 전용 | 양호(FP) |
+| 서비스 메시(Istio/Linkerd) 확인됨 | 양호(FP) — sidecar mTLS |
+| 서비스 메시 불명확 / k8s manifest 미확인 | **정보** (severity 2, 검토필요) |
+| 서비스 메시 없음 확인 + 외부 서비스 통신 | **취약** (severity 3) |
+
+**Finding 템플릿 (DATA-TLS-002)**:
+
+```json
+{
+  "finding_id": "DATA-TLS-002",
+  "category": "INSECURE_TLS_CLIENT",
+  "title": "gRPC 채널 평문 전송 — 서비스 메시 아키텍처 확인 필요",
+  "severity": 2,
+  "result": "정보",
+  "evidence": {
+    "file": "<semgrep results[].path>",
+    "line": "<semgrep results[].start.line>",
+    "code_snippet": "<Read 툴로 해당 파일 ±5줄 확인 후 기재>"
+  },
+  "recommendation": "인프라팀과 서비스 메시(Istio/Linkerd) 적용 여부 확인. 서비스 메시 없는 환경이면 useTransportSecurity() 적용 필요.",
+  "manual_review_note": "MSA 인프라 아키텍처(k8s manifest, istio.io/inject 어노테이션) 확인 후 취약/양호 재판정 필요.",
+  "diagnosis_method": "Semgrep(grpc-plaintext-channel) + LLM검증"
+}
+```
+
+#### 8-3. Redis 직렬화 설정 누락 (check_id: redis-template-default-serializer)
+
+**판정 기준**:
+
+| 조건 | 판정 |
+|------|------|
+| `StringRedisTemplate` 탐지 | 양호(FP) — StringRedisSerializer 고정 |
+| `RedisTemplate` + `setDefaultSerializer()` 없음 | **취약** (severity 4) |
+| `RedisTemplate` + `setValueSerializer(new GenericJackson2JsonRedisSerializer())` 있음 | 양호 |
+| `ReactiveRedisTemplate` + `RedisSerializationContext` 없음 | **취약** (severity 3) |
+
+**Finding 템플릿 (DATA-DESER-001)**:
+
+```json
+{
+  "finding_id": "DATA-DESER-001",
+  "category": "UNSAFE_DESERIALIZATION",
+  "title": "RedisTemplate 기본 JDK 직렬화 — 역직렬화 RCE 위험",
+  "severity": 4,
+  "result": "취약",
+  "evidence": {
+    "file": "<semgrep results[].path>",
+    "line": "<semgrep results[].start.line>",
+    "code_snippet": "<Read 툴로 @Bean 메서드 전체 확인 후 기재>"
+  },
+  "recommendation": "redisTemplate.setDefaultSerializer(new GenericJackson2JsonRedisSerializer()) 명시적 추가.",
+  "diagnosis_method": "Semgrep(redis-template-default-serializer) + LLM검증"
+}
+```
+
+> **참고**: Semgrep 룰 원본 — `references/rules/semgrep/ssl-client-bypass.yaml`,
+> `grpc-plaintext-channel.yaml`, `redis-template-default-serializer.yaml`
+> Phase 2 실행 명령은 `workflow.md` Phase 2 "Semgrep SSC 피드백 룰 실행" 참조.
+
+---
+
 ### ⚠️ 완료 조건 자가 검증 (필수 — 미충족 시 Task 미완료)
 
 출력 JSON 작성 전 반드시 아래 기준을 자가 검증하라:
@@ -314,6 +437,13 @@ task25.json DTO finding
   - admin_page_separation, cors_wildcard, jwt_unsigned_allowed 필드 기재 필수
 
 □ findings 배열이 비어 있지 않은 경우 각 finding에 evidence.file(실제 경로) 기재 필수
+
+□ [Step 8] Semgrep SSC 피드백 스캔 결과 참조 여부
+  □ state/<prefix>_ssc_feedback_semgrep.json 파일 확인 (Phase 2 사전 실행 필요)
+  □ check_id 별 결과 확인: ssl-client-bypass / grpc-plaintext-channel / redis-template-*
+  □ 탐지 건 → Read 툴로 해당 파일 직접 확인 후 판정 (Semgrep 탐지만으로 취약 단정 금지)
+  □ gRPC usePlaintext: 반드시 "정보/검토필요"로 분류 (취약 단정 금지 — MSA 아키텍처 확인 필요)
+  → 0건이면 "해당없음" 기록. Semgrep JSON 미존재 시 Phase 2 재실행 요청.
 ```
 
 **병합 미적용 시 거부 조건:**

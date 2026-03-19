@@ -37,7 +37,7 @@ Canonical automation scripts (repo `tools/scripts/`):
   - Output: JSON type catalog with field-level detail, type_index
   - scan_api.py와 연동: `--dto-catalog` 옵션으로 파라미터 타입 enrichment
 
-- `scan_injection_enhanced.py` (v2.3): Endpoint-level injection diagnosis
+- `scan_injection_enhanced.py` (v4.9): Endpoint-level injection diagnosis
   - Controller → Service → Repository → SQL Builder 호출 체인 자동 추적
   - Java dependency injection 지원: `@Autowired`, `@RequiredArgsConstructor`, constructor injection
   - JPA built-in method 자동 양호 판정 (`findById`, `save`, `deleteById` 등)
@@ -48,6 +48,12 @@ Canonical automation scripts (repo `tools/scripts/`):
     4. `+ param +` 문자열 연결
     5. 델리게이트 함수 재귀 추적 (depth 3)
   - Global scan: OS Command Injection, SSI Injection, Kotlin SQL Builder 전역 패턴
+  - **[신규] Joern CPG 연동** (`--jar <path>`, `--joern-home <dir>`):
+    - `build_target.py`로 빌드된 JAR/WAR를 Joern CPG로 변환하여 bytecode 수준 taint 분석
+    - `joern_sqli_taint.sc` 스크립트로 HTTP 파라미터→SQL sink 직접 flow 탐지
+    - 결과 병합: "정보+needs_review" 상태에서 Joern flow 확인 시 "취약"으로 자동 상향
+    - Joern 미설치 또는 분석 실패 시 source-based 분석 결과 그대로 유지 (no-op)
+    - `scan_metadata.joern_analysis` 필드에 분석 결과 기록
   - Output: endpoint_diagnoses (양호/취약/정보/N/A), global_findings, summary
 
 - `scan_file_processing.py` (v1.0): File Upload/Download & LFI/RFI vulnerability scanner
@@ -64,6 +70,44 @@ Canonical automation scripts (repo `tools/scripts/`):
   - `SQLI_SAFE_PATTERNS`: `#{}`, `:param`, `?` binding 등
   - `SQLI_CONCAT_PATTERNS`: Kotlin `${expr}`, `$var`, `+ var +`
   - `CMDI_*`, `SSI_*` patterns
+
+- `build_target.py` (v1.0): /sec-audit-static 사전 빌드 실행 + 아티팩트 매니페스트 생성
+  - 빌드 도구 자동 감지: Maven / Gradle / npm / pip / PHP (no-build)
+  - JDK 버전 자동 탐색: `/usr/lib/jvm/java-{v}-*`, SDKMAN, update-alternatives
+  - 빌드 실패 시 소스 분석 fallback 자동 처리 (종료 코드 0 유지)
+  - Joern 분석 대상 primary_jar 자동 선택 (WAR 우선 → 가장 큰 JAR)
+  - SCA용 dependency tree 생성 (`--dep-report` 플래그)
+  - Output: `state/<prefix>_build_manifest.json`
+    - `primary_jar`: Joern 분석 대상 경로 → `scan_injection_enhanced.py --jar`에 전달
+    - `artifacts`: 전체 빌드 아티팩트 목록 + 크기
+    - `fallback_source_only`: true이면 Joern 생략, source-only 분석
+  - 사용법: `python3 build_target.py --source-dir <dir> --build-cmd "<cmd>" --jdk 17 -o state/<prefix>_build_manifest.json`
+  - **`--resolve-deps`**: 빌드 실패 시 `com.skp.*` 누락 패키지 자동 감지 → Bitbucket에서 클론 → `settings.gradle`에 `includeBuild()` 주입 후 재빌드 (Method B: Composite Build). 재빌드 후 `settings.gradle` 원상복원. `CUSTOMER_BB_TOKEN` (.env) 필요.
+    - `_INTERNAL_PKG_REPO_MAP`: 10개 prefix → Bitbucket project/repo 매핑 내장 (com.skp.ocb.webview, com.skp.oz 등)
+    - 매니페스트에 `composite_build` 섹션 추가 (attempted, success, cloned_repos, skipped_pkgs)
+
+- `joern_sqli_taint.sc`: Joern SQL Injection taint flow 분석 스크립트 (Scala)
+  - Source: `@GetMapping/@PostMapping/@RequestMapping` + `@RequestParam/@PathVariable/@RequestBody`
+  - Sink: JDBC/JPA/MyBatis/JdbcTemplate SQL 실행 메서드 (execute, query, createNativeQuery 등)
+  - `scan_injection_enhanced.py`가 자동 호출 (`--jar` 지정 시)
+  - Output: `state/joern_sqli_taint.json` (taint flow 목록)
+  - joern-parse로 CPG 생성 후 joern CLI로 실행 (`joern-parse <jar> -o cpg.bin`)
+
+- `scan_sca.py` (v2.0): SCA + CVE 관련성 분석 + PoC 생성 + Confluence 게시 (P2-01/P2-02)
+  - **P2-01 (dependency-check 경로)**: dependency-check 실행 → CVE 파싱 → CVSS 기준 필터링
+  - **P2-01 (OSV 경로)**: `--dep-tree` 옵션으로 Gradle dep tree → OSV API 배치 조회 (빌드 실패 시 대체)
+  - **P2-02**: CISA KEV 조회 → 소스코드 관련성 자동 grep 판정 → PoC 생성
+  - 라이브러리별 그룹화 (`_group_and_sort`): CRITICAL>HIGH, 적용>제한적>조건미충족 정렬
+  - OSV `affected.ranges.events[fixed]`에서 same-major 패치 버전 자동 추출
+  - CWE 한국어 설명 (`_CWE_KO`) 22종 내장
+  - 소스코드 자동 관련성 판정 (`_auto_relevance`): WebFlux/RouterFunction/SocketAppender/MultipartFile 등 grep 기반
+  - `--publish`: Confluence SCA 페이지 자동 생성/업데이트 (`.env` 자동 로드)
+  - `--page-id`: 기존 페이지 업데이트, `--page-title`: 커스텀 제목
+  - Output: `state/<prefix>_sca.json` — findings[] + grouped[] 포함
+  - 사용법:
+    - (fat JAR): `python3 scan_sca.py <src> --jar <jar> --poc --publish -o state/<prefix>_sca.json`
+    - (Gradle dep tree): `python3 scan_sca.py <src> --dep-tree state/<prefix>_dep_tree.log --poc --publish -o state/<prefix>_sca.json`
+    - (기존 dc 리포트): `python3 scan_sca.py <src> --dc-report <dc.json> --poc --publish -o state/<prefix>_sca.json`
 
 ## Publishing Scripts
 

@@ -1,0 +1,80 @@
+rules:
+  # Rule 1: NoopHostnameVerifier — 호스트명 검증 비활성화
+  - id: ssl-noop-hostname-verifier
+    pattern: |
+      new NoopHostnameVerifier()
+    message: >
+      NoopHostnameVerifier를 사용하면 HTTPS 통신 시 서버 호스트명 검증이 비활성화됩니다.
+      중간자 공격(MITM) 시 공격자가 임의의 인증서로 서버를 위장할 수 있습니다.
+      DefaultHostnameVerifier 또는 표준 SSL 설정을 사용하세요.
+    languages: [java]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: CWE-297
+      owasp: A02:2021 Cryptographic Failures
+      feedback_tp: TP-02
+      source: ssc_feedback_ruleset
+
+  # Rule 2: loadTrustMaterial(null, ...) — 모든 인증서 신뢰
+  - id: ssl-trust-all-certificates
+    patterns:
+      - pattern: |
+          $CTX.loadTrustMaterial(null, (chain, authType) -> true)
+      - pattern: |
+          $CTX.loadTrustMaterial(null, ($CHAIN, $AUTH) -> true)
+      - pattern: |
+          $CTX.loadTrustMaterial(null, new TrustStrategy() {
+            public boolean isTrusted(...) { return true; }
+          })
+    message: >
+      모든 SSL 인증서를 신뢰하는 TrustStrategy가 적용되어 있습니다.
+      공격자가 자체 서명 인증서로 서버를 위장하는 MITM 공격이 가능합니다.
+      필요한 CA 인증서만 TrustStore에 등록하는 방식으로 교체하세요.
+    languages: [java]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: CWE-295
+      owasp: A02:2021 Cryptographic Failures
+      feedback_tp: TP-02
+      source: ssc_feedback_ruleset
+
+  # Rule 3: SSLContext CERT_NONE — Python SSL 검증 비활성화
+  - id: ssl-python-cert-none
+    patterns:
+      - pattern: |
+          $CTX.verify_mode = ssl.CERT_NONE
+      - pattern: |
+          ssl.wrap_socket(..., cert_reqs=ssl.CERT_NONE, ...)
+    message: >
+      Python SSL 컨텍스트의 인증서 검증이 비활성화(CERT_NONE)되어 있습니다.
+      HTTPS 통신 시 서버 인증서를 검증하지 않아 MITM 공격에 취약합니다.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: CWE-295
+      owasp: A02:2021 Cryptographic Failures
+      feedback_tp: TP-02
+      source: ssc_feedback_ruleset
+
+  # Rule 4: requests.get/post with verify=False
+  - id: ssl-requests-verify-false
+    patterns:
+      - pattern: requests.get($URL, ..., verify=False, ...)
+      - pattern: requests.post($URL, ..., verify=False, ...)
+      - pattern: requests.request($METHOD, $URL, ..., verify=False, ...)
+      - pattern: $SESSION.get($URL, ..., verify=False, ...)
+      - pattern: $SESSION.post($URL, ..., verify=False, ...)
+    message: >
+      requests 라이브러리의 SSL 검증이 비활성화(verify=False)되어 있습니다.
+      MITM 공격에 취약합니다. verify=True(기본값) 또는 CA 번들 경로를 지정하세요.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: CWE-295
+      owasp: A02:2021 Cryptographic Failures
+      feedback_tp: TP-02
+      source: ssc_feedback_ruleset
