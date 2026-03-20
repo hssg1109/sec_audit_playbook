@@ -2800,7 +2800,31 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
 
 
 def _json_to_xhtml_sca(data):
-    """Convert scan_sca.py output to XHTML (SCA / CVE 취약점 진단 결과)."""
+    """Convert scan_sca.py output to XHTML.
+
+    scan_sca.py의 build_sca_xhtml()로 위임하여 Rule 1/2/3(BOM 오버라이딩 금지,
+    Big Bang 방지, CWE 압축)이 동일하게 적용되도록 한다.
+    임포트 실패 시 로컬 간이 렌더러로 fallback.
+    """
+    try:
+        import sys as _sys
+        import os as _os
+        _scripts_dir = _os.path.join(_os.path.dirname(__file__))
+        if _scripts_dir not in _sys.path:
+            _sys.path.insert(0, _scripts_dir)
+        from scan_sca import build_sca_xhtml
+        import datetime as _dt
+        grouped    = data.get("grouped", [])
+        project    = data.get("project", "")
+        source     = data.get("source", "")
+        total_deps = data.get("total_deps", 0)
+        kev_count  = data.get("kev_count", 0)
+        scanned_at = data.get("scanned_at", data.get("metadata", {}).get("scanned_at", ""))
+        analysis_date = scanned_at[:10] if scanned_at else _dt.date.today().isoformat()
+        return build_sca_xhtml(grouped, project, source, total_deps, kev_count, analysis_date)
+    except Exception:
+        pass  # fallback to local renderer below
+
     parts = ["<h2>SCA 취약점 진단 결과 (Task P2-01/P2-02)</h2>"]
 
     # 요약 테이블
