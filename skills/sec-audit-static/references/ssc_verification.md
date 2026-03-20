@@ -449,8 +449,18 @@ python3 tools/scripts/generate_ssc_report.py \
 
 ### 2-1. <취약점 유형> — Critical
 
-**파일**: `<full_file_path>`
-**탐지 라인**: <lines>
+<!-- 관련 파일 expand 블록: <details><summary>Title</summary>Body</details> 문법 사용 -->
+<!-- publish_confluence.py가 Confluence expand 매크로로 자동 변환함 -->
+
+<details>
+<summary>관련 파일 (N개 파일, M개 지점)</summary>
+
+| 파일 | 경로 | 탐지 라인 | 비고 |
+|------|------|---------|------|
+| `파일명.java` | `src/main/java/.../패키지/` | 164 | 간략 설명 |
+| `파일명2.java` | `src/main/java/.../패키지/` | 198, 238 | 간략 설명 |
+
+</details>
 
 #### 취약 패턴 (대표 코드)
 
@@ -570,7 +580,8 @@ python3 tools/scripts/generate_ssc_report.py \
 □ 보고서 생성: state/<prefix>_ssc_report.md (아래 섹션 전체 포함)
    □ 섹션1: 요약 + 그룹별 검증 결과 표 (실제 그룹 수)
    □ 섹션2: 취약 확인 건 목록 표 — Critical → High 순 정렬, 동일 유형+파일 병합 (1건=1행)
-   □ 섹션2 하위: 취약점 유형별 상세 (코드 증적 + 테인트 경로 + 조치 방안)
+   □ 섹션2 하위: 취약점 유형별 상세 — 각 항목에 <details><summary>관련 파일 목록</summary>표</details> expand 블록 포함
+   □ 섹션2 하위: 코드 증적 + 테인트 경로 + 조치 방안
    □ 섹션3: 양호 판정 요약 (issue_name별 FP 근거)
    □ 섹션4: 조치 우선순위
    □ 부록: 검증 방법론
