@@ -1270,28 +1270,36 @@
             },
             {
               "source": "state/ocbwebview_community_injection.json",
-              "supplemental_sources": ["state/ocbwebview_community_task22_llm.json"],
+              "supplemental_sources": [
+                "state/ocbwebview_community_task22_llm.json"
+              ],
               "title": "테스트34 - 인젝션 취약점 진단 결과 (OCB Community API)",
               "type": "finding",
               "page_id": 741063764
             },
             {
               "source": "state/ocbwebview_community_xss.json",
-              "supplemental_sources": ["state/ocbwebview_community_task23_llm.json"],
+              "supplemental_sources": [
+                "state/ocbwebview_community_task23_llm.json"
+              ],
               "title": "테스트34 - XSS 취약점 진단 결과 (OCB Community API)",
               "type": "finding",
               "page_id": 741063765
             },
             {
               "source": "state/ocbwebview_community_task24.json",
-              "supplemental_sources": ["state/ocbwebview_community_task24_llm.json"],
+              "supplemental_sources": [
+                "state/ocbwebview_community_task24_llm.json"
+              ],
               "title": "테스트34 - 파일 처리 진단 결과 (OCB Community API)",
               "type": "finding",
               "page_id": 741063766
             },
             {
               "source": "state/ocbwebview_community_task25.json",
-              "supplemental_sources": ["state/ocbwebview_community_task25_llm.json"],
+              "supplemental_sources": [
+                "state/ocbwebview_community_task25_llm.json"
+              ],
               "title": "테스트34 - 데이터 보호 진단 결과 (OCB Community API)",
               "type": "finding",
               "page_id": 741063767
@@ -1301,6 +1309,12 @@
               "title": "테스트34 - SCA (오픈소스 취약점) 진단 결과 (OCB Community API)",
               "type": "sca",
               "page_id": 741063768
+            },
+            {
+              "source": "state/ocbwebview_community_ssc_report.md",
+              "title": "테스트34 - Fortify SSC 정합성 검증 보고서 (OCB Community API)",
+              "type": "doc",
+              "page_id": 741064439
             }
           ]
         }

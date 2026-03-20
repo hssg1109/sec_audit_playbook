@@ -245,6 +245,78 @@ post_validation:    # [5-4-4] 검증 결과
 
 ## 누적 피드백 기록
 
+### [2026-03-20] OCBWEBVIEW/ocb-community-api (테스트34)
+
+#### 재현 확인: TP-04 — RedisTemplate JDK 직렬화
+
+| 항목 | 내용 |
+|------|------|
+| **파일** | `MasterDatabaseConfig.java:39` |
+| **패턴** | `new RedisTemplate<>()` + 직렬화 설정 누락 (ocb-webview-api와 동일 패턴) |
+| **SAST 탐지 여부** | ✅ 커버됨 — `redis-template-default-serializer.yaml` (TP-04, 2026-03-19 추가) |
+| **비고** | 동일 패턴이 ocb-community-api의 MasterDatabaseConfig에도 재현. 룰 유효성 확인 완료. |
+
+#### 재현 확인: TP-03 — gRPC usePlaintext
+
+| 항목 | 내용 |
+|------|------|
+| **파일** | `GrpcFunctionHandler.java:50` (shared 모듈) |
+| **패턴** | `ManagedChannelBuilder.forAddress(ip, port).usePlaintext()` — ocb-webview-api와 동일 패턴 |
+| **SAST 탐지 여부** | ✅ 커버됨 — `grpc-plaintext-channel.yaml` (TP-03, 2026-03-19 추가) |
+| **SSC 판정** | 검토필요 (서비스 메시 환경 미확인, gRPC Insecure Transport 가이드라인 적용) |
+| **비고** | shared 모듈 코드이므로 동일 버전 사용 프로젝트 전반에 영향. |
+
+#### 신규 패턴: Privacy Violation: Heap Inspection — 복호화 데이터 String 힙 잔류
+
+| 항목 | 내용 |
+|------|------|
+| **파일** | `AESUtil.java:128`, `DbSecurityAdvisor.java:198,238,317,324,329` |
+| **패턴** | `new String(EncryptCustomerInfo.decrypt(...), "UTF-8")` — 복호화된 개인정보를 String 불변 객체에 저장 |
+| **SAST 탐지 여부** | ❌ 미탐 |
+| **미탐 원인** | `SCOPE-MISSING` — 복호화 후 String 힙 잔류 패턴 현재 task 범위 밖 |
+| **Type** | B (신규 카테고리) |
+
+```yaml
+llm_review:
+  reviewed_at: "2026-03-20"
+  necessity:
+    q1_real_pattern: true      # AESUtil.java, DbSecurityAdvisor.java 실제 확인
+    q2_not_covered: true       # 복호화 힙 잔류 패턴 기존 scan_data_protection.py 미커버
+    q3_generic: true           # Java 암호화 유틸리티에서 반복 발생 가능
+    q4_severity_ok: false      # 힙 덤프 접근 선행 필요 → 실용적 위험도 Medium/Low
+    verdict: "조건부"          # Q4 미충족
+  correctness:
+    semgrep_syntax_ok: "N/A"   # 룰 미작성 (보류 결정)
+    detection_verified: "N/A"
+    fp_risk: "중간"            # char[] 없이 String 사용하는 정상 코드도 탐지 가능
+    prompt_conflict: false
+    root_cause_accurate: true
+    verdict: "N/A"
+  final_decision: "보류"
+  conditions: ""
+  deferral_reason: >
+    Q4 위험도 낮음: 힙 잔류 악용을 위해 JVM 힙 덤프 접근이 선행 필요.
+    Semgrep으로 탐지 가능하나 FP 위험 중간 (String 사용 자체를 모두 플래그).
+    재검토 조건: 힙 덤프 취약점이 실제 인프라 위협으로 확인되거나, char[] 사용
+    의무화 정책 수립 시 재평가.
+applied_actions: []
+post_validation:
+  semgrep_validate: "N/A"
+  dry_run_match: "N/A"
+  fp_observed: "N/A"
+  notes: "보류. 차기 감사 시 재검토 조건 확인."
+```
+
+#### 커버 확인: Privacy Violation 로그 PII (13건)
+
+| 항목 | 내용 |
+|------|------|
+| **패턴** | `log.error/info/debug(mbrId, SMS PII, 인증 정보)` — 11개 파일 |
+| **SAST 탐지 여부** | ✅ 커버됨 — Phase 2-5 DATA-LOG-COM-001 (info/error 레벨) / DATA-LOG-COM-002 (debug 레벨) |
+| **비고** | 기존 scan_data_protection.py + LLM 분석으로 정상 탐지됨. 추가 개선 불필요. |
+
+---
+
 ### [2026-03-19] OCBWEBVIEW/ocb-webview-api
 
 #### TP-01: SQL Injection — EntityManager.createNativeQuery() 동적 쿼리
