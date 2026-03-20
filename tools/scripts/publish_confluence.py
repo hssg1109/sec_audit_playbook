@@ -2799,6 +2799,115 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
     return "\n".join(parts)
 
 
+def _json_to_xhtml_sca(data):
+    """Convert scan_sca.py output to XHTML (SCA / CVE 취약점 진단 결과)."""
+    parts = ["<h2>SCA 취약점 진단 결과 (Task P2-01/P2-02)</h2>"]
+
+    # 요약 테이블
+    total_deps   = data.get("total_deps", 0)
+    total_vulns  = data.get("total_vulns_all", 0)
+    hc_count     = data.get("high_critical_count", 0)
+    kev_count    = data.get("kev_count", 0)
+    project      = html_escape(str(data.get("project", "")))
+    source       = html_escape(str(data.get("source", "")))
+
+    summary_rows = [
+        ["진단 대상", project or source],
+        ["전체 의존성", str(total_deps)],
+        ["취약점 발견 (전체)", str(total_vulns)],
+        ["HIGH / CRITICAL", str(hc_count)],
+        ["CISA KEV 해당", str(kev_count)],
+    ]
+    parts.append("<h3>진단 요약</h3>")
+    parts.append(_table(["항목", "값"], summary_rows))
+
+    grouped = data.get("grouped", [])
+    if not grouped:
+        # findings 목록이 있으면 직접 렌더링
+        findings = data.get("findings", [])
+        if findings:
+            parts.append("<h3>취약 라이브러리 목록</h3>")
+            for f in findings:
+                dep     = html_escape(str(f.get("dep", f.get("ga", ""))))
+                sev     = f.get("severity", "")
+                cve_id  = html_escape(str(f.get("cve_id", f.get("vuln_id", ""))))
+                summary = html_escape(str(f.get("summary", "")))
+                fixed   = html_escape(str(f.get("fixed_version", "확인 필요")))
+                rel     = html_escape(str(f.get("relevance_status", "")))
+                parts.append(f"<p>{_severity_badge(sev)} <strong>{dep}</strong>"
+                             f" — {cve_id}</p>")
+                parts.append(f"<p>{summary}</p>")
+                if fixed:
+                    parts.append(f"<p><strong>권고 버전:</strong> {fixed} | "
+                                 f"<strong>적용 여부:</strong> {rel}</p>")
+        else:
+            parts.append("<p>HIGH/CRITICAL 취약점 없음.</p>")
+        return "\n".join(parts)
+
+    # grouped 렌더링 (라이브러리 단위)
+    sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+    grouped_sorted = sorted(grouped, key=lambda g: sev_order.get(g.get("severity_max", "").upper(), 9))
+
+    parts.append("<h3>취약 라이브러리 목록</h3>")
+    for g in grouped_sorted:
+        dep      = html_escape(str(g.get("dep", "")))
+        artifact = html_escape(str(g.get("artifact", g.get("dep", ""))))
+        ver      = html_escape(str(g.get("version", "")))
+        sev_max  = g.get("severity_max", "").upper()
+        cvss_max = g.get("cvss_max", 0)
+        fixed    = html_escape(str(g.get("fixed_version", "확인 필요")))
+        rel_max  = html_escape(str(g.get("relevance_max", "")))
+        cves     = g.get("cves", [])
+
+        # 라이브러리 헤딩
+        parts.append(
+            f"<h4>{_severity_badge(sev_max)} {artifact} "
+            f"<code>{dep}</code></h4>"
+        )
+        info_rows = [
+            ["현재 버전", f"<code>{ver}</code>"],
+            ["권고(패치) 버전", f"<code>{fixed}</code>"],
+            ["최대 CVSS", f"{cvss_max}"],
+            ["소스 내 사용 여부", rel_max],
+        ]
+        parts.append(_table(["항목", "내용"], info_rows))
+
+        if cves:
+            cve_rows = []
+            for c in cves:
+                cve_id  = html_escape(str(c.get("cve_id", c.get("vuln_id", ""))))
+                c_sev   = c.get("severity", "").upper()
+                c_cvss  = c.get("cvss", 0)
+                c_sum   = html_escape(str(c.get("summary", "")))
+                c_fixed = html_escape(str(c.get("fixed_version", "")))
+                c_rel   = html_escape(str(c.get("relevance_status", "")))
+                c_kev   = "✅ KEV" if c.get("kev") else ""
+                cwe_str = html_escape(", ".join(c.get("cwe_ids", [])))
+                cve_rows.append([
+                    f"{_severity_badge(c_sev)} {cve_id} {c_kev}",
+                    str(c_cvss),
+                    c_sum,
+                    f"<code>{c_fixed}</code>" if c_fixed else "-",
+                    c_rel,
+                    cwe_str,
+                ])
+            parts.append(_table(
+                ["CVE / GHSA", "CVSS", "요약", "패치 버전", "적용 여부", "CWE"],
+                cve_rows,
+            ))
+
+        # 적용 여부 근거 (첫 번째 CVE)
+        for c in cves:
+            reason = c.get("relevance_reason", "")
+            if reason:
+                parts.append(
+                    f"<p><em>적용 여부 근거: {html_escape(str(reason))}</em></p>"
+                )
+                break
+
+    return "\n".join(parts)
+
+
 def _json_to_xhtml_final(data):
     """Convert final_report.json to XHTML."""
     parts = ["<h1>AI 보안 진단 최종 보고서</h1>"]
@@ -2912,6 +3021,9 @@ def json_to_xhtml(data, json_type, source_path="", llm_findings=None, llm_supp=N
     """
     if json_type == "final_report":
         return _json_to_xhtml_final(data)
+
+    if json_type == "sca" or "grouped" in data and data.get("source_tool") == "SCA":
+        return _json_to_xhtml_sca(data)
 
     # scan_api.py v3.0 format auto-detection (endpoints key)
     if json_type == "api_inventory" or "endpoints" in data:
