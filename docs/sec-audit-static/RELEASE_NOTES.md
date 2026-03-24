@@ -10,6 +10,55 @@
 
 ---
 
+## [v4.16.0] - 2026-03-24
+
+### Added — SCA v2 Gradle/npm 렌더러 + Phase 3-SCA LLM 관련성 검토 절차
+
+#### 1. `publish_confluence.py` — SCA v2 렌더러 (`_json_to_xhtml_sca_v2`) 신규 구현
+
+`scan_sca_gradle_tree.py`(v2 스키마: `package`, `cve`, `severity`, `in_kev`, `osv_id`, `max_cvss`, `status`) 출력 결과를 Confluence에 정확히 렌더링하기 위한 전용 렌더러 추가.
+
+**문제 배경:** `_json_to_xhtml_sca()`가 `build_sca_xhtml`(scan_sca.py v1)을 임포트하여 v1 필드(`lib["dep"]`, `lib["relevance_max"]` 등)로 v2 데이터를 처리 → `KeyError` → except 무시 → fallback 렌더러도 v1 필드 → **t35~t40 SCA 페이지 전량 빈 페이지로 게시**
+
+**수정 내용:**
+- `_json_to_xhtml_sca_v2(data, sca_llm=None)` 신규 구현
+  - v2 grouped 항목(`package`, `cves[]`, `severity`, `in_kev`) 렌더링
+  - LLM 검토 결과(`sca_llm`) 병합 시 소스관련성/판단근거 컬럼 자동 추가
+  - 관련성 뱃지 Confluence 상태 매크로 (Red=적용, Yellow=제한적, Green=조건미충족, Grey=확인불가)
+  - 한국어 CVE 설명 (`description_ko`, `impact_ko`, `condition_ko`) 인라인 렌더링
+  - KEV 등재 표시, CVSS 점수, 수정 버전 컬럼 포함
+- `_json_to_xhtml_sca()` v1/v2 포맷 자동 감지 후 라우팅
+  - v2 감지 조건: `"metadata" in data or source_tool in ("SCA-GradleTree", "SCA-npm")`
+- `json_to_xhtml()` → `_render_entry()` 흐름에 `sca_llm` 파라미터 전달 연결
+- SCA `supplemental_sources` 로딩 지원: `entry_type == "sca"` 블록 신규 추가
+  - `<prefix>_sca_llm.json` 자동 감지 (`source_tool == "SCA-LLM-Review"` 또는 `task_id == "P3-SCA"`)
+
+#### 2. Phase 3-SCA — SCA CVE LLM 수동 관련성 검토 절차 명문화
+
+SCA 자동 스캔으로 식별된 CVE에 대해 LLM이 소스코드와 교차검증하는 새로운 진단 단계 추가.
+
+**배경:** 자동 스캔은 라이브러리 버전 취약점만 탐지하므로, 실제 취약 API 사용 여부나 발생 조건 충족 여부를 코드 단에서 확인하지 못함. 오탐(전이적 의존성만 존재) 다수 포함.
+
+**신규 파일: `skills/sec-audit-static/references/task_prompts/task_sca_llm_review.md`**
+- 라이브러리별 4단계 검토 절차:
+  1. 소스코드 내 라이브러리 사용 여부 `rg` 확인
+  2. CVE 발생 조건 코드 패턴 확인 (Path Traversal, 역직렬화, SSRF, ReDoS, XXE, AES-ECB 등)
+  3. 관련성 판정: `적용` / `제한적` / `조건미충족` / `확인불가`
+  4. 한국어 취약점 설명 작성 (`description_ko`, `impact_ko`, `condition_ko`)
+- 출력 스키마: `<prefix>_sca_llm.json` (`task_id: "P3-SCA"`, `source_tool: "SCA-LLM-Review"`)
+- Gradle/Spring Boot, npm 라이브러리별 판정 grep 패턴 참조표 포함
+
+**`skills/sec-audit-static/references/workflow.md` 업데이트:**
+- Phase 3에 `Task 3-SCA` 블록 추가 (라이브러리단위 4단계 검토 흐름 시각화)
+- Phase 4 SCA 항목에 `supplemental_sources: [<prefix>_sca_llm.json]` 명시
+
+**`skills/sec-audit-static/SKILL.md` 업데이트:**
+- Phase 2 SCA: `scan_sca_gradle_tree.py` 명시적 명령어 추가
+- Phase 3-SCA 블록 신규 추가 (references: `task_sca_llm_review.md`)
+- Phase 3 `[정기진단 필수]` 표기
+
+---
+
 ## [v4.15.0] - 2026-03-19
 
 ### Added — Phase 3 완료 조건 자가 검증 체크리스트 + Module-Scoped Audit 절차 명문화

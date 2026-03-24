@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-XSS 취약점 자동 진단 스크립트 v2.5.0
+XSS 취약점 자동 진단 스크립트 v2.6.0
 
 scan_api.py 결과를 기반으로 각 API endpoint에 대해
 6가지 Phase로 XSS 취약 여부를 자동 판정합니다.
@@ -74,6 +74,16 @@ scan_api.py 결과를 기반으로 각 API endpoint에 대해
             classify_controller:    _P1_PROTO_API_RT_RE 신규 — 반환 타입에 Protos/Protobuf/
                                     Message/ResponseEntity 포함 시 @Controller이어도 REST_JSON 강제
             manual_review_prompt.md: View XSS AI 점검 지시에 [Step 0] 순수 API 교차 검증 추가
+  v2.6.0 - Jackson XSS Deserializer 커버리지 한계 분리 (FN 방지):
+            filter_level "jackson_requestbody_only" 신규 도입
+              @RequestBody(JSON) 경로만 커버, @RequestParam/@ModelAttribute/getParameter() 미커버
+            _has_servlet_input_params(): @RequestParam/@ModelAttribute/@RequestPart 파라미터 탐지
+            check_persistent_xss(): jackson_requestbody_only 시 서블릿 파라미터 존재 여부로 분기
+              - 서블릿 파라미터 없음 → 낮음(양호), 서블릿 파라미터 있음 → jackson_param_gap(취약 후보)
+            _P3_LUCY_REGISTER: Lucy XSS Filter 실제 등록 검증 패턴 추가
+              FilterRegistrationBean / new XssEscapeServletFilter() / web.xml <filter-class> 교차 검증
+              선언만 있고 등록 코드 없음 → filter_level "none" 강제 (선언≠동작 FN 방지)
+            결과: 의존성 선언만으로 필터 동작 가정하는 false negative 제거
   v2.4.0 - Step 1: Reflected XSS Taint Flow 검증 추가 (REST_HTML_RISK FP 제거)
             check_reflected_xss_taint(): 사용자 입력 파라미터 → 문자열 연결 → text/html 반환 흐름 추적
             Taint 미확인 시 "취약" 대신 "정보"로 하향; HtmlUtils/Encode.forHtml 감지 시 양호
@@ -283,6 +293,18 @@ _P3_MULTIPART_RE = re.compile(
 _P3_LUCY_FILTER_BEAN = re.compile(
     r'LucyXss(?:Servlet)?Filter|XssEscapeServletFilter',
     re.IGNORECASE,
+)
+# Lucy XSS Filter 실제 등록 검증 패턴 (FilterRegistrationBean / web.xml <filter-class>)
+# build.gradle/pom.xml 의존성 선언(lucy-xss 문자열)과 실제 Filter Chain 등록 코드를 구분
+_P3_LUCY_REGISTER = re.compile(
+    r'(?:FilterRegistrationBean|addFilter\s*\()[^;{]{0,400}?'
+    r'(?:LucyXss(?:Servlet)?Filter|XssEscapeServletFilter)'
+    r'|(?:LucyXss(?:Servlet)?Filter|XssEscapeServletFilter)[^;{]{0,400}?'
+    r'FilterRegistrationBean'
+    r'|new\s+(?:LucyXss(?:Servlet)?Filter|XssEscapeServletFilter)\s*\('
+    r'|<filter-class>\s*[^<]*(?:LucyXss(?:Servlet)?Filter|XssEscapeServletFilter)'
+    r'[^<]*\s*</filter-class>',
+    re.IGNORECASE | re.DOTALL,
 )
 
 # ── Step 3: 커스텀 XSS 필터 탐지 패턴 (v2.4.0) ──────────────────────────────
@@ -1244,17 +1266,20 @@ def build_global_filter_status(source_dir: Path) -> dict:
     전역 XSS 필터 탐지 후 종합 판정. Step 3 커스텀 필터 탐지 추가.
 
     filter_level:
-      none                   — XSS 필터 미발견
-      header_only            — X-XSS-Protection 헤더만 (불충분)
-      inbound                — Lucy/AntiSamy/ESAPI/Jackson 입력 새니타이징
-      inbound_multipart_risk — Lucy 존재하나 multipart 우회 가능성
-      custom_wrapper         — 커스텀 HttpServletRequestWrapper 탐지 (수동 점검 필요)
+      none                     — XSS 필터 미발견 (Lucy 선언만 있고 등록 코드 없는 경우 포함)
+      header_only              — X-XSS-Protection 헤더만 (불충분)
+      inbound                  — Lucy/AntiSamy/ESAPI 전역 서블릿 필터 (모든 입력 경로 커버)
+      inbound_multipart_risk   — Lucy 존재하나 multipart 우회 가능성
+      jackson_requestbody_only — Jackson XSS Deserializer (@RequestBody JSON 경로만 커버)
+                                 @RequestParam/@ModelAttribute/getParameter() 경로는 미커버
+      custom_wrapper           — 커스텀 HttpServletRequestWrapper 탐지 (수동 점검 필요)
     """
-    found_lucy     = False
-    found_antisamy = False
-    found_esapi    = False
-    found_ss_xss   = False
-    found_jack     = False
+    found_lucy      = False
+    lucy_registered = False   # FilterRegistrationBean / web.xml 실제 등록 코드 발견 여부
+    found_antisamy  = False
+    found_esapi     = False
+    found_ss_xss    = False
+    found_jack      = False
     # Step 3: 커스텀 필터 추적 변수
     found_custom_wrapper  = False
     found_custom_method   = False
@@ -1296,6 +1321,9 @@ def build_global_filter_status(source_dir: Path) -> dict:
             hit = False
             if _P3_LUCY.search(content):
                 found_lucy = True;     hit = True
+                # 실제 Filter Chain 등록 코드 검증 (build.gradle 의존성 선언과 구분)
+                if _P3_LUCY_REGISTER.search(content):
+                    lucy_registered = True
             if _P3_ANTISAMY.search(content):
                 found_antisamy = True; hit = True
             if _P3_ESAPI.search(content):
@@ -1400,29 +1428,43 @@ def build_global_filter_status(source_dir: Path) -> dict:
 
     # 종합 판정 (공인 라이브러리 우선)
     if found_lucy:
-        bypass_risk = lucy_multipart.get("bypass_risk") if lucy_multipart else None
-        if bypass_risk is True:
-            filter_type   = "Lucy XSS Filter (Multipart 우회 위험)"
+        # ── Lucy 등록 여부 교차 검증 ────────────────────────────────────────────
+        # build.gradle/pom.xml에 의존성 선언만 있고 실제 FilterRegistrationBean/
+        # web.xml <filter-class> 등록 코드가 없는 경우 → 필터 미동작 → none 처리
+        if not lucy_registered:
+            filter_type   = "Lucy XSS (미등록 — 의존성 선언만)"
             filter_detail = (
-                "Lucy XSS Servlet Filter 적용 중이나, MultipartFilter가 앞단에 배치되어 "
-                "multipart/form-data 요청 파라미터가 Lucy 필터를 우회할 수 있습니다. "
-                f"상세: {lucy_multipart['detail']}"
+                "lucy-xss-servlet 라이브러리가 build.gradle/pom.xml에 선언되어 있으나, "
+                "FilterRegistrationBean 등록 코드 또는 web.xml <filter-class> 매핑이 "
+                "발견되지 않음. XssEscapeServletFilter가 실제 Filter Chain에 등록되지 않아 "
+                "필터가 동작하지 않음 — 선언만으로는 보호 효과 없음."
             )
-            filter_level = "inbound_multipart_risk"
-        elif bypass_risk is None:
-            filter_type   = "Lucy XSS Filter (Multipart 체인 불명확)"
-            filter_detail = (
-                "Lucy XSS Servlet Filter 적용 중. "
-                f"multipart/form-data 우회 가능성: {lucy_multipart['detail'] if lucy_multipart else '확인 불가'}"
-            )
-            filter_level = "inbound_multipart_risk"
+            filter_level = "none"
         else:
-            filter_type   = "Lucy XSS Filter"
-            filter_detail = (
-                "Lucy XSS Servlet Filter 적용 중. "
-                f"MultipartFilter 순서 정상 확인: {lucy_multipart['detail'] if lucy_multipart else 'N/A'}"
-            )
-            filter_level = "inbound"
+            # ── 정상 등록 확인 → multipart bypass 검증 ──────────────────────
+            bypass_risk = lucy_multipart.get("bypass_risk") if lucy_multipart else None
+            if bypass_risk is True:
+                filter_type   = "Lucy XSS Filter (Multipart 우회 위험)"
+                filter_detail = (
+                    "Lucy XSS Servlet Filter 적용 중이나, MultipartFilter가 앞단에 배치되어 "
+                    "multipart/form-data 요청 파라미터가 Lucy 필터를 우회할 수 있습니다. "
+                    f"상세: {lucy_multipart['detail']}"
+                )
+                filter_level = "inbound_multipart_risk"
+            elif bypass_risk is None:
+                filter_type   = "Lucy XSS Filter (Multipart 체인 불명확)"
+                filter_detail = (
+                    "Lucy XSS Servlet Filter 적용 중. "
+                    f"multipart/form-data 우회 가능성: {lucy_multipart['detail'] if lucy_multipart else '확인 불가'}"
+                )
+                filter_level = "inbound_multipart_risk"
+            else:
+                filter_type   = "Lucy XSS Filter"
+                filter_detail = (
+                    "Lucy XSS Servlet Filter 적용 중. "
+                    f"MultipartFilter 순서 정상 확인: {lucy_multipart['detail'] if lucy_multipart else 'N/A'}"
+                )
+                filter_level = "inbound"
     elif found_antisamy:
         filter_type  = "AntiSamy"
         filter_detail = "OWASP AntiSamy HTML sanitizer 적용 중."
@@ -1432,9 +1474,13 @@ def build_global_filter_status(source_dir: Path) -> dict:
         filter_detail = "OWASP ESAPI encoder 적용 중."
         filter_level = "inbound"
     elif found_jack:
-        filter_type  = "Jackson XSS Deserializer"
-        filter_detail = "Jackson ObjectMapper에 커스텀 XSS Deserializer 등록 확인."
-        filter_level = "inbound"
+        filter_type  = "Jackson XSS Deserializer (@RequestBody only)"
+        filter_detail = (
+            "Jackson ObjectMapper에 커스텀 XSS Deserializer 등록 확인. "
+            "@RequestBody(JSON) 역직렬화 경로에만 적용됨 — "
+            "@RequestParam/@ModelAttribute/getParameter() 경유 입력은 서블릿 레벨 필터 미적용."
+        )
+        filter_level = "jackson_requestbody_only"
     # Step 3: 커스텀 필터만 발견된 경우
     elif found_custom_wrapper or found_custom_method:
         blacklist_tag = " [블랙리스트 방식 의심]" if has_blacklist_pattern else ""
@@ -1460,15 +1506,19 @@ def build_global_filter_status(source_dir: Path) -> dict:
         filter_detail = "XSS 전역 필터 미발견 — 취약 가능"
         filter_level = "none"
 
+    # jackson_requestbody_only는 is_inbound=False — @RequestParam 경로 미커버
     is_inbound = filter_level in ("inbound", "inbound_multipart_risk")
+    is_jackson_only = filter_level == "jackson_requestbody_only"
 
     return {
-        "has_filter":          is_inbound or filter_level == "header_only",
-        "has_inbound_filter":  is_inbound,
+        "has_filter":               is_inbound or is_jackson_only or filter_level == "header_only",
+        "has_inbound_filter":       is_inbound,
+        "has_jackson_requestbody":  is_jackson_only,
         "filter_type":         filter_type,
         "filter_detail":       filter_detail,
         "filter_level":        filter_level,
         "has_lucy":            found_lucy,
+        "lucy_registered":     lucy_registered,   # FilterRegistrationBean/web.xml 등록 코드 발견 여부
         "has_antisamy":        found_antisamy,
         "has_esapi":           found_esapi,
         "has_ss_xss":          found_ss_xss,
@@ -2083,6 +2133,32 @@ def _trace_persistent_xss_taint(endpoint: dict,
                 }
 
     return {"taint_confirmed": False, "reason": "Repository write 메서드 호출 경로 미확인"}
+
+
+# ── Jackson Deserializer 커버리지 판정용 헬퍼 ─────────────────────────────────
+# Jackson XSS Deserializer는 Jackson ObjectMapper 역직렬화 경로(@RequestBody JSON)만 커버.
+# @RequestParam / @ModelAttribute / @RequestPart / request.getParameter() 는
+# Servlet Container가 직접 처리하므로 Jackson을 거치지 않아 필터 미적용.
+_SERVLET_INPUT_ANNOTATIONS = frozenset(["@RequestParam", "@ModelAttribute", "@RequestPart"])
+
+
+def _has_servlet_input_params(endpoint: dict) -> bool:
+    """엔드포인트 파라미터 중 서블릿 경로(@RequestParam/@ModelAttribute/@RequestPart) 존재 여부.
+
+    Jackson XSS Deserializer는 이 경로를 커버하지 못한다.
+    True  → 서블릿 입력 존재 → jackson_requestbody_only 필터로는 보호 불충분 → 취약 후보
+    False → @RequestBody 전용 또는 파라미터 없음 → Jackson 필터 커버 범위 내
+    """
+    params = endpoint.get("parameters", [])
+    for p in params:
+        ann   = p.get("annotation", "")
+        ptype = p.get("type", "")
+        if any(a in ann for a in _SERVLET_INPUT_ANNOTATIONS):
+            return True
+        # type 필드가 form / query / servlet 로 명시된 경우
+        if ptype in ("form", "query", "servlet"):
+            return True
+    return False
 
 
 def check_persistent_xss(endpoint: dict,

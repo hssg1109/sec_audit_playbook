@@ -1,6 +1,6 @@
 # AI 보안진단 플레이북
 
-> AI 에이전트(Claude)를 활용한 소스코드 보안 진단 자동화 프레임워크 — v4.9.4
+> AI 에이전트(Claude)를 활용한 소스코드 보안 진단 자동화 프레임워크 — v4.16.0
 
 ## 개요
 
@@ -71,7 +71,7 @@ python tools/scripts/push_bitbucket.py
 Phase 1: 자산 식별
   └── Task 1-1  자산 식별 (Excel → JSON)
 
-Phase 2: 정적 분석
+Phase 2: 정적 분석 (자동스캔)
   └── Task 2-1  API 인벤토리          ← scan_api.py (script-first)
       └── 글로벌 필터·인터셉터 확인
       └── 병렬 실행 ──┬── Task 2-2  인젝션 검토 (SQL / OS Command / SSI)
@@ -82,18 +82,30 @@ Phase 2: 정적 분석
                       │                ← scan_file_processing.py (v1.0) → LLM 보조
                       └── Task 2-5  데이터 보호 검토 (CORS / Secrets / JWT / Crypto / Logging)
                                        ← scan_data_protection.py (v1.1.0) → LLM 보조
+  └── ⚠️ SCA [항상 필수]  오픈소스 의존성 CVE 진단
+        Gradle: scan_sca_gradle_tree.py (전이적 의존성 트리 기반)
+        npm:    scan_sca_gradle_tree.py (package-lock.json v3 기반)
+        JAR:    scan_sca.py --jar (레거시)
 
-Phase 3: 교차검증 (Cross-Verification)
+Phase 3: LLM 수동분석 보완
   ├── Phase 3-1: 자동 탐지 "취약" 판정 → 수동 교차검증
   │     Controller → Service → Repository → SQL Builder 데이터 흐름 추적
   │     사용자 입력 도달 가능성 / 타입 안전성 / 코드 활성화 여부 / 분기 경로 검증
-  └── Phase 3-2: "정보/수동검토" 판정 → LLM 심층진단
-        manual_review_prompt.md 기준 역추적 (DTO 래핑 / 동적 SQL ID 등)
+  ├── Phase 3-2: "정보/수동검토" 판정 → LLM 심층진단
+  │     manual_review_prompt.md 기준 역추적 (DTO 래핑 / 동적 SQL ID 등)
+  └── ⚠️ Phase 3-SCA [정기진단 필수]: SCA CVE 관련성 검토
+        각 라이브러리별 소스코드 grep → 발생조건 검증
+        판정: 적용 / 제한적 / 조건미충족(FP) / 확인불가
+        한국어 CVE 설명 (description_ko, impact_ko, condition_ko) 작성
+        절차: task_sca_llm_review.md
 
-Phase 4: 보고
-  └── merge_results.py          → final_report.json
-  └── generate_finding_report.py → Markdown 보고서
-  └── publish_confluence.py     → Confluence 게시 (선택)
+Phase 4: 보고서 생성 + Confluence 게시 [필수]
+  └── generate_finding_report.py  → Markdown 보고서 (--anchor-style md2cf)
+  └── publish_confluence.py       → Confluence 게시
+        SCA: <prefix>_sca.json + supplemental_sources: [<prefix>_sca_llm.json]
+
+Phase 5: SSC 정합성 검증 [정기진단 필수]
+  └── fetch_ssc.py → LLM 교차검증 → <prefix>_ssc_report.md → Confluence 게시
 ```
 
 ### `sec-audit-static` 내부 구조
@@ -123,7 +135,9 @@ skills/sec-audit-static/
     │   ├── task_22_injection_review.md
     │   ├── task_23_xss_review.md
     │   ├── task_24_file_handling.md
-    │   └── task_25_data_protection.md
+    │   ├── task_25_data_protection.md
+    │   ├── task_sca.md               #   SCA 진단 절차
+    │   └── task_sca_llm_review.md    #   Phase 3-SCA LLM 관련성 검토 절차 ★
     ├── schemas/                      # JSON 스키마 (validate_task_output.py 연동)
     │   ├── finding_schema.json
     │   └── task_output_schema.json
@@ -155,6 +169,9 @@ playbook/
 │       ├── scan_xss.py              #   XSS 진단 엔진 (v2.4.0) ★
 │       ├── scan_file_processing.py  #   파일 처리 취약점 진단 (v1.0) ★
 │       ├── scan_data_protection.py  #   데이터 보호 진단 — 7개 모듈 (v1.1.0) ★
+│       ├── scan_sca_gradle_tree.py  #   SCA v2 — Gradle/npm 전이적 의존성 CVE 진단 ★
+│       ├── scan_sca.py              #   SCA v1 — JAR 기반 (레거시)
+│       ├── setup_linux_jdk.sh       #   WSL2 Linux-native JDK 자동 설치
 │       ├── publish_confluence.py    #   Confluence 보고서 게시
 │       ├── push_bitbucket.py        #   Bitbucket 팀 공유 (증분 커밋)
 │       ├── generate_finding_report.py  #   Markdown 보고서 생성
