@@ -172,6 +172,50 @@ _PII_VAR_NAMES = (
     r'|accountNo|account_?no|bankAccount'
 )
 
+# ── [L] 로그 허용 목록 / 보호 필수 목록 (FP 필터링) ─────────────────────────
+# 허용 목록: 단독 출력 시 FP — 내부 추적용 식별자·비즈니스 상수
+_LOG_FP_ALLOWLIST_VARS = (
+    r'userId|feedId|feedSeq|asumUid|pushType|redirectUri'
+)
+_LOG_FP_ALLOWLIST_RE = re.compile(
+    rf'(?i)\b(?:{_LOG_FP_ALLOWLIST_VARS})\b'
+)
+
+# 보호 필수 목록: 반드시 마스킹 — 고객 식별자·인증 토큰·개인정보 포함 객체
+_LOG_PROTECTED_PARAM_NAMES = (
+    r'mbrId|mbrno|mbr_?id|memberid|memno'
+    r'|authToken|accessToken|refreshToken|webTokenInfo|kmcResult'
+    r'|encryptData|plainText|plain_?text'
+    r'|sessionId|httpSession'
+    r'|password|passwd|pwd|secretKey|privateKey|rsaKey'
+    r'|cardNo|card_?no|creditCard|pan|cvc|cvv'
+    r'|email|phone|mobile|tel|mdn'
+    r'|response\b'  # 회원 정보 API 응답 전체 객체
+)
+_LOG_PROTECTED_PARAM_RE = re.compile(
+    rf'(?i)(?<!\w)(?:{_LOG_PROTECTED_PARAM_NAMES})'
+)
+# Kotlin 문자열 템플릿 내 보호 필수 변수: "...: mbrId=${it}..."
+_LOG_KOTLIN_PROTECTED_TEMPLATE_RE = re.compile(
+    rf'(?i)\$\{{?(?:{_LOG_PROTECTED_PARAM_NAMES})'
+)
+
+
+def _has_protected_log_param(line: str) -> bool:
+    """로그 라인에 보호 필수 변수가 문자열 리터럴 외부(파라미터 위치)에 존재하는지 확인.
+
+    규칙:
+    - 문자열 리터럴("...") 내 키워드만 있는 경우 → FP (e.g. logger.warn("Invalid JWT: ..."))
+    - 파라미터 위치에 보호 필수 변수가 있는 경우 → TP (e.g. log.info("...", mbrId))
+    - Kotlin 문자열 템플릿에 보호 필수 변수가 있는 경우 → TP (e.g. "...: mbrId=${it}")
+    """
+    # Kotlin 문자열 템플릿 체크 (보호 필수 변수가 ${...} 내 있으면 TP)
+    if _LOG_KOTLIN_PROTECTED_TEMPLATE_RE.search(line):
+        return True
+    # 문자열 리터럴 제거 후 보호 필수 변수 체크
+    stripped_of_strings = re.sub(r'"[^"]*"', '', line)
+    return bool(_LOG_PROTECTED_PARAM_RE.search(stripped_of_strings))
+
 # 로그 구문 내 PII 변수 직접 삽입 탐지 — 레벨별 분리
 # ★ info/warn/error/fatal: 상용 환경 출력 → High/취약
 # ★ debug/trace          : 개발/검증계 출력 → Low/정보
@@ -839,13 +883,21 @@ def scan_sensitive_logging(source_dir: Path) -> list[DPFinding]:
                 file_hits[rel]["masked"].append((i, stripped[:120]))
                 continue
 
+            # FP 필터: 보호 필수 변수 없이 허용 목록 변수만 있는 라인 → masked(FP) 처리
+            if bucket in ("high", "low") and not _has_protected_log_param(line):
+                file_hits[rel]["masked"].append((i, stripped[:120]))
+                continue
+
             file_hits[rel][bucket].append((i, stripped[:120]))
 
     # ── 파일 단위 Finding 생성 ────────────────────────────────────
     _REC = (
-        "1. 민감 필드를 로그에서 제외하거나 MaskingUtils.mask() 적용.\n"
-        "2. 운영 환경 로그 레벨을 INFO 이상으로 설정하고 DEBUG 로그 비활성화.\n"
-        "3. 로그 집계 시스템(ELK 등)의 접근 제어 강화."
+        "1. [필수 마스킹 대상] mbrId, authToken, kmcResult, webTokenInfo, encryptData 등 핵심 식별자·인증 토큰·개인정보 포함 객체는 "
+        "로그 레벨에 관계없이 반드시 MaskingUtils.mask() 또는 동등한 유틸로 마스킹 처리 필수.\n"
+        "2. [허용 목록] userId, feedId, feedSeq 등 내부 추적용 식별자는 단독 출력 시 허용 — mbrId 등 보호 필수 항목과 결합 출력 시에는 마스킹 필요.\n"
+        "3. 운영 환경 로그 레벨을 INFO 이상으로 설정하고 DEBUG 로그 비활성화.\n"
+        "4. Logback MessageConverter 커스텀 구현으로 전역 자동 마스킹 아키텍처 도입 권장.\n"
+        "5. 로그 집계 시스템(ELK 등)의 접근 제어 강화."
     )
 
     for rel, buckets in file_hits.items():

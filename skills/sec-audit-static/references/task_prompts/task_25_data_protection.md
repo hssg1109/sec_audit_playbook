@@ -181,12 +181,35 @@ BFF 서버가 서버사이드 환경변수에서 토큰을 로드하여 외부 A
 
 자동 스캔의 개별 findings를 **로그 레벨(심각도) 기준 2개**로 통합합니다.
 
+#### 6-0. 허용 목록 / 보호 필수 목록 (FP 판정 기준)
+
+로그 진단 시 아래 목록을 기준으로 TP/FP를 분리한다.
+
+**[허용 목록] — 단독 출력 시 FP, 탐지 결과에서 제외**
+
+| 분류 | 변수/패턴 | 판정 근거 |
+|---|---|---|
+| 내부 추적 식별자 | `userId`, `feedId`, `feedSeq`, `asumUid` | 애플리케이션 내부 동작 추적용. 고객 식별에 직결되지 않음 |
+| 비즈니스 상수/URL | `pushType`, `redirectUri` | 단순 상수값·URL 경로. 개인정보 미포함 |
+| 일반 예외 메시지 | `e.message`, `exception.message` | 오류 타입·메시지 텍스트. 단, **토큰 원문·Secret Key가 결합 출력되는 경우는 TP** |
+
+> 허용 목록 변수가 `mbrId`·`authToken` 등 보호 필수 변수와 **동일 로그 라인에 결합** 출력되는 경우 → 보호 필수 변수 기준으로 **TP 처리** (허용 목록 적용 불가).
+
+**[보호 필수 목록] — 로그 레벨 무관, 반드시 TP + 마스킹 필수**
+
+| 분류 | 변수/패턴 | 조치 방안 |
+|---|---|---|
+| 핵심 고객 식별자 | `mbrId`, `mbrno`, `mbr_id` | **절대 예외 불가** — MaskingUtils.mask() 필수 |
+| 인증·세션 토큰 | `authToken`, `accessToken`, `refreshToken`, `httpSession.getId()` | 토큰 원문 마스킹 처리 필수 |
+| 개인정보 포함 객체 전체 | `webTokenInfo`, `kmcResult`, `response` (회원 API 응답 전체) | 로그 제외 또는 필드별 마스킹 |
+| 암호화 처리 전/후 데이터 | `encryptData`, `plainText` | 평문 결합 로깅 금지 |
+
 **병합 규칙:**
 
 | 버킷 | 조건 | finding 1건으로 통합 | 결과 | 심각도 |
 |---|---|---|---|---|
-| `high` | `info/warn/error/fatal` 레벨 PII 로깅 | 전체 파일 × 라인 집계 | **취약** | **Critical** |
-| `low` | `debug/trace` 레벨 PII 로깅 | 전체 파일 × 라인 집계 | 정보 | **Medium** |
+| `high` | `info/warn/error/fatal` 레벨 보호 필수 변수 로깅 | 전체 파일 × 라인 집계 | **취약** | **Critical** |
+| `low` | `debug/trace` 레벨 보호 필수 변수 로깅 | 전체 파일 × 라인 집계 | 정보 | **Medium** |
 
 **evidence 기재 방법:**
 ```
@@ -196,16 +219,17 @@ BFF 서버가 서버사이드 환경변수에서 토큰을 로드하여 외부 A
 ```
 
 **FP 컨설턴트 노트 기재 기준:**
-- Kotlin 문자열 보간(`$hmacSignature`) — 변수명이 PII 패턴에 일치하나 실제로는 서명값인 경우
-- 로그 메시지 내 문자열 리터럴(예: `"Auth Fail"`)에 PII 키워드 포함된 경우
+- 허용 목록 변수(`userId`, `feedSeq` 등)가 단독으로 로깅되는 경우 → FP 처리
+- 로그 메시지 문자열 리터럴(예: `"Invalid JWT :"`)에 PII 키워드 포함 + 실제 파라미터는 `e.message` 단독 → FP
+- Kotlin 문자열 보간(`$hmacSignature`) — 변수명이 PII 패턴에 일치하나 실제로는 서명값인 경우 → FP
 - FP 가능성이 있으면 `code_snippet` 하단에 아래 형식으로 반드시 기재:
   ```
-  (※ 컨설턴트 Note: [파일명:라인]의 [코드 패턴]은 FP(오탐) 가능성이 있으나,
+  (※ 컨설턴트 Note: [파일명:라인]의 [코드 패턴]은 FP(오탐) — 보호 필수 변수 미포함.
   [다른 파일:라인]의 mbrId 직접 바인딩은 명백한 취약점(TP)입니다.)
   ```
 
 **대응 방안 필수 포함 항목:**
-1. 즉시 조치: `MaskingUtils.mask()` 적용 리팩토링
+1. [필수] `mbrId`, `authToken` 등 보호 필수 변수: `MaskingUtils.mask()` 적용 리팩토링 — **"해당 파라미터는 마스킹 처리 필수"** 명시
 2. 근본 조치: Logback `MessageConverter` 커스텀 구현으로 전역 자동 마스킹 아키텍처 도입
 
 ---

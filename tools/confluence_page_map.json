@@ -1,7 +1,7 @@
 {
   "version": "3.0",
   "prefix": "",
-  "next_test_number": 35,
+  "next_test_number": 41,
   "root_page": {
     "source": "README.md",
     "type": "doc"
@@ -1317,6 +1317,371 @@
               "page_id": 741064439
             }
           ]
+        },
+        {
+          "title": "테스트35 - GWS oki-admin-fe 정적 진단 (2026-03-20)",
+          "entries": [
+            {
+              "source": "state/t35_gws_oki_admin_fe_report.md",
+              "type": "main_report",
+              "task_sources": {
+                "api": "state/t35_gws_oki_admin_fe_api_inventory.json",
+                "injection": "state/t35_gws_oki_admin_fe_injection.json",
+                "xss": "state/t35_gws_oki_admin_fe_xss.json",
+                "file_handling": "state/t35_gws_oki_admin_fe_task24.json",
+                "data_protection": "state/t35_gws_oki_admin_fe_task25.json"
+              },
+              "title": "테스트35 - GWS oki-admin-fe 보안진단 보고서"
+            },
+            {
+              "source": "state/t35_gws_oki_admin_fe_injection.json",
+              "supplemental_sources": [
+                "state/t35_gws_oki_admin_fe_task22_llm.json"
+              ],
+              "title": "테스트35 - 인젝션 취약점 진단 결과 (oki-admin-fe)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t35_gws_oki_admin_fe_xss.json",
+              "supplemental_sources": [
+                "state/t35_gws_oki_admin_fe_task23_llm.json"
+              ],
+              "title": "테스트35 - XSS/Redirect 취약점 진단 결과 (oki-admin-fe)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t35_gws_oki_admin_fe_task24.json",
+              "supplemental_sources": [
+                "state/t35_gws_oki_admin_fe_task24_llm.json"
+              ],
+              "title": "테스트35 - 파일 처리 진단 결과 (oki-admin-fe)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t35_gws_oki_admin_fe_task25.json",
+              "supplemental_sources": [
+                "state/t35_gws_oki_admin_fe_task25_llm.json"
+              ],
+              "title": "테스트35 - 데이터 보호 진단 결과 (oki-admin-fe)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t35_gws_oki_admin_fe_sca.json",
+              "title": "테스트35 - SCA (오픈소스 취약점) 진단 결과",
+              "type": "sca"
+            },
+            {
+              "source": "state/t35_gws_oki_admin_fe_ssc_report.md",
+              "title": "테스트35 - Fortify SSC 정합성 검증 보고서",
+              "type": "doc"
+            }
+          ]
+        },
+        {
+          "title": "테스트36 - GWS oki-be 정적 진단 (2026-03-20)",
+          "entries": [
+            {
+              "source": "state/t36_gws_oki_be_report.md",
+              "type": "main_report",
+              "task_sources": {
+                "api": "state/t36_gws_oki_be_api_inventory.json",
+                "injection": "state/t36_gws_oki_be_injection.json",
+                "xss": "state/t36_gws_oki_be_xss.json",
+                "file_handling": "state/t36_gws_oki_be_task24.json",
+                "data_protection": "state/t36_gws_oki_be_task25.json"
+              },
+              "title": "테스트36 - GWS oki-be 보안진단 보고서"
+            },
+            {
+              "source": "state/t36_gws_oki_be_api_inventory.json",
+              "title": "테스트36 - API 인벤토리 (GWS oki-be)",
+              "type": "api_inventory"
+            },
+            {
+              "source": "state/t36_gws_oki_be_injection.json",
+              "supplemental_sources": [
+                "state/t36_gws_oki_be_task22_llm.json"
+              ],
+              "title": "테스트36 - 인젝션 취약점 진단 결과 (oki-be)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t36_gws_oki_be_xss.json",
+              "supplemental_sources": [
+                "state/t36_gws_oki_be_task23_llm.json"
+              ],
+              "title": "테스트36 - XSS 취약점 진단 결과 (oki-be)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t36_gws_oki_be_task24.json",
+              "supplemental_sources": [
+                "state/t36_gws_oki_be_task24_llm.json"
+              ],
+              "title": "테스트36 - 파일 처리 진단 결과 (oki-be)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t36_gws_oki_be_task25.json",
+              "supplemental_sources": [
+                "state/t36_gws_oki_be_task25_llm.json"
+              ],
+              "title": "테스트36 - 데이터 보호 진단 결과 (oki-be)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t36_gws_oki_be_sca.json",
+              "title": "테스트36 - SCA (오픈소스 취약점) 진단 결과",
+              "type": "sca"
+            },
+            {
+              "source": "state/t36_gws_oki_be_ssc_report.md",
+              "title": "테스트36 - Fortify SSC 정합성 검증 보고서",
+              "type": "doc"
+            }
+          ]
+        },
+        {
+          "title": "테스트37 - GWS oki-fe 정적 진단 (2026-03-20)",
+          "entries": [
+            {
+              "source": "state/t37_gws_oki_fe_report.md",
+              "type": "main_report",
+              "task_sources": {
+                "api": "state/t37_gws_oki_fe_api_inventory.json",
+                "injection": "state/t37_gws_oki_fe_injection.json",
+                "xss": "state/t37_gws_oki_fe_xss.json",
+                "file_handling": "state/t37_gws_oki_fe_task24.json",
+                "data_protection": "state/t37_gws_oki_fe_task25.json"
+              },
+              "title": "테스트37 - GWS oki-fe 보안진단 보고서"
+            },
+            {
+              "source": "state/t37_gws_oki_fe_injection.json",
+              "supplemental_sources": [
+                "state/t37_gws_oki_fe_task22_llm.json"
+              ],
+              "title": "테스트37 - 인젝션 취약점 진단 결과 (oki-fe)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t37_gws_oki_fe_xss.json",
+              "supplemental_sources": [
+                "state/t37_gws_oki_fe_task23_llm.json"
+              ],
+              "title": "테스트37 - XSS/DOM XSS 취약점 진단 결과 (oki-fe)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t37_gws_oki_fe_task24.json",
+              "supplemental_sources": [
+                "state/t37_gws_oki_fe_task24_llm.json"
+              ],
+              "title": "테스트37 - 파일 처리 진단 결과 (oki-fe)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t37_gws_oki_fe_task25.json",
+              "supplemental_sources": [
+                "state/t37_gws_oki_fe_task25_llm.json"
+              ],
+              "title": "테스트37 - 데이터 보호 진단 결과 (oki-fe)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t37_gws_oki_fe_sca.json",
+              "title": "테스트37 - SCA (오픈소스 취약점) 진단 결과",
+              "type": "sca"
+            },
+            {
+              "source": "state/t37_gws_oki_fe_ssc_report.md",
+              "title": "테스트37 - Fortify SSC 정합성 검증 보고서",
+              "type": "doc"
+            }
+          ]
+        },
+        {
+          "title": "테스트38 - OB cashbagmall 정적 진단 (2026-03-20)",
+          "entries": [
+            {
+              "source": "state/t38_ob_cashbagmall_report.md",
+              "type": "main_report",
+              "task_sources": {
+                "api": "state/t38_ob_cashbagmall_api_inventory.json",
+                "injection": "state/t38_ob_cashbagmall_injection.json",
+                "xss": "state/t38_ob_cashbagmall_xss.json",
+                "file_handling": "state/t38_ob_cashbagmall_task24.json",
+                "data_protection": "state/t38_ob_cashbagmall_task25.json"
+              },
+              "title": "테스트38 - OB cashbagmall 보안진단 보고서"
+            },
+            {
+              "source": "state/t38_ob_cashbagmall_api_inventory.json",
+              "title": "테스트38 - API 인벤토리 (OB cashbagmall)",
+              "type": "api_inventory"
+            },
+            {
+              "source": "state/t38_ob_cashbagmall_injection.json",
+              "supplemental_sources": [
+                "state/t38_ob_cashbagmall_task22_llm.json"
+              ],
+              "title": "테스트38 - 인젝션 취약점 진단 결과 (cashbagmall)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t38_ob_cashbagmall_xss.json",
+              "supplemental_sources": [
+                "state/t38_ob_cashbagmall_task23_llm.json"
+              ],
+              "title": "테스트38 - XSS 취약점 진단 결과 (cashbagmall)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t38_ob_cashbagmall_task24.json",
+              "supplemental_sources": [
+                "state/t38_ob_cashbagmall_task24_llm.json"
+              ],
+              "title": "테스트38 - 파일 처리 진단 결과 (cashbagmall)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t38_ob_cashbagmall_task25.json",
+              "supplemental_sources": [
+                "state/t38_ob_cashbagmall_task25_llm.json"
+              ],
+              "title": "테스트38 - 데이터 보호 진단 결과 (cashbagmall)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t38_ob_cashbagmall_sca.json",
+              "title": "테스트38 - SCA (오픈소스 취약점) 진단 결과",
+              "type": "sca"
+            },
+            {
+              "source": "state/t38_ob_cashbagmall_ssc_report.md",
+              "title": "테스트38 - Fortify SSC 정합성 검증 보고서",
+              "type": "doc"
+            }
+          ]
+        },
+        {
+          "title": "테스트39 - OB front_resource 정적 진단 (2026-03-20)",
+          "entries": [
+            {
+              "source": "state/t39_ob_front_resource_report.md",
+              "type": "main_report",
+              "task_sources": {
+                "api": "state/t39_ob_front_resource_api_inventory.json",
+                "injection": "state/t39_ob_front_resource_injection.json",
+                "xss": "state/t39_ob_front_resource_xss.json",
+                "file_handling": "state/t39_ob_front_resource_task24.json",
+                "data_protection": "state/t39_ob_front_resource_task25.json"
+              },
+              "title": "테스트39 - OB front_resource 보안진단 보고서"
+            },
+            {
+              "source": "state/t39_ob_front_resource_injection.json",
+              "supplemental_sources": [
+                "state/t39_ob_front_resource_task22_llm.json"
+              ],
+              "title": "테스트39 - 인젝션 취약점 진단 결과 (front_resource)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t39_ob_front_resource_xss.json",
+              "supplemental_sources": [
+                "state/t39_ob_front_resource_task23_llm.json"
+              ],
+              "title": "테스트39 - XSS/DOM XSS 취약점 진단 결과 (front_resource)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t39_ob_front_resource_task24.json",
+              "supplemental_sources": [
+                "state/t39_ob_front_resource_task24_llm.json"
+              ],
+              "title": "테스트39 - 파일 처리 진단 결과 (front_resource)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t39_ob_front_resource_task25.json",
+              "supplemental_sources": [
+                "state/t39_ob_front_resource_task25_llm.json"
+              ],
+              "title": "테스트39 - 데이터 보호 진단 결과 (front_resource)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t39_ob_front_resource_sca.json",
+              "title": "테스트39 - SCA (오픈소스 취약점) 진단 결과",
+              "type": "sca"
+            },
+            {
+              "source": "state/t39_ob_front_resource_ssc_report.md",
+              "title": "테스트39 - Fortify SSC 정합성 검증 보고서",
+              "type": "doc"
+            }
+          ]
+        },
+        {
+          "title": "테스트40 - OB ob-backend 정적 진단 (2026-03-20)",
+          "entries": [
+            {
+              "source": "state/t40_ob_backend_report.md",
+              "type": "main_report",
+              "task_sources": {
+                "api": "state/t40_ob_backend_api_inventory.json",
+                "injection": "state/t40_ob_backend_injection.json",
+                "xss": "state/t40_ob_backend_xss.json",
+                "file_handling": "state/t40_ob_backend_task24.json",
+                "data_protection": "state/t40_ob_backend_task25.json"
+              },
+              "title": "테스트40 - OB ob-backend 보안진단 보고서"
+            },
+            {
+              "source": "state/t40_ob_backend_injection.json",
+              "supplemental_sources": [
+                "state/t40_ob_backend_task22_llm.json"
+              ],
+              "title": "테스트40 - 인젝션 취약점 진단 결과 (ob-backend)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t40_ob_backend_xss.json",
+              "supplemental_sources": [
+                "state/t40_ob_backend_task23_llm.json"
+              ],
+              "title": "테스트40 - XSS 취약점 진단 결과 (ob-backend)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t40_ob_backend_task24.json",
+              "supplemental_sources": [
+                "state/t40_ob_backend_task24_llm.json"
+              ],
+              "title": "테스트40 - 파일 처리 진단 결과 (ob-backend)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t40_ob_backend_task25.json",
+              "supplemental_sources": [
+                "state/t40_ob_backend_task25_llm.json"
+              ],
+              "title": "테스트40 - 데이터 보호 진단 결과 (ob-backend)",
+              "type": "finding"
+            },
+            {
+              "source": "state/t40_ob_backend_sca.json",
+              "title": "테스트40 - SCA (오픈소스 취약점) 진단 결과",
+              "type": "sca"
+            },
+            {
+              "source": "state/t40_ob_backend_ssc_report.md",
+              "title": "테스트40 - Fortify SSC 정합성 검증 보고서",
+              "type": "doc"
+            }
+          ],
+          "page_id": 741065541
         }
       ],
       "entries": []

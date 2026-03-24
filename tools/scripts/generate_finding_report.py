@@ -241,6 +241,23 @@ _SCAN_SUMMARY_STATS: dict[tuple[str, str], object] = {
     ("file_handling", "경로 탐색"): lambda s: {"vuln": 0, "info": 0, "safe": 1},
 }
 
+# 진단 대상 열 EP 소스 정의
+# - None  : cat_summary["total_endpoints"] 사용 (해당 task 전체 EP 스캔 항목)
+# - str   : cat_summary[str]["total"] 사용 (파일 처리 타입별 EP 수)
+# - 미등록 항목: "-" 표시 (OS Command, SSI, XSS 필터/DOM, 데이터 보호 등 EP 대상 아님)
+_EP_ITEM_SOURCE: dict[str, str | None] = {
+    # Injection — SQL만 EP 전수 스캔 (OS Command/SSI는 전역 패턴 스캔)
+    "SQL 인젝션":        None,
+    # XSS — DOM XSS·XSS 필터 결함 제외 모두 EP 전수 스캔
+    "Persistent XSS":    None,
+    "Reflected XSS":     None,
+    "Open Redirect":     None,
+    # File Handling — 탐지된 타입별 EP 수 (없으면 "-")
+    "파일 업로드":        "upload",
+    "파일 다운로드":      "download",
+    "로컬 파일 인클루전": "rfi",
+}
+
 
 # Task 순서 정의 (트리 + 매트릭스 공유)
 _TASK_ORDER: list[tuple[str, str, str]] = [
@@ -653,9 +670,22 @@ def load_findings(filepath: Path, source_dir: Path,
         cat_lower = f.get("category", "").lower()
         subcategory = ""
         # 1) JSON subcategory 필드 직접 사용 (있을 때)
+        #    item key(예: "hardcoded")이면 display name(예: "하드코딩된 비밀정보")으로 변환
+        #    LLM이 "SQL_INJECTION", "GLOBAL_FILTER" 등 raw 대문자 키를 반환하는 경우에도
+        #    SUBCATEGORY_EXTRA_KEYWORDS 를 통해 한글 표시명으로 정규화한다.
         raw_sub = f.get("subcategory", "")
         if raw_sub:
-            subcategory = raw_sub
+            subcategory = cat_info["items"].get(raw_sub, "")
+            if not subcategory:
+                # raw_sub 언더스코어→공백 + 소문자 변환 후 EXTRA_KEYWORDS 매핑 시도
+                raw_lower = raw_sub.lower().replace("_", " ")
+                for keyword, item_key in SUBCATEGORY_EXTRA_KEYWORDS.get(category, []):
+                    if keyword in raw_lower:
+                        subcategory = cat_info["items"].get(item_key, "")
+                        if subcategory:
+                            break
+            if not subcategory:
+                subcategory = raw_sub  # 매핑 실패 시 원본 유지 (step 2~4에서 재시도)
         # 2) CATEGORY_INFO item key 기반 매핑 (영문 키 → 표시 명칭)
         if not subcategory:
             import re as _re
@@ -748,9 +778,9 @@ def load_endpoint_group_findings(filepath: Path,
     cat_info = CATEGORY_INFO[category]
 
     info_eps = [ep for ep in raw["endpoint_diagnoses"] if ep.get("result") == "정보"]
-    # XSS(2-3): 자동스캔이 "취약"으로 판정한 endpoint_diagnoses도 그룹 Finding으로 변환
+    # XSS(2-3): 자동스캔이 "취약"/"잠재위협"으로 판정한 endpoint_diagnoses도 그룹 Finding으로 변환
     vuln_eps_for_group = (
-        [ep for ep in raw["endpoint_diagnoses"] if ep.get("result") == "취약"]
+        [ep for ep in raw["endpoint_diagnoses"] if ep.get("result") in ("취약", "잠재위협")]
         if task_id == "2-3" else []
     )
     if not info_eps and not vuln_eps_for_group:
@@ -977,7 +1007,11 @@ def load_endpoint_group_findings(filepath: Path,
         xss_group_map: dict[str, dict] = {}
         for gj in xss_review.get("group_judgments", []):
             gname = gj.get("group", "")
-            if "잠재적위협" in gname:
+            if "확정 취약" in gname and "Persistent" in gname:
+                xss_group_map["확정취약-Persistent"] = gj
+            elif "잠재 위협" in gname and "Kafka" in gname:
+                xss_group_map["잠재위협-Kafka비동기"] = gj
+            elif "잠재적위협" in gname:
                 xss_group_map["잠재적위협"] = gj
             elif "수동확인필요" in gname:
                 xss_group_map.setdefault("수동확인필요", gj)
@@ -1117,22 +1151,71 @@ def load_endpoint_group_findings(filepath: Path,
                             "2. 모든 Content-Type 요청 커버 여부 확인\n"
                             "3. 소비자 측 출력 인코딩 병행 적용"
                         )
+            elif xss_cat == "잠재위협-Kafka비동기":
+                subcategory = "Persistent XSS"
+                gj = xss_group_map.get("잠재위협-Kafka비동기", {})
+                _rat = gj.get("rationale", "")
+                title = (
+                    f"Persistent XSS — [잠재 취약 - Async Taint Break] "
+                    f"Kafka 비동기 경로, Consumer 수동 교차검증 필요 ({len(eps)}건)"
+                )
+                desc = (
+                    f"Controller에서 Kafka 이벤트를 발행하는 **{len(eps)}개 엔드포인트**입니다. "
+                    "Kafka Consumer 측의 DB 저장 경로가 현재 소스 범위(Taint Break)에서 "
+                    "자동 추적되지 않아, **보수적 기준**에 따라 취약 건수에 포함하여 기재합니다.\n\n"
+                    "**위협 시나리오:** Consumer가 이벤트 페이로드의 자유 텍스트 필드를 "
+                    "전역 XSS 필터 없이 DB에 저장하는 경우, 확정 취약 엔드포인트와 동일한 "
+                    "Persistent XSS 취약점이 발현됩니다.\n\n"
+                    + (f"**검증 결과:** {_rat}\n\n" if _rat else "")
+                    + "**후속 조치:** `tools/scripts/trace_kafka_flow.py` 실행하여 "
+                    "Producer→Consumer→Sink 경로 자동 추적 후 재분류 권고."
+                )
+                rec = (
+                    "비동기 메시지(Kafka)를 수신하는 Consumer 측 모듈에서 해당 데이터가 DB의 "
+                    "자유 텍스트 필드로 저장되는지 아키텍처 수준의 수동 교차 검증이 필요함.\n"
+                    "1. `trace_kafka_flow.py <source_dir>` 실행 — Producer Topic → Consumer @KafkaListener "
+                    "→ Repository.save() + String 필드 자동 연결 추적\n"
+                    "2. Consumer가 String 자유텍스트 필드 저장 확인 시 → 확정 취약 처리, "
+                    "Lucy XSS Filter / Jackson JsonDeserializer 적용\n"
+                    "3. Consumer 코드가 별도 레포인 경우 해당 레포를 다음 진단 대상에 포함"
+                )
             else:  # 수동확인필요
                 subcategory = "Reflected XSS"
                 llm_note = _xss_llm_note("수동확인필요")
                 gj = xss_group_map.get("수동확인필요", {})
                 llm_j = gj.get("judgment", "")
+                _rat = gj.get("rationale", "")
+                _eps_rev = gj.get("endpoints_reviewed", []) + gj.get("controllers_reviewed", [])
                 if llm_j == "양호":
                     title = f"XSS 수동확인 LLM 검토 완료 — Reflected/View XSS ({len(eps)}건) [양호]"
+                elif llm_j and _eps_rev:
+                    # LLM 검토 결과가 있으면 첫 번째 endpoint finding 요약을 현황으로 사용
+                    _first_finding = _eps_rev[0].get("finding", "").split(" — ")[0].strip()
+                    _first_finding = _first_finding[:55] if _first_finding else ""
+                    if _first_finding:
+                        _cnt_suffix = f" 외 {len(eps)-1}건" if len(eps) > 1 else ""
+                        title = f"{_first_finding}{_cnt_suffix}"
+                    else:
+                        title = f"XSS 수동확인 LLM 검토 ({llm_j}) — Reflected/View XSS ({len(eps)}건)"
                 else:
                     title = f"XSS 수동 확인 필요 — Reflected/View XSS ({len(eps)}건)"
-                desc = (
-                    f"URL 파라미터·헤더를 통한 입력이 View 또는 응답에 반영될 가능성이 있는 "
-                    f"**{len(eps)}개 엔드포인트**입니다. "
-                    "XSS 필터 적용 여부 및 출력 인코딩을 수동으로 확인해야 합니다.\n\n"
-                    "**주요 패턴:** JSP View 반환 또는 파라미터를 응답에 직접 포함하는 핸들러."
-                    + llm_note
-                )
+                # desc: LLM 검토 결과가 있으면 rationale 기반 선행 설명 사용
+                if llm_j and _rat:
+                    _pat_desc = _eps_rev[0].get("finding", "") if _eps_rev else ""
+                    desc = (
+                        f"**{len(eps)}개 엔드포인트** LLM 검토 결과: **{llm_j}**\n\n"
+                        f"{_rat}\n\n"
+                        + (f"**대표 패턴:** {_pat_desc}\n\n" if _pat_desc else "")
+                        + llm_note
+                    )
+                else:
+                    desc = (
+                        f"URL 파라미터·헤더를 통한 입력이 View 또는 응답에 반영될 가능성이 있는 "
+                        f"**{len(eps)}개 엔드포인트**입니다. "
+                        "XSS 필터 적용 여부 및 출력 인코딩을 수동으로 확인해야 합니다.\n\n"
+                        "**주요 패턴:** JSP View 반환 또는 파라미터를 응답에 직접 포함하는 핸들러."
+                        + llm_note
+                    )
                 rec = ("각 엔드포인트에서 사용자 입력이 View/응답에 반영되는 지점을 확인하고 "
                        "JSTL `<c:out>`, Spring `HtmlUtils.htmlEscape()` 등으로 출력 인코딩을 적용하십시오.")
 
@@ -1203,18 +1286,32 @@ def load_endpoint_group_findings(filepath: Path,
                         rep_after  = []
                     break
             # LLM 판정이 양호이고 개별 endpoints_reviewed 중 정보/취약 없으면 → "low"(양호)
-            _xss_gj = xss_group_map.get("잠재적위협" if xss_cat == "잠재적위협" else "수동확인필요", {})
+            if xss_cat == "잠재위협-Kafka비동기":
+                _xss_gj = xss_group_map.get("잠재위협-Kafka비동기", {})
+            elif xss_cat == "잠재적위협":
+                _xss_gj = xss_group_map.get("잠재적위협", xss_group_map.get("확정취약-Persistent", {}))
+            else:
+                _xss_gj = xss_group_map.get("수동확인필요", {})
             _xss_eps_reviewed = (_xss_gj.get("endpoints_reviewed", [])
                                  + _xss_gj.get("controllers_reviewed", []))
             _has_non_safe = any(e.get("result") in ("정보", "취약") for e in _xss_eps_reviewed)
             _xss_llm_j = _xss_gj.get("judgment", "")
             # 그룹 내 취약 판정 EP가 있으면 severity를 high(→취약)으로 상향
             _group_has_vuln = any(e.get("result") == "취약" for e in eps)
-            if _xss_llm_j == "양호" and not _has_non_safe:
+            if xss_cat == "잠재위협-Kafka비동기":
+                # Kafka 잠재 취약: 보수적 카운팅 → "high"(취약) 레벨로 집계
+                # 매트릭스 취약 열에 포함 (확정 N건 + Kafka M건 = 총 N+M건)
+                _ep_severity = "high"
+            elif _xss_llm_j == "양호" and not _has_non_safe:
                 _ep_severity = "low"
             elif _group_has_vuln or _xss_llm_j == "취약":
                 _ep_severity = "high"
+            elif _xss_llm_j == "정보":
+                # LLM이 "정보"로 판정 = 직접 취약하진 않으나 검토·조치 필요 → 위험도 3
+                # (간접 XSS 경로, 외부 의존, 파라미터 전달 구조 등 확인 필요 항목)
+                _ep_severity = "medium"
             else:
+                # LLM 미검토 또는 판정 없음 → 순수 참고(위험도 1)
                 _ep_severity = "info"
 
             # Persistent XSS: persistent_xss_revision이 있으면 EP별 행 분리 데이터 생성
@@ -1358,31 +1455,24 @@ def generate_stats_matrix(all_findings: dict[str, list[Finding]],
     """
     scan_summaries = scan_summaries or {}
 
-    header = ("| Task | 세부 진단 항목 | 진단 대상 "
-              "| 🔴 취약 | 🟡 정보 (수동검토) | 🟢 양호 / 해당없음 |")
-    sep    = ("|:-----|:------------|:--------:"
-              "|:------:|:-----------------:|:-----------------:|")
-    rows: list[str] = [header, sep]
+    rows: list[tuple] = []
 
     for task_label, _task_desc, cat_id in _TASK_ORDER:
         findings  = all_findings.get(cat_id, [])
         cat_items = CATEGORY_INFO[cat_id]["items"]
         cat_summary = scan_summaries.get(cat_id, {})
 
-        # 진단 대상 수: endpoint 전수 스캔 task만 표시
-        # _inscope 파일(스코프 지정 진단)에는 filtered_endpoint_count가 우선 사용됨
-        total_ep = cat_summary.get("total_endpoints")
+        # 진단 대상 EP 카운트: _inscope filtered_endpoint_count 우선, 없으면 total_endpoints
         _sm = cat_summary.get("_scan_metadata", {})
         _filtered_ep = _sm.get("filtered_endpoint_count")
-        if _filtered_ep is not None:
-            total_ep = _filtered_ep
-        target_str = f"{total_ep:,} EP" if total_ep else "-"
+        total_ep = _filtered_ep if _filtered_ep is not None else cat_summary.get("total_endpoints")
 
         # subtype별 카운터 초기화 (중복 제거)
         seen_names: list[str] = []
         for v in cat_items.values():
             if v not in seen_names:
                 seen_names.append(v)
+        _canonical_set = set(seen_names)
 
         counts: dict[str, dict[str, int]] = {
             name: {"vuln": 0, "info": 0, "safe": 0} for name in seen_names
@@ -1395,33 +1485,38 @@ def generate_stats_matrix(all_findings: dict[str, list[Finding]],
             if subcat not in counts:
                 counts[subcat] = {"vuln": 0, "info": 0, "safe": 0}
             key = {"취약": "vuln", "정보": "info", "양호": "safe"}.get(result, "info")
-            counts[subcat][key] += 1
+            # EP 그룹 finding(endpoint_diagnoses 기반 그룹화)은 instances 수(실제 취약 EP 수)로 집계
+            # 일반 finding은 1건으로 집계
+            count_n = len(f.instances) if (f.from_ep_group and f.instances) else 1
+            counts[subcat][key] += count_n
 
-        # 스캔 summary 기반 카운트 보완:
-        # _SCAN_SUMMARY_STATS에 매핑된 항목은 스캔 JSON의 전수 집계를 사용
+        # Safety net: 비정규화 서브카테고리(raw 영문 키 등)가 남아 있으면
+        # 첫 번째 canonical 항목으로 병합해 중복 행 방지
+        _fallback = seen_names[0]
+        for _subcat in [k for k in counts if k not in _canonical_set]:
+            for _k in ("vuln", "info", "safe"):
+                counts[_fallback][_k] += counts[_subcat][_k]
+            del counts[_subcat]
+
+        # 양호(safe) 카운트 보완 — 스캔 summary + LLM override 기반:
+        # ✅ 취약/정보는 all_findings(Finding 객체) 기반 최종 판정만 사용 → 상세목록과 동기화
+        # ✅ 양호만 외부 소스로 보완 → 100% 커버리지 증명 (EP 전수 스캔 결과 반영)
         for item_name in seen_names:
-            # LLM override가 있으면 scan summary보다 우선 (LLM 최종 판정 반영)
             llm_key = (cat_id, item_name)
+            safe_candidate = 0
+            # LLM override의 safe 값 (취약/정보는 무시 — finding 기반 유지)
             if llm_overrides and llm_key in llm_overrides:
-                lo = llm_overrides[llm_key]
-                counts[item_name]["safe"] = lo.get("safe", 0)
-                counts[item_name]["info"] = lo.get("info", 0)
-                counts[item_name]["vuln"] = lo.get("vuln", 0)
-            else:
-                extractor = _SCAN_SUMMARY_STATS.get((cat_id, item_name))
-                if extractor and cat_summary:
-                    try:
-                        sc = extractor(cat_summary)
-                        # 스캔 summary 값이 finding 집계보다 크거나 같으면 override
-                        # (finding 집계는 취약/정보 위주이므로 양호는 summary 우선)
-                        if sc.get("safe", 0) > counts[item_name]["safe"]:
-                            counts[item_name]["safe"] = sc["safe"]
-                        if sc.get("info", 0) > counts[item_name]["info"]:
-                            counts[item_name]["info"] = sc["info"]
-                        if sc.get("vuln", 0) > counts[item_name]["vuln"]:
-                            counts[item_name]["vuln"] = sc["vuln"]
-                    except Exception:
-                        pass
+                safe_candidate = llm_overrides[llm_key].get("safe", 0)
+            # 스캔 summary의 safe 값 (취약/정보는 무시 — finding 기반 유지)
+            extractor = _SCAN_SUMMARY_STATS.get((cat_id, item_name))
+            if extractor and cat_summary:
+                try:
+                    sc = extractor(cat_summary)
+                    safe_candidate = max(safe_candidate, sc.get("safe", 0))
+                except Exception:
+                    pass
+            if safe_candidate > counts[item_name]["safe"]:
+                counts[item_name]["safe"] = safe_candidate
             # 스캔 실행 확인(cat_summary 존재) 후에도 0/0/0이면 양호(safe=1) 표시
             # 스캔이 진행됐고 해당 항목에 아무 발견이 없음 → 양호로 기록
             if cat_summary and counts[item_name] == {"vuln": 0, "info": 0, "safe": 0}:
@@ -1430,7 +1525,16 @@ def generate_stats_matrix(all_findings: dict[str, list[Finding]],
         first_row = True
         for item_name, c in counts.items():
             task_col: str = task_label if first_row else ""
-            target_col: str = target_str if first_row else ""
+            # 진단 대상 열: 항목별 EP 소스 기반 개별 표시
+            if item_name in _EP_ITEM_SOURCE:
+                _ep_src = _EP_ITEM_SOURCE[item_name]
+                if _ep_src is None:
+                    _ep_n = total_ep  # task 전체 EP 수
+                else:
+                    _ep_n = cat_summary.get(_ep_src, {}).get("total") or None
+                target_col = f"{_ep_n:,} EP" if _ep_n else "-"
+            else:
+                target_col = "-"
             v: int = c["vuln"]
             i: int = c["info"]
             s: int = c["safe"]
@@ -1438,10 +1542,45 @@ def generate_stats_matrix(all_findings: dict[str, list[Finding]],
             v_str = f"**{v}**" if v > 0 else "0"
             i_str = f"**{i}**" if i > 0 else "0"
             s_str = f"**{s}**" if s > 0 else "0"
-            rows.append(f"| {task_col} | {item_name} | {target_col} | {v_str} | {i_str} | {s_str} |")
+            rows.append((task_col, item_name, target_col, v, i, s, v_str, i_str, s_str))
             first_row = False
 
-    return "\n".join(rows)
+    if ANCHOR_STYLE == "md2cf":
+        # HTML 테이블로 렌더링 — 취약(빨간), 정보(파란), 양호(초록) 색상 적용
+        html_rows = ["<table><tbody>"]
+        html_rows.append(
+            "<tr>"
+            "<th>Task</th><th>세부 진단 항목</th><th>진단 대상</th>"
+            "<th>🔴 취약</th><th>🟡 정보 (수동검토)</th><th>🟢 양호 / 해당없음</th>"
+            "</tr>"
+        )
+        for task_col, item_name, target_col, v, i, s, v_str, i_str, s_str in rows:
+            v_cell = (f'<span style="color:#cc0000;font-weight:bold">{v}</span>'
+                      if v > 0 else "0")
+            i_cell = (f'<span style="color:#0055cc;font-weight:bold">{i}</span>'
+                      if i > 0 else "0")
+            s_cell = (f'<span style="color:#007700">{s}</span>'
+                      if s > 0 else "0")
+            html_rows.append(
+                f"<tr>"
+                f"<td>{task_col}</td><td>{item_name}</td><td>{target_col}</td>"
+                f"<td>{v_cell}</td><td>{i_cell}</td><td>{s_cell}</td>"
+                f"</tr>"
+            )
+        html_rows.append("</tbody></table>")
+        return "\n".join(html_rows)
+    else:
+        md_rows = [
+            ("| Task | 세부 진단 항목 | 진단 대상 "
+             "| 🔴 취약 | 🟡 정보 (수동검토) | 🟢 양호 / 해당없음 |"),
+            ("|:-----|:------------|:--------:"
+             "|:------:|:-----------------:|:-----------------:|"),
+        ]
+        for task_col, item_name, target_col, v, i, s, v_str, i_str, s_str in rows:
+            md_rows.append(
+                f"| {task_col} | {item_name} | {target_col} | {v_str} | {i_str} | {s_str} |"
+            )
+        return "\n".join(md_rows)
 
 
 def generate_summary_table(all_findings: dict[str, list[Finding]],
@@ -1684,6 +1823,17 @@ def generate_category_detail(category_id: str, findings: list[Finding],
             lines.append(f"**파일:** `{file_display}`\n")
 
         # ── expand 섹션: 로그 내 정보 노출이면 파일 목록, 그 외 API 엔드포인트 목록 ─────────
+        def _extract_log_params(li: dict) -> str:
+            """log_instance에서 실제 노출 파라미터 추출.
+            우선순위: li['params'] 명시값 > snippet 정규식 추출."""
+            if li.get("params"):
+                return li["params"]
+            snippet = li.get("snippet", "")
+            m = re.search(r'log\w*\.\w+\s*\([^"]*"[^"]*",\s*(.+?)\)', snippet, re.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+            return "-"
+
         if f.log_instances:
             # SENSITIVE_LOGGING: 취약 파일 및 노출 민감정보 목록
             _li_cnt = len(f.log_instances)
@@ -1691,15 +1841,15 @@ def generate_category_detail(category_id: str, findings: list[Finding],
             if ANCHOR_STYLE == "md2cf":
                 rows_html = []
                 for li in f.log_instances:
-                    fname_disp = f"<code>{li.get('file', '-')}</code>"
-                    sdata_disp = li.get("sensitive_data", "-")
-                    snip_disp  = f"<code>{li.get('snippet', '-')[:120]}</code>"
+                    fname_disp  = f"<code>{li.get('file', '-')}</code>"
+                    desc_disp   = li.get("sensitive_data", "-")
+                    params_disp = f"<code>{_extract_log_params(li)}</code>"
                     rows_html.append(
-                        f"<tr><td>{fname_disp}</td><td>{sdata_disp}</td><td>{snip_disp}</td></tr>"
+                        f"<tr><td>{fname_disp}</td><td>{desc_disp}</td><td>{params_disp}</td></tr>"
                     )
                 table_html = (
                     "<table><tbody>"
-                    "<tr><th>파일명</th><th>노출 민감정보</th><th>로그 코드(대표)</th></tr>"
+                    "<tr><th>파일명</th><th>설명</th><th>실제 노출 민감정보</th></tr>"
                     + "".join(rows_html)
                     + "</tbody></table>"
                 )
@@ -1713,13 +1863,65 @@ def generate_category_detail(category_id: str, findings: list[Finding],
             else:
                 lines.append("<details>")
                 lines.append(f"<summary><strong>{_title}</strong></summary>\n")
-                lines.append("| 파일명 | 노출 민감정보 | 로그 코드(대표) |")
-                lines.append("|:-------|:-------------|:----------------|")
+                lines.append("| 파일명 | 설명 | 실제 노출 민감정보 |")
+                lines.append("|:-------|:-----|:------------------|")
                 for li in f.log_instances:
                     _fn = f"`{li.get('file', '-')}`"
                     _sd = li.get("sensitive_data", "-")
-                    _sn = f"`{li.get('snippet', '-')[:80]}`"
-                    lines.append(f"| {_fn} | {_sd} | {_sn} |")
+                    _pm = f"`{_extract_log_params(li)}`"
+                    lines.append(f"| {_fn} | {_sd} | {_pm} |")
+                lines.append("\n</details>\n")
+
+        elif f.subcategory == "로그 내 정보 노출" and f.instances:
+            # SENSITIVE_LOGGING 정보성 finding (log_instances 없음): affected_files + code_snippet 파싱
+            _inst_cnt = len(f.instances)
+            _title    = f"취약 파일 및 노출 민감정보 목록 ({_inst_cnt}건)"
+            # code_snippet에서 파일명 → 파라미터 매핑 파싱
+            _snippet_map: dict[str, str] = {}
+            if f.code_snippet:
+                _cur_file = ""
+                for _sl in f.code_snippet.splitlines():
+                    _fmatch = re.match(r'^//\s*(\S+\.(?:java|kt|xml|js|ts))(?::\d+)?', _sl.strip())
+                    if _fmatch:
+                        _cur_file = _fmatch.group(1).split("/")[-1]
+                    elif _cur_file and "log." in _sl.lower():
+                        _params = _extract_log_params(_sl.strip())
+                        if _params != "-":
+                            _snippet_map.setdefault(_cur_file, _params)
+            if ANCHOR_STYLE == "md2cf":
+                rows_html = []
+                for inst in f.instances:
+                    _fp   = inst.get("file", "-") or "-"
+                    _fn   = _fp.split("/")[-1]
+                    _pm   = _snippet_map.get(_fn, "-")
+                    fname_disp  = f"<code>{_fn}</code>"
+                    params_disp = f"<code>{_pm}</code>" if _pm != "-" else "-"
+                    rows_html.append(
+                        f"<tr><td>{fname_disp}</td><td>-</td><td>{params_disp}</td></tr>"
+                    )
+                table_html = (
+                    "<table><tbody>"
+                    "<tr><th>파일명</th><th>설명</th><th>실제 노출 민감정보</th></tr>"
+                    + "".join(rows_html)
+                    + "</tbody></table>"
+                )
+                lines.append(
+                    '<ac:structured-macro ac:name="expand">'
+                    f'<ac:parameter ac:name="title">{_title} — 펼치기</ac:parameter>'
+                    f'<ac:rich-text-body>{table_html}</ac:rich-text-body>'
+                    '</ac:structured-macro>'
+                )
+                lines.append("")
+            else:
+                lines.append("<details>")
+                lines.append(f"<summary><strong>{_title}</strong></summary>\n")
+                lines.append("| 파일명 | 설명 | 실제 노출 민감정보 |")
+                lines.append("|:-------|:-----|:------------------|")
+                for inst in f.instances:
+                    _fp  = inst.get("file", "-") or "-"
+                    _fn  = _fp.split("/")[-1]
+                    _pm  = _snippet_map.get(_fn, "-")
+                    lines.append(f"| `{_fn}` | - | `{_pm}` |")
                 lines.append("\n</details>\n")
 
         elif f.affected_endpoints:
@@ -1764,7 +1966,7 @@ def generate_category_detail(category_id: str, findings: list[Finding],
                     lines.append(f"| {_m} | {_p} | {_c} | {_d} |")
                 lines.append("\n</details>\n")
 
-        if len(f.instances) > 1:
+        if len(f.instances) > 1 and not f.log_instances and f.subcategory != "로그 내 정보 노출":
             if ANCHOR_STYLE == "md2cf":
                 # Confluence Expand 매크로: 영향 받는 전체 API/파일 목록 펼치기
                 rows_html = []

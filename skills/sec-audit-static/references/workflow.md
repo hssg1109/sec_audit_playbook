@@ -17,11 +17,15 @@ Phase 1: 자산 식별
 
 Phase 2: 정적 분석 (자동스캔)
   ├─ Task 2-1: API 인벤토리 추출 (선행)
-  └─ 병렬 실행 (2-1 완료 후):
-     ├─ Task 2-2: 인젝션 자동스캔  → <prefix>_injection.json
-     ├─ Task 2-3: XSS 자동스캔     → <prefix>_xss.json
-     ├─ Task 2-4: 파일처리 자동스캔 → <prefix>_task24.json
-     └─ Task 2-5: 데이터보호 자동스캔 → <prefix>_task25.json
+  ├─ 병렬 실행 (2-1 완료 후):
+  │  ├─ Task 2-2: 인젝션 자동스캔  → <prefix>_injection.json
+  │  ├─ Task 2-3: XSS 자동스캔     → <prefix>_xss.json
+  │  ├─ Task 2-4: 파일처리 자동스캔 → <prefix>_task24.json
+  │  └─ Task 2-5: 데이터보호 자동스캔 → <prefix>_task25.json
+  └─ ⚠️ SCA 진단 [항상 필수]: scan_sca_gradle_tree.py / scan_sca.py → <prefix>_sca.json
+       - Gradle 프로젝트: python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json
+       - npm 프로젝트(package-lock.json): python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json
+       - JAR 기반(레거시): scan_sca.py --jar <jar>
 
 Phase 3: LLM 수동분석 보완 (자동스캔 결과를 보완·갱신)
   ├─ Task 3-2: 인젝션 수동분석    → <prefix>_task22_llm.json
@@ -41,8 +45,23 @@ Phase 3: LLM 수동분석 보완 (자동스캔 결과를 보완·갱신)
   │   └─ 전역 XSS 필터 취약점 finding 생성
   ├─ Task 3-4: 파일처리 수동분석  → <prefix>_task24_llm.json
   │   └─ needs_review 항목 IDOR/우회기법/무해화/LFI 심층 확인
-  └─ Task 3-5: 데이터보호 수동분석 → <prefix>_task25_llm.json
-      └─ 하드코딩 시크릿 Prod/테스트 판별, PII 로깅 마스킹 검증 (케이스 A/B/C)
+  ├─ Task 3-5: 데이터보호 수동분석 → <prefix>_task25_llm.json
+  │   └─ 하드코딩 시크릿 Prod/테스트 판별, PII 로깅 마스킹 검증 (케이스 A/B/C)
+  └─ ⚠️ Task 3-SCA: SCA LLM 수동 검토 [정기진단 필수] → <prefix>_sca_llm.json
+      ├─ 기준: <prefix>_sca.json HIGH/CRITICAL findings 전수 검토
+      ├─ 각 라이브러리(grouped 단위)별:
+      │   ├─ [1] 소스코드 실사용 여부: `rg <package-artifact> <src>` grep 확인
+      │   │   └─ 임포트/의존성 선언만이 아니라 취약 API/메서드/설정의 실제 호출 확인
+      │   ├─ [2] 발생 조건 부합 여부: CVE 설명의 트리거 조건(설정값, 호출 패턴, 외부 입력 경로)을
+      │   │   소스코드에서 직접 확인 → 조건 미충족이면 False Positive
+      │   ├─ [3] 관련성 판정: 적용 / 제한적 / 조건미충족 / 확인불가 중 하나
+      │   │   - 적용: 취약 기능 실사용 + 발생 조건 충족 확인
+      │   │   - 제한적: 라이브러리 사용되나 취약 기능 직접 호출 미확인 (추가 확인 필요)
+      │   │   - 조건미충족: 발생 조건 코드 미존재 → False Positive
+      │   │   - 확인불가: 소스코드에서 판정 불가 (빌드 의존성만 존재)
+      │   └─ [4] 한국어 취약점 설명: CVE summary를 한국어로 번역하고, 이 프로젝트에서의
+      │       실제 영향(공격 시나리오, 영향 범위)을 1~3문장으로 기술
+      └─ 출력 형식: references/task_prompts/task_sca_llm_review.md 참조
 
 Phase 4: 보고서 생성 + Confluence 게시 [필수]
   ├─ generate_finding_report.py --anchor-style md2cf --page-map tools/confluence_page_map.json
@@ -56,8 +75,17 @@ Phase 4: 보고서 생성 + Confluence 게시 [필수]
       │   └─ supplemental_sources: [<prefix>_task23_llm.json]  ← 한 페이지로 통합
       ├─ finding: <prefix>_task24.json
       │   └─ supplemental_sources: [<prefix>_task24_llm.json]  ← 한 페이지로 통합
-      └─ finding: <prefix>_task25.json
-          └─ supplemental_sources: [<prefix>_task25_llm.json]  ← 한 페이지로 통합
+      ├─ finding: <prefix>_task25.json
+      │   └─ supplemental_sources: [<prefix>_task25_llm.json]  ← 한 페이지로 통합
+      └─ ⚠️ sca: <prefix>_sca.json  ← SCA 결과 (항상 포함 필수)
+          └─ [정기진단] supplemental_sources: [<prefix>_sca_llm.json]  ← LLM 관련성 검토 결과 병합
+
+Phase 5: SSC 정합성 검증 [정기진단 필수 / 개발검증 선택]
+  ├─ ⚠️ 정기진단 시 반드시 실행 (비전금법 연간 점검 등)
+  ├─ Step 5-0: 브랜치/커밋 일치 검증
+  ├─ Step 5-1: fetch_ssc.py → <prefix>_ssc_findings.json
+  ├─ Step 5-2: LLM 소스코드 교차검증 (TP/FP 판정)
+  └─ Step 5-3: <prefix>_ssc_report.md → Confluence 게시 (type: "doc")
 ```
 
 ### 단일 finding 페이지 원칙
@@ -358,32 +386,33 @@ semgrep \
     > state/<prefix>_ssc_feedback_semgrep.json
 # semgrep 미설치 시: state/<prefix>_ssc_feedback_semgrep.json 파일 없음 → Step 8에서 LLM이 감지하여 알림
 
-# 4. SCA 진단 (항상 실행 — 빌드 결과 JAR 있으면 --jar 지정, 없으면 소스 디렉토리 기준)
-#
+# 4. ⚠️ SCA 진단 [항상 필수 — 건너뛰지 말 것]
+# 빌드 결과 JAR 있으면 --jar 지정, 없으면 소스 디렉토리 기준으로 실행.
+# 아래 세 가지 중 상황에 맞는 한 가지를 실행:
+
 # [빌드 성공 시]
-#   python3 tools/scripts/scan_sca.py <source_dir> \
-#       --jar state/<prefix>_build_manifest_primary.jar \
-#       --project <project-name> \
-#       --poc \
-#       -o state/<prefix>_sca.json
-#
-# [빌드 실패 / JAR 없는 경우 — Gradle dep tree 기반]
-#   gradlew dependencies --configuration runtimeClasspath > state/<prefix>_dep_tree.log
-#   python3 tools/scripts/scan_sca.py <source_dir> \
-#       --dep-tree state/<prefix>_dep_tree.log \
-#       --project <project-name> \
-#       --poc \
-#       -o state/<prefix>_sca.json
-#
+python3 tools/scripts/scan_sca.py <source_dir> \
+    --jar state/<prefix>_build_manifest_primary.jar \
+    --project <project-name> \
+    --poc \
+    -o state/<prefix>_sca.json
+
+# [빌드 실패 / JAR 없는 경우 — Gradle dep tree 기반] (가장 일반적)
+gradlew dependencies --configuration runtimeClasspath > state/<prefix>_dep_tree.log
+python3 tools/scripts/scan_sca.py <source_dir> \
+    --dep-tree state/<prefix>_dep_tree.log \
+    --project <project-name> \
+    --poc \
+    -o state/<prefix>_sca.json
+
 # [기존 dependency-check 리포트 재활용 시]
-#   python3 tools/scripts/scan_sca.py <source_dir> \
-#       --dc-report state/<prefix>_dc_report.json \
-#       --poc \
-#       -o state/<prefix>_sca.json
-#
+python3 tools/scripts/scan_sca.py <source_dir> \
+    --dc-report state/<prefix>_dc_report.json \
+    --poc \
+    -o state/<prefix>_sca.json
+
 # NVD_API_KEY는 .env에서 자동 로드됨.
-# 결과 Confluence 게시는 Phase 4에서 별도 페이지로 publish_sca_confluence.py 또는
-# scan_sca.py --publish 옵션으로 직접 게시.
+# 결과는 Phase 4 Confluence 게시 시 page_map에 type: "sca"로 반드시 등록.
 
 # 5. [스코프 지정 시만] Phase 2.5 — _inscope JSON 생성
 #    → 위 "진단 범위 제한" 섹션의 필터링 스크립트 실행
@@ -566,9 +595,18 @@ semgrep \
       "source": "state/<prefix>_sca.json",
       "title": "테스트NN - SCA (오픈소스 취약점) 진단 결과",
       "type": "sca"
+    },
+    {
+      "source": "state/<prefix>_ssc_report.md",
+      "title": "테스트NN - Fortify SSC 정합성 검증 보고서",
+      "type": "doc"
     }
   ]
 }
+
+> ⚠️ **SCA / SSC 항목은 page_map 등록 시 반드시 포함** (정기진단 필수):
+> - SCA (`type: "sca"`): `scan_sca.py` 실행 후 등록. 빌드 성공 여부와 무관하게 항상 실행.
+> - SSC (`type: "doc"`): `fetch_ssc.py` + LLM 검증 후 등록. **정기진단에서는 필수**, 개발검증(테스트) 시는 선택.
 
 > **SCA 페이지 (`type: "sca"`) — 라이브러리 취약점 테이블**
 >
@@ -588,7 +626,13 @@ semgrep \
 
 > **API 인벤토리 페이지 (`type: "api_inventory"`) — Swagger 수준 렌더링**
 >
-> `api_inventory` 타입 페이지는 **반드시 포함**해야 합니다 (이전에 생략하면 API 엔드포인트 현황이 보고서에 없음).
+> `api_inventory` 타입 페이지는 **백엔드 repo에 반드시 포함**해야 합니다 (생략 시 API 엔드포인트 현황이 보고서에 없음).
+>
+> **포함/생략 판단 기준**:
+> - `_api_inventory.json`의 `endpoints` 배열 길이 > 0 → **백엔드** → `api_inventory` entry 필수 등록
+> - `endpoints` 배열 길이 == 0 → **프론트엔드** (Spring Controller 없음) → `api_inventory` entry 생략
+>
+> ⚠️ page_map에 새 테스트를 추가할 때, `api_inventory.json`의 endpoint 수를 확인하여 백엔드 repo만 entry에 포함시킬 것.
 >
 > `publish_confluence.py`의 `_json_to_xhtml_api_inventory()` 렌더러가 아래 구조로 출력합니다:
 >
@@ -609,8 +653,9 @@ semgrep \
 
 ---
 
-## Phase 5: SSC 정합성 검증 [선택적]
+## Phase 5: SSC 정합성 검증 [정기진단 필수 / 개발검증 선택]
 
+> **⚠️ 정기진단(비전금법 연간 점검 등)에서는 반드시 실행. 개발 검증(임시 테스트)만 선택.**
 > **실행 조건**: Fortify SSC에 해당 프로젝트가 등록되어 있고 `.env`에 SSC_TOKEN이 설정된 경우
 > Phase 1~4와 무관하게 독립 실행 가능. 전체 절차는 `references/ssc_verification.md` 참조.
 
@@ -636,13 +681,24 @@ Phase 5: SSC 정합성 검증
   │     state/<prefix>_ssc_report.md  ← LLM 인라인 생성
   │     보고서 필수 섹션:
   │       1. 요약 (그룹별 TP/FP/검토필요 표)
-  │       2. 취약 확인 건 목록 (TP 전건 — 1행 1건, 심각도/파일/라인 명시)
-  │       3. 취약 확인 건 상세 (코드 증적 + 테인트 경로 + 조치 방안)
-  │       4. 양호 판정 요약 (FP 근거)
-  │       5. 추가 검토필요 → LLM 분석 결과
-  │       6. 조치 우선순위
+  │       2. 취약 확인 건 상세 (TP)
+  │            ├─ 목록 표: Critical → High 순 정렬, 동일 유형+파일 병합 (1행 = 1유형+파일)
+  │            │   (라인만 다른 건은 병합하여 "라인: 93, 103, 190" 식으로 기재)
+  │            └─ 유형별 하위 섹션 (2-1, 2-2 ...):
+  │                 ├─ <details><summary>관련 파일 목록표</summary>표</details> expand 블록
+  │                 ├─ 코드 증적 + 테인트 경로
+  │                 └─ 조치 방안
+  │       3. 양호 판정 요약 (FP 근거 — 그룹 패턴별 FP 이유 기술)
+  │       4. 조치 우선순위
+  │       부록. 검증 방법론
+  │       ---
+  │       [참조] 추가 검토 필요 (검토필요 건 상세 — 보고서 맨 끝)
+  │       [참조] 주요 FP 패턴 (구조적 FP 패턴 설명 — 보고서 맨 끝)
   │     심각도 색상: Critical=🔴Red / High=🟡Yellow(amber)
   │       → Markdown에 "Critical"/"High" 그대로 작성하면 게시 시 자동 변환
+  │     expand 블록 형식: <details><summary>관련 파일 (N개 파일, M개 지점)</summary>
+  │       | 파일 | 탐지 라인 | 심각도 | ... | </details>
+  │       → publish_confluence.py가 Confluence ac:structured-macro "expand"으로 자동 변환
   │     Confluence 게시 (필수):
   │       confluence_page_map.json에 테스트N 그룹 등록 (type: "doc")
   │       python3 tools/scripts/publish_confluence.py --filter-group "테스트N"

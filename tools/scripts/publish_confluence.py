@@ -138,6 +138,36 @@ def find_page_by_title(cfg, title):
     return None
 
 
+def _find_child_by_title(cfg, parent_id, title):
+    """Find a direct child page of *parent_id* with the given *title*.
+
+    Searches only children of the specified parent to avoid matching
+    same-title pages elsewhere in the space.
+    Returns {"id": ..., "version": N} or None.
+    """
+    limit = 50
+    start = 0
+    while True:
+        params = urllib.parse.urlencode({
+            "expand": "version",
+            "limit": limit,
+            "start": start,
+        })
+        result = confluence_api(
+            cfg, "GET",
+            f"/rest/api/content/{parent_id}/child/page?{params}"
+        )
+        if not result or not result.get("results"):
+            break
+        for page in result["results"]:
+            if page["title"] == title:
+                return {"id": page["id"], "version": page["version"]["number"]}
+        if result.get("size", 0) < limit:
+            break
+        start += limit
+    return None
+
+
 def create_page(cfg, title, body_xhtml, parent_id):
     """Create a new Confluence page under *parent_id*."""
     payload = {
@@ -1497,7 +1527,10 @@ def _json_to_xhtml_supp_findings(data: dict) -> str:
 
             evidence = f.get("evidence", {})
             if evidence:
-                if isinstance(evidence, list):
+                if isinstance(evidence, str):
+                    # string 형태 evidence: 텍스트 그대로 출력
+                    parts.append(_code_macro(evidence, "text"))
+                elif isinstance(evidence, list):
                     # list 형태 evidence: 텍스트 줄 목록
                     ev_text = "\n".join(str(e) for e in evidence)
                     parts.append(_code_macro(ev_text, "text"))
@@ -2799,13 +2832,290 @@ def _json_to_xhtml_enhanced_xss(data, llm_findings=None, llm_supp=None):
     return "\n".join(parts)
 
 
-def _json_to_xhtml_sca(data):
-    """Convert scan_sca.py output to XHTML.
+def _json_to_xhtml_sca_v2(data, sca_llm=None) -> str:
+    """scan_sca_gradle_tree.py / scan_sca_npm 출력(v2 스키마) → Confluence XHTML.
 
-    scan_sca.py의 build_sca_xhtml()로 위임하여 Rule 1/2/3(BOM 오버라이딩 금지,
-    Big Bang 방지, CWE 압축)이 동일하게 적용되도록 한다.
-    임포트 실패 시 로컬 간이 렌더러로 fallback.
+    v2 스키마 특징:
+      metadata: {scan_method, project_name, source_dir, scanned_at,
+                 total_dependencies, total_dependencies_with_vuln,
+                 total_cve, high_critical_cve, kev_count}
+      summary:  {"취약": N, "정보": N}
+      findings[]: {type, package, version, cve, cvss, severity, summary,
+                   cvss_vector, in_kev, osv_id, status}
+      grouped[]:  {package, version, max_cvss, severity,
+                   cves[]: {cve, cvss, summary, in_kev}}
+    sca_llm: Phase 3-SCA LLM 검토 결과 (<prefix>_sca_llm.json)
+      reviews[]: {package, version, relevance_status, relevance_reason,
+                  cves[]: {cve, description_ko, impact_ko, condition_ko, fp_reason}}
     """
+    import datetime as _dt
+
+    meta       = data.get("metadata", {})
+    summary    = data.get("summary", {})
+    grouped    = data.get("grouped", [])
+    source_tool = data.get("source_tool", "SCA")
+
+    # LLM 검토 결과를 package → review dict 매핑으로 인덱싱
+    _llm_by_pkg: dict = {}
+    if sca_llm and sca_llm.get("reviews"):
+        for rev in sca_llm["reviews"]:
+            pkg_key = rev.get("package", "")
+            _llm_by_pkg[pkg_key] = rev
+            # cve 레벨 인덱싱도 구성
+            rev["_cve_map"] = {c.get("cve", ""): c for c in rev.get("cves", [])}
+
+    # LLM 검토 요약 (reviewer, reviewed_at)
+    _llm_reviewed_at = sca_llm.get("reviewed_at", "") if sca_llm else ""
+    _llm_summary     = sca_llm.get("summary", {}) if sca_llm else {}
+
+    project_name = html_escape(meta.get("project_name", ""))
+    source_dir   = html_escape(meta.get("source_dir", ""))
+    scan_method  = html_escape(meta.get("scan_method", ""))
+    scanned_at   = meta.get("scanned_at", "")
+    analysis_date = scanned_at[:10] if scanned_at else _dt.date.today().isoformat()
+
+    total_deps   = meta.get("total_dependencies", 0)
+    total_cve    = meta.get("total_cve", 0)
+    hc_cve       = meta.get("high_critical_cve", 0)
+    kev_count    = meta.get("kev_count", 0)
+    vuln_libs    = meta.get("total_dependencies_with_vuln", len(grouped))
+    critical_libs = sum(1 for g in grouped if g.get("severity", "").lower() == "critical")
+
+    # 스캔 방법 설명
+    if "gradle" in scan_method:
+        method_desc = "Gradle runtimeClasspath 의존성 트리 → OSV API CVE 조회 → CISA KEV 대조"
+    elif "npm" in scan_method or "package-lock" in scan_method:
+        method_desc = "package-lock.json v3 전이적 의존성 추출 → OSV API CVE 조회 → CISA KEV 대조"
+    else:
+        method_desc = f"OSV API CVE 조회 ({scan_method})"
+
+    parts = [
+        "<h2>개요</h2>",
+        f"<p>대상: <strong>{project_name}</strong></p>",
+        f"<p>소스 경로: <code>{source_dir}</code></p>",
+        f"<p>분석 방법: {method_desc}</p>",
+        f"<p>분석일: {html_escape(analysis_date)}</p>",
+        "<h2>요약</h2>",
+        "<table>",
+        "<tr><th>항목</th><th>수치</th><th>비고</th></tr>",
+        f"<tr><td>전체 의존성</td><td>{total_deps}개</td><td></td></tr>",
+        f"<tr><td>전체 CVE</td><td>{total_cve}건</td><td>CVSS 전체</td></tr>",
+        f"<tr><td>HIGH+CRITICAL CVE</td><td><strong>{hc_cve}건</strong></td><td>CVSS ≥ 7.0</td></tr>",
+        f"<tr><td>고유 취약 라이브러리</td><td><strong>{vuln_libs}개</strong></td><td>중복 제거</td></tr>",
+        f"<tr><td>CRITICAL 라이브러리</td><td><strong style=\"color:red\">{critical_libs}개</strong></td><td></td></tr>",
+        f"<tr><td>CISA KEV (실 악용 CVE)</td><td><strong style=\"color:red\">{kev_count}건</strong></td><td>즉시 패치 필요</td></tr>",
+    ]
+
+    # LLM 검토 요약 행 (있을 때만)
+    if sca_llm and sca_llm.get("summary"):
+        _s = sca_llm["summary"]
+        parts.extend([
+            f"<tr><td>LLM 관련성 검토 (적용)</td><td><strong style=\"color:red\">{_s.get('적용', 0)}건</strong></td><td>즉시 패치 필요</td></tr>",
+            f"<tr><td>LLM 관련성 검토 (제한적)</td><td>{_s.get('제한적', 0)}건</td><td>추가 확인 필요</td></tr>",
+            f"<tr><td>LLM 관련성 검토 (조건미충족/FP)</td><td>{_s.get('조건미충족', 0)}건</td><td>False Positive</td></tr>",
+        ])
+
+    parts.append("</table>")
+
+    if not grouped:
+        parts.append("<p>HIGH/CRITICAL 취약점 없음.</p>")
+        return "\n".join(parts)
+
+    # LLM 검토 완료 여부 표시
+    if _llm_reviewed_at:
+        rel_적용 = _llm_summary.get("적용", 0)
+        rel_제한 = _llm_summary.get("제한적", 0)
+        rel_fp   = _llm_summary.get("조건미충족", 0)
+        rel_확인불가 = _llm_summary.get("확인불가", 0)
+        parts.append(
+            f'<ac:structured-macro ac:name="info"><ac:rich-text-body>'
+            f'<p><strong>LLM 관련성 검토 완료</strong> ({html_escape(_llm_reviewed_at)}): '
+            f'적용 {rel_적용}건, 제한적 {rel_제한}건, 조건미충족(FP) {rel_fp}건, 확인불가 {rel_확인불가}건</p>'
+            f'</ac:rich-text-body></ac:structured-macro>'
+        )
+
+    # 심각도 정렬 (LLM 검토 있으면 관련성도 고려: 적용 > 제한적 > 조건미충족 > 확인불가)
+    _sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    _rel_order = {"적용": 0, "제한적": 1, "확인불가": 2, "조건미충족": 3}
+
+    def _sort_key(g):
+        pkg_key = g.get("package", "")
+        rel = _llm_by_pkg.get(pkg_key, {}).get("relevance_status", "") if _llm_by_pkg else ""
+        return (
+            _sev_order.get(g.get("severity", "").lower(), 9),
+            _rel_order.get(rel, 5),
+            -(g.get("max_cvss", 0)),
+        )
+
+    grouped_sorted = sorted(grouped, key=_sort_key)
+
+    # LLM 검토 결과가 있으면 관련성 컬럼 추가
+    has_llm = bool(_llm_by_pkg)
+
+    parts.append("<h2>취약 라이브러리 목록 (심각도↓, 관련성↓, CVSS↓ 정렬)</h2>")
+    parts.append("<table>")
+    header = (
+        "<tr>"
+        "<th>#</th>"
+        "<th>라이브러리<br/>(현재 버전)</th>"
+        "<th>심각도</th>"
+        "<th>CVE 목록<br/>(★=KEV)</th>"
+        "<th>최대 CVSS</th>"
+    )
+    if has_llm:
+        header += "<th>소스 관련성</th><th>판단 근거</th>"
+    header += "<th>취약점 요약 (한국어)</th></tr>"
+    parts.append(header)
+
+    for i, lib in enumerate(grouped_sorted, 1):
+        raw_pkg  = lib.get("package", "")
+        pkg      = html_escape(raw_pkg)
+        artifact = pkg.split(":")[-1] if ":" in pkg else pkg
+        ver      = html_escape(str(lib.get("version", "")))
+        sev      = lib.get("severity", "High")
+        max_cvss = lib.get("max_cvss", 0)
+        cves     = lib.get("cves", [])
+
+        # LLM 검토 결과 조회
+        llm_rev  = _llm_by_pkg.get(raw_pkg, {})
+        rel_stat = llm_rev.get("relevance_status", "")
+        rel_reason = html_escape(llm_rev.get("relevance_reason", ""))
+        cve_map  = llm_rev.get("_cve_map", {})
+
+        # CVE 목록 + 한국어 설명
+        cve_rows = []
+        for c in cves:
+            cve_id = c.get("cve", c.get("osv_id", ""))
+            kev_mark = "&nbsp;★KEV" if c.get("in_kev") else ""
+            cve_row = f'<strong>{html_escape(cve_id)}</strong>{kev_mark}'
+
+            # 한국어 설명 (LLM 검토 있을 때)
+            llm_cve = cve_map.get(cve_id, {})
+            desc_ko = html_escape(llm_cve.get("description_ko", c.get("summary", "")))
+            cve_rows.append((cve_row, desc_ko))
+
+        cve_html = "<br/>".join(row for row, _ in cve_rows)
+
+        # 취약점 요약: 한국어 설명 우선, 없으면 영문 summary
+        if cve_rows:
+            top_desc = cve_rows[0][1]  # 첫 번째 CVE 설명
+        else:
+            top_cve = max(cves, key=lambda c: c.get("cvss", 0)) if cves else {}
+            top_desc = html_escape(top_cve.get("summary", ""))
+
+        # impact + condition 추가 설명
+        impact_parts = []
+        for c in cves:
+            llm_cve = cve_map.get(c.get("cve", c.get("osv_id", "")), {})
+            if llm_cve.get("impact_ko"):
+                impact_parts.append(html_escape(llm_cve["impact_ko"]))
+            if llm_cve.get("condition_ko"):
+                impact_parts.append(f'<em>발생조건: {html_escape(llm_cve["condition_ko"])}</em>')
+        if impact_parts:
+            top_desc += "<br/><small>" + "<br/>".join(impact_parts[:2]) + "</small>"
+
+        # 관련성 배지
+        _rel_colors = {
+            "적용": "Red",
+            "제한적": "Yellow",
+            "조건미충족": "Green",
+            "확인불가": "Grey",
+        }
+        if rel_stat:
+            rel_badge = (
+                f'<ac:structured-macro ac:name="status">'
+                f'<ac:parameter ac:name="colour">{_rel_colors.get(rel_stat, "Grey")}</ac:parameter>'
+                f'<ac:parameter ac:name="title">{html_escape(rel_stat)}</ac:parameter>'
+                f'</ac:structured-macro>'
+            )
+        else:
+            rel_badge = ""
+
+        row = (
+            f"<tr>"
+            f"<td>{i}</td>"
+            f"<td><code>{html_escape(artifact)}</code><br/><small>{html_escape(raw_pkg)}<br/>{ver}</small></td>"
+            f"<td>{_severity_badge(sev)}</td>"
+            f"<td><small>{cve_html}</small></td>"
+            f"<td>{max_cvss}</td>"
+        )
+        if has_llm:
+            row += f"<td>{rel_badge}</td><td><small>{rel_reason}</small></td>"
+        row += f"<td><small>{top_desc}</small></td></tr>"
+        parts.append(row)
+
+    parts.append("</table>")
+
+    # 상세 CVE 목록 (전체 findings) — LLM 검토 없을 때만 표시 (있으면 위 테이블로 충분)
+    findings = data.get("findings", [])
+    if findings and not has_llm:
+        parts.append("<h2>전체 CVE 상세 목록</h2>")
+        parts.append("<table>")
+        parts.append(
+            "<tr>"
+            "<th>심각도</th>"
+            "<th>라이브러리</th>"
+            "<th>버전</th>"
+            "<th>CVE / OSV ID</th>"
+            "<th>CVSS</th>"
+            "<th>KEV</th>"
+            "<th>요약</th>"
+            "</tr>"
+        )
+        for f in findings:
+            sev_f  = f.get("severity", f.get("type", ""))
+            pkg_f  = html_escape(f.get("package", ""))
+            ver_f  = html_escape(str(f.get("version", "")))
+            cve_f  = html_escape(f.get("cve", f.get("osv_id", "")))
+            cvss_f = f.get("cvss", 0)
+            kev_f  = "★ KEV" if f.get("in_kev") else ""
+            sum_f  = html_escape(str(f.get("summary", "")))
+            parts.append(
+                f"<tr>"
+                f"<td>{_severity_badge(sev_f)}</td>"
+                f"<td><small>{pkg_f}</small></td>"
+                f"<td><code>{ver_f}</code></td>"
+                f"<td><small>{cve_f}</small></td>"
+                f"<td>{cvss_f}</td>"
+                f"<td><strong style=\"color:red\">{kev_f}</strong></td>"
+                f"<td><small>{sum_f}</small></td>"
+                f"</tr>"
+            )
+        parts.append("</table>")
+
+    parts.extend([
+        "<h2>조치 권고</h2>",
+        "<ol>",
+        "<li><strong>(즉시) CISA KEV 등재 취약점(★)</strong>: 실제 악용 사례 확인된 CVE — 현재 메이저 버전 내 최신 패치를 즉시 적용할 것.</li>",
+        "<li><strong>(단기) 의존성 일괄 업그레이드</strong>: 프레임워크 BOM(Spring Boot Starter Parent 등) 버전 업그레이드를 통해 전이적 의존성을 일괄 갱신할 것. 개별 라이브러리 버전 강제 오버라이딩은 충돌 위험 있음.</li>",
+        "<li><strong>(중장기) 주기적 SCA 재검토</strong>: 신규 CVE는 지속 발표됨. CI/CD 파이프라인에 OSV 기반 SCA를 통합하여 배포 전 자동 검사 권고.</li>",
+        "</ol>",
+        "<h2>분석 방법 상세</h2>",
+        "<ul>",
+        f"<li>스캔 방법: <code>{html_escape(scan_method)}</code></li>",
+        "<li>OSV.dev Batch API 배치 조회 → 개별 CVE 상세 조회 (CVSS 벡터 포함)</li>",
+        "<li>CISA KEV 피드 대조 (실 악용 CVE 식별)</li>",
+        "<li>CVSS ≥ 7.0 (HIGH/CRITICAL) 기준 필터링</li>",
+        "</ul>",
+    ])
+
+    return "\n".join(parts)
+
+
+def _json_to_xhtml_sca(data, sca_llm=None):
+    """Convert SCA scan output to XHTML.
+
+    v2 스키마(scan_sca_gradle_tree.py / SCA-npm): metadata 키 존재 또는 source_tool이
+    SCA-GradleTree / SCA-npm인 경우 전용 렌더러(_json_to_xhtml_sca_v2) 사용.
+    v1 스키마(scan_sca.py): scan_sca.build_sca_xhtml()로 위임.
+    임포트 실패 시 로컬 간이 렌더러로 fallback.
+    sca_llm: <prefix>_sca_llm.json 데이터 (Phase 3-SCA LLM 검토 결과)
+    """
+    # v2 포맷 감지: metadata 키 존재 or source_tool이 새 스크립트 값
+    source_tool = data.get("source_tool", "")
+    if "metadata" in data or source_tool in ("SCA-GradleTree", "SCA-npm"):
+        return _json_to_xhtml_sca_v2(data, sca_llm=sca_llm)
+
     try:
         import sys as _sys
         import os as _os
@@ -3034,20 +3344,22 @@ def _json_to_xhtml_final(data):
     return "\n".join(parts)
 
 
-def json_to_xhtml(data, json_type, source_path="", llm_findings=None, llm_supp=None):
+def json_to_xhtml(data, json_type, source_path="", llm_findings=None, llm_supp=None,
+                  sca_llm=None):
     """Route JSON data to the appropriate XHTML renderer based on type.
 
-    json_type is one of: "finding", "final_report", "api_inventory"
+    json_type is one of: "finding", "final_report", "api_inventory", "sca"
     source_path helps disambiguate finding sub-types.
     llm_findings: LLM supplemental findings list (from supplemental_sources), passed to
                   enhanced renderers so they can display an alert box in the summary section.
     llm_supp: full supplemental data dict (for sqli_endpoint_review / xss_endpoint_review).
+    sca_llm: SCA LLM 검토 결과 dict (<prefix>_sca_llm.json) — 관련성 판정 + 한국어 설명 포함.
     """
     if json_type == "final_report":
         return _json_to_xhtml_final(data)
 
     if json_type == "sca" or "grouped" in data and data.get("source_tool") == "SCA":
-        return _json_to_xhtml_sca(data)
+        return _json_to_xhtml_sca(data, sca_llm=sca_llm)
 
     # scan_api.py v3.0 format auto-detection (endpoints key)
     if json_type == "api_inventory" or "endpoints" in data:
@@ -3455,10 +3767,12 @@ def resolve_content(entry, base_dir):
     except json.JSONDecodeError as exc:
         return None, f"Invalid JSON in {full_path}: {exc}"
 
-    # supplemental_sources: finding 타입에서만 LLM 수동분석 보완 섹션을 추가로 렌더링.
+    # supplemental_sources: finding / sca 타입에서 LLM 수동분석 보완 섹션을 추가로 렌더링.
     # 먼저 모든 supplemental JSON의 findings를 수집해 enhanced renderer에 전달한다.
     llm_findings: list = []
     llm_supp_data: dict = {}
+    sca_llm_data: dict = {}
+
     if entry_type == "finding":
         for supp_path in entry.get("supplemental_sources", []):
             supp_data = _load_json_safe(supp_path, base_dir)
@@ -3470,13 +3784,26 @@ def resolve_content(entry, base_dir):
                 ):
                     llm_supp_data = supp_data
 
+    elif entry_type == "sca":
+        # SCA LLM 검토 결과 로드 (task_id == "P3-SCA" 또는 source_tool == "SCA-LLM-Review")
+        for supp_path in entry.get("supplemental_sources", []):
+            supp_data = _load_json_safe(supp_path, base_dir)
+            if supp_data and supp_data.get("source_tool") in ("SCA-LLM-Review",) or \
+               supp_data and supp_data.get("task_id") == "P3-SCA":
+                sca_llm_data = supp_data
+                break
+            elif supp_data and supp_data.get("reviews"):
+                sca_llm_data = supp_data
+                break
+
     xhtml = json_to_xhtml(
         data, entry_type, source,
         llm_findings=llm_findings or None,
         llm_supp=llm_supp_data or None,
+        sca_llm=sca_llm_data or None,
     )
 
-    # supplemental_sources 섹션(「LLM 수동분석 보완」)을 페이지 하단에 추가
+    # supplemental_sources 섹션(「LLM 수동분석 보완」)을 페이지 하단에 추가 (finding 타입만)
     if entry_type == "finding":
         for supp_path in entry.get("supplemental_sources", []):
             supp_data = _load_json_safe(supp_path, base_dir)
@@ -3495,6 +3822,20 @@ def _publish_entry(cfg, entry, full_title, parent_id, base_dir, dry_run):
     """Publish a single entry. Returns True on success, False on error."""
     source = entry["source"]
     entry_type = entry.get("type", "doc")
+
+    # api_inventory: endpoint 0개 (프론트엔드 repo)이면 자동 건너뜀
+    if entry_type == "api_inventory":
+        full_path = source if os.path.isabs(source) else os.path.join(base_dir, source)
+        try:
+            with open(full_path, encoding="utf-8") as _f:
+                _api_data = json.load(_f)
+            if len(_api_data.get("endpoints", [])) == 0:
+                print(f"\n  [{entry_type.upper():12s}] {source}")
+                print(f"  {'':12s}   -> \"{full_title}\"")
+                print(f"  {'':12s}   (skip: 0 endpoints — frontend repo)")
+                return True
+        except Exception:
+            pass
 
     print(f"\n  [{entry_type.upper():12s}] {source}")
     print(f"  {'':12s}   -> \"{full_title}\"")
@@ -3591,6 +3932,13 @@ def main():
         help="Publish all entries in groups whose title contains this substring "
              "(case-insensitive). Example: --filter-group 테스트28",
     )
+    parser.add_argument(
+        "--ensure-parents", default=None,
+        metavar="TITLE1/TITLE2/...",
+        help="슬래시 구분 페이지 계층을 CONFLUENCE_PARENT_ID 아래 자동 생성한 뒤 "
+             "최하위 페이지를 실제 parent로 사용. "
+             "예: --ensure-parents '2026 playbook 정기진단/OCB'",
+    )
     args = parser.parse_args()
 
     # determine base directory
@@ -3685,13 +4033,44 @@ def main():
     else:
         cfg = None
 
+    # --- ensure-parents: create intermediate hierarchy pages ---
+    _ensure_parent_override = None
+    if args.ensure_parents:
+        _ep_titles = [t.strip() for t in args.ensure_parents.split("/") if t.strip()]
+        if _ep_titles:
+            if args.dry_run:
+                print(f"[DRY-RUN] --ensure-parents '{args.ensure_parents}': "
+                      f"would create {len(_ep_titles)} page(s) under CONFLUENCE_PARENT_ID")
+            else:
+                _ep_current = cfg["parent_id"]
+                print(f"[ensure-parents] Creating hierarchy under parent_id={_ep_current}")
+                for _ep_title in _ep_titles:
+                    # Search only direct children to avoid cross-space title collisions
+                    _ep_existing = _find_child_by_title(cfg, _ep_current, _ep_title)
+                    if _ep_existing:
+                        _ep_current = _ep_existing["id"]
+                        print(f"  [found  ] '{_ep_title}' → id={_ep_current}")
+                    else:
+                        _ep_body = (
+                            f"<p>이 페이지는 <strong>{html_escape(_ep_title)}</strong>의 "
+                            f"하위 문서를 모아놓은 상위 페이지입니다.</p>"
+                            f'<ac:structured-macro ac:name="children">'
+                            f'<ac:parameter ac:name="sort">title</ac:parameter>'
+                            f'</ac:structured-macro>'
+                        )
+                        _ep_current = create_page(cfg, _ep_title, _ep_body, _ep_current)
+                        print(f"  [created] '{_ep_title}' → id={_ep_current}")
+                _ensure_parent_override = _ep_current
+                print(f"[ensure-parents] Effective parent_id: {_ensure_parent_override}")
+                print()
+
     print(f"{'[DRY-RUN] ' if args.dry_run else ''}Publishing {total} entries "
           f"+ {len(groups)} group(s) (prefix: \"{prefix}\")")
     print("-" * 60)
 
     success = 0
     errors = 0
-    root_parent = cfg["parent_id"] if cfg else "ROOT"
+    root_parent = _ensure_parent_override or (cfg["parent_id"] if cfg else "ROOT")
 
     # --- root page (update the parent page itself) ---
     if publish_root and root_page:

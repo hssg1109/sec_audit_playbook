@@ -129,15 +129,75 @@ API 목록 → Controller (@Controller/@RestController 판별)
 - `filter_level: insufficient` (Lucy 있으나 설정 미흡): `skipXss=false` 설정, multipartFilter 추가 등 구체 설정 명시
 - `filter_level: none` + REST JSON 서버: "저장 시점 Jackson ObjectMapper 커스텀 또는 Lucy JSON 모드" 권고
 
+---
+
+### ⚠️ Persistent XSS 식별 3원칙 (오탐 방지 필수 적용)
+
+> 이 원칙을 적용하지 않으면 Persistent XSS 오탐(FP)이 대량 발생한다. 자동 스캐너 및 LLM 수동 검토 시 **반드시** 이 순서로 검증한다.
+
+#### 원칙 1 — Sink 도달(DB Write) 검증
+
+HTTP Request 파라미터가 최종적으로 DB 영구 저장소(`INSERT`/`UPDATE` 로직)에 **직접** 도달하는지 추적한다.
+
+| 경우 | 판정 |
+|------|------|
+| Controller → Service → Repository.save()/insert()/update() 직접 호출 확인 | **Sink 도달 ✓** → 원칙 2로 진행 |
+| 조회(SELECT)만 수행하거나 토큰/세션 생성만 수행 | **Sink 미도달 → 즉시 FP (양호)** |
+| 단순 로깅(Logger.info) 또는 외부 API 호출만 수행 | **Sink 미도달 → 즉시 FP (양호)** |
+
+#### 원칙 2 — Data Type 검증 (필수)
+
+DB에 저장되더라도, 해당 파라미터가 매핑되는 **엔티티/DTO의 필드 타입**을 확인한다.
+
+| 저장 필드 타입 | 판정 |
+|---|---|
+| `String` / `VARCHAR` / `TEXT` (자유 텍스트) | **XSS 페이로드 삽입 가능 → 취약 후보** |
+| `Integer` / `Long` / `BigDecimal` (숫자) | **페이로드 삽입 불가 → FP (양호)** |
+| `Boolean` / `Enum` (열거형) | **페이로드 삽입 불가 → FP (양호)** |
+| `UUID` / 식별자 코드값 | **페이로드 삽입 불가 → FP (양호)** |
+| 비밀번호 해시 (BCrypt 등) | **해시 후 저장 → FP (양호)** |
+
+> **핵심**: "DB에 저장된다"는 사실만으로 취약 판정 금지. **자유 텍스트 String 필드에 저장될 때만** 취약으로 판정한다.
+
+#### 원칙 3 — Async Taint Break & 보수적 카운팅 원칙 (Kafka/MQ 비동기)
+
+Kafka, RabbitMQ 등 비동기 메시지 브로커로 전송되는 데이터는 **Taint Flow가 끊어진다(Taint Break)**.
+
+| 경우 | 판정 | 카운팅 |
+|---|---|---|
+| Controller → KafkaTemplate.send()만, Consumer 미추적 | **[잠재 취약 - Async Taint Break]** | **취약 건수에 포함** |
+| Consumer에서 Repository.save() + String 필드 확인 | **확정 취약** | 취약 건수에 포함 |
+| Consumer에서 숫자/Enum만 저장 확인 | **양호 (FP)** | 제외 |
+| Consumer 확인 후 DB Write 없음 | **양호 (FP)** | 제외 |
+
+> **⚠️ Fail-Safe 보수적 카운팅 원칙 (엄격 적용):**
+> Consumer 측 Sink 및 텍스트 타입이 **명확히 확인되기 전까지** Kafka 경유 엔드포인트를 FP 처리 금지.
+> 보고서 기재: `확정 취약 N건 + [잠재 취약 - Async Taint Break] M건 = 총 (N+M)건`
+>
+> **조치 방안 필수 문구:**
+> *"비동기 메시지(Kafka)를 수신하는 Consumer 측 모듈에서 해당 데이터가 DB의 자유 텍스트 필드로
+> 저장되는지 아키텍처 수준의 수동 교차 검증이 필요함."*
+>
+> **자동화:** `tools/scripts/trace_kafka_flow.py` — Producer→Consumer→Sink 정적 추적 스크립트
+> ```bash
+> python3 tools/scripts/trace_kafka_flow.py <source_dir>            # 전체 topic
+> python3 tools/scripts/trace_kafka_flow.py <source_dir> "topic"    # 특정 topic
+> ```
+
+---
+
 **판정 (보수적 기본값 적용):**
 
 > ⚠️ **기본 판정 원칙**: 입력 정제(sanitization)는 저장 시점에 수행되어야 한다 (Defense-in-Depth). 현재 렌더링 컨텍스트가 안전하더라도, 필터 없이 DB에 저장된 데이터는 아키텍처 변경·Admin 화면 추가·데이터 이관 시 즉시 XSS로 발현될 수 있다. **저장 시점 필터 미적용 = 취약**이 기본값이다.
+> **단, "Persistent XSS 식별 3원칙" 적용 후 취약 판정 진행한다.**
 
 | 조건 | 판정 |
 |---|---|
-| 전역 XSS 필터 없이 자유 텍스트 DB 저장 | **취약 (Medium)** |
+| 전역 XSS 필터 없이 **자유 텍스트(String) DB 저장** (원칙 1+2 충족) | **취약 (Medium)** |
 | 서블릿 필터(Lucy 등) 적용 중이나 `multipart/form-data` multipartFilter 미설정 | **취약 (Medium)** |
-| 전역 필터 없으나 저장 필드가 숫자/UUID/코드값 등 HTML 메타문자 포함 불가 구조 | **양호** (증적 필요) |
+| 저장 필드가 숫자/UUID/Enum/Hash 등 HTML 메타문자 포함 불가 타입 (원칙 2) | **양호 — FP** (Data Type 증적 필수) |
+| Kafka/MQ로만 전달되고 Consumer 미확인 (원칙 3) | **잠재 위협 — Consumer 측 수동 검토 필요** |
+| DB Write 없음 — 조회/토큰/외부API만 (원칙 1) | **양호 — FP** |
 
 #### 1-A. Cross-module Stored XSS 하향 조건 (엄격 적용)
 
@@ -333,22 +393,24 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 
 ### 6. XSS 필터 충분성 검증
 
-> ⚠️ **전역 XSS 필터 미적용(filter_level: none)은 단순 정보가 아니라 Medium/취약으로 판정한다.**
-> 이유: 전역 필터 부재는 시스템 전체의 입력 정제 계층이 없음을 의미하며, 현재 렌더링이 안전하더라도 아키텍처 변경 시 전면 노출된다. OWASP ASVS V5.2.1(입력 검증), V5.3.1(출력 인코딩) 모두 요구.
+> ⚠️ **전역 XSS 필터 미구현(filter_level: none)은 아키텍처와 무관하게 항상 취약(High)으로 판정한다.**
+> - REST API 전용·JSON-only라도 동일 기준 적용 (방어 심층 원칙, 향후 HTML 렌더링 추가 시 즉시 노출)
+> - "현재 렌더링이 안전하므로 양호" 판정은 **오진(FP)** — 절대 금지
+> - OWASP ASVS V5.2.1(입력 검증), V5.3.1(출력 인코딩) 모두 전역 필터 구현 요구
 
 **전역 필터 존재 여부 판정:**
 
 | 상태 | 판정 |
 |---|---|
-| Lucy / AntiSamy / ESAPI / Custom XSS Filter 미발견 (`filter_level: none`) | **취약 (Medium)** — 시스템 수준 XSS 입력 정제 계층 부재 |
-| 전역 필터 존재 + `< > ' "` 4개 필터 누락 | **취약 (Medium)** |
+| Lucy / AntiSamy / ESAPI / Custom XSS Filter 미발견 (`filter_level: none`) | **취약 (High)** — 시스템 수준 XSS 입력 정제 계층 완전 부재 |
+| 전역 필터 존재 + `< > ' "` 4개 필터 누락 | **취약 (High)** |
 | 전역 필터 존재 + `< > ' "` 모두 필터 + `( ) / #` 일부 누락 | **정보** |
-| 8개 문자 모두 필터 또는 JSON-only API + Jackson HTML escape 활성화 | **양호** |
+| 8개 문자 모두 필터 + Jackson HTML escape 활성화 | **양호** |
 
 **REST API 전용 서버의 전역 필터 판정:**
-- `@RestController` + JSON 반환이라도 전역 XSS 필터 미적용은 **취약 (Medium)**
-- 단, Jackson `ObjectMapper`의 `ESCAPE_NON_ASCII` 또는 `@JsonSerialize(using=HtmlEscapingSerializer)` 전역 적용 시 → **정보** (HTML 특수문자 이스케이핑되나 완전한 XSS 필터는 아님)
-- `filter_level: none` + POST/PUT 저장 엔드포인트 다수 → **취약 (Medium)** (Persistent XSS finding과 연계)
+- `@RestController` + JSON 반환이라도 전역 XSS 필터 미적용은 **취약 (High)** — "현재 렌더링 안전" 논리로 양호 처리 불가
+- Jackson `ObjectMapper` `ESCAPE_NON_ASCII` 전역 적용 시 → **정보** (HTML 이스케이핑이나 완전한 XSS 필터 아님)
+- `filter_level: none` + POST/PUT 저장 엔드포인트 다수 → **취약 (High)** (Persistent XSS finding과 연계)
 
 **필수 필터 문자 (8개):**
 
@@ -376,8 +438,8 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 | 심각도 | 조건 |
 |---|---|
 | **Critical** | 인증 없는 API + Persistent XSS + 필터 없음 |
-| **High** | Persistent XSS 필터 없음(@Controller HTML 반환), DOM XSS 사용자 입력 직접 삽입 |
-| **Medium** | **전역 XSS 필터 미적용 (filter_level: none) — REST API 포함**, 부분 필터 적용 (필수 4문자 중 일부 누락), Redirect 검증 미흡, REST API + 필터 없이 DB 저장 (Persistent XSS), DOM XSS 잠재 패턴 + sanitize 미확인 |
+| **High** | **전역 XSS 필터 미구현 (filter_level: none) — REST API 전용 포함 전 아키텍처 공통 적용**, Persistent XSS 필터 없음, DOM XSS 사용자 입력 직접 삽입, REST API + 필터 없이 DB 저장 |
+| **Medium** | 부분 필터 적용 (필수 4문자 중 일부 누락), Redirect 검증 미흡, DOM XSS 잠재 패턴 + sanitize 미확인 |
 | **Low** | @RestController JSON 반환이나 Gson disableHtmlEscaping 사용 |
 | **Info** | 전역 필터 있으나 보조 4문자(`( ) / #`) 누락, dangerouslySetInnerHTML / v-html + sanitize 적용 확인 권고, Cross-module Entry Point (소비자 측 안전성 코드 확인된 경우), **View naked EL/JS 컨텍스트 출력이나 사용자 직접 입력 미확인 (외부 서비스 응답·서버 내부값)** |
 
@@ -425,6 +487,7 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 > - `description`: 해당 엔드포인트에서 XSS 발현 방식 한 줄 설명
 > - **전역 XSS 필터 결함 finding (필터 부재·전역 설정 오류)**: `"path": "전체 엔드포인트 (전역 필터 미적용)"` **1건만** 기재. 특정 엔드포인트 샘플 추가 금지 — 전역 문제를 특정 엔드포인트 문제처럼 오해 유발. 영향 범위(EP 수, POST/PUT 저장 건수 등)는 `description` 필드에 서술.
 > - **Persistent XSS 개별 endpoint finding**: 자동스캔 endpoint_diagnoses의 취약 판정 EP 목록은 보고서 생성기가 자동으로 그룹 finding으로 변환 — LLM이 별도 affected_endpoints 기재 불필요.
+> - **⚠️ endpoint group finding 중복 금지**: LLM이 endpoint_diagnoses 그룹을 재평가(하향/유지)하는 경우, 별도 finding(예: XSS-PERSIST-001)을 추가하지 않는다. 재평가 결과는 `xss_endpoint_review.group_judgments` 배열에만 기록한다. 별도 finding 추가 시 보고서에서 동일 사안이 2건으로 중복 출력됨.
 
 ```json
 {

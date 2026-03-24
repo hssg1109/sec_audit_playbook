@@ -70,7 +70,10 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
     - For `needs_review: true` items, apply 4 LLM prompt templates in `task_prompts/task_24_file_handling.md`
       (IDOR/BOLA, upload bypass, sanitization, LFI/RFI View Resolver).
   - Task 2-5: Data protection review per task prompt.
-- Add SCA and secret detection when configured (Gitleaks-first).
+- **SCA 진단 (항상 필수)**: `scan_sca_gradle_tree.py` (Gradle/npm) 또는 `scan_sca.py` (JAR 기반). `state/<prefix>_sca.json` 출력.
+  - Gradle: `python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json`
+  - npm: `python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json` (package-lock.json 자동 감지)
+- Secret detection: Gitleaks-first (scan_data_protection.py 연계).
 - For confirmed findings, create/update Semgrep/Joern rules (unless waived).
 
 **Phase 3**: Cross-verification + Manual deep review.
@@ -82,6 +85,10 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
   - Target: `result: "정보"` with `needs_review: true`, or `taint_confirmed: null`, or `[잠재] 취약한 쿼리 구조`.
   - Use LLM persona and criteria defined in `references/manual_review_prompt.md`.
   - Update result with `diagnosis_method: "수동진단(LLM)"` and `manual_review_note`.
+- **Phase 3-SCA** (SCA 관련성 검토) [정기진단 필수]: LLM이 각 CVE finding을 소스코드와 교차검증.
+  - 절차: `references/task_prompts/task_sca_llm_review.md` 참조.
+  - 각 라이브러리별: (1) 소스코드 실사용 grep (2) 발생 조건 코드 확인 (3) 관련성 판정 (4) 한국어 CVE 설명 작성.
+  - 출력: `state/<prefix>_sca_llm.json` → Phase 4에서 SCA 페이지에 supplemental_sources로 병합.
 
 **Phase 4**: Reporting + Confluence 게시 (필수).
 - Merge: `tools/scripts/merge_results.py`
@@ -94,7 +101,7 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
   - `confluence_page_map.json`에 해당 진단 항목이 등록되어 있어야 함
   - `workflow.md` Phase 4 참조: main_report / api_inventory / finding / supplemental 구조
 
-**Phase 5** (선택): SSC 정합성 검증 — Fortify SSC High/Critical findings를 소스코드와 교차검증 후 별도 보고서 생성.
+**Phase 5** ⚠️ **정기진단 시 필수 (건너뛰지 말 것)**, 개발검증 시 선택: SSC 정합성 검증 — Fortify SSC High/Critical findings를 소스코드와 교차검증 후 별도 보고서 생성.
 - `references/ssc_verification.md` 전체 절차 참조.
 - Step 5-0: **브랜치/커밋 일치 검증** (필수) — `--testbed` 옵션으로 SSC 스캔 버전 vs testbed 소스 일치 확인
 - Step 5-1: `tools/scripts/fetch_ssc.py --project <name> --testbed <path> -o state/<prefix>_ssc_findings.json`
