@@ -3761,6 +3761,11 @@ def resolve_content(entry, base_dir):
         xhtml = md_to_xhtml(raw)
         return xhtml, None
 
+    # ssc: Phase 5 SSC 정합성 검증 보고서 (Markdown → XHTML)
+    if entry_type == "ssc":
+        xhtml = md_to_xhtml(raw)
+        return xhtml, None
+
     # JSON types: finding, final_report
     try:
         data = json.loads(raw)
