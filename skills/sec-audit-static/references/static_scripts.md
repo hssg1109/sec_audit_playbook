@@ -65,6 +65,13 @@ Canonical automation scripts (repo `tools/scripts/`):
   - Output: upload_diagnoses / download_diagnoses / rfi_diagnoses / config_findings / summary
   - 수동진단 연동: `needs_review: true` 항목 → `task_prompts/task_24_file_handling.md` 프롬프트 4종
 
+- `scan_injection_patterns.py` (v2.1): OS Command/SSI Injection 패턴 라이브러리 (`scan_injection_enhanced.py` 의존)
+  - `OS_CMD_PATTERNS`, `OS_CMD_SAFE_PATTERNS`, `OS_CMD_FILTER_CHARS`: OS Command Injection 탐지 패턴
+  - `SSI_PATTERNS`: Server-Side Include Injection 패턴
+  - `scan_file()`, `matches_glob()`: 파일 스캔 헬퍼 함수
+  - `SQLI_VULNERABLE_PATTERNS`, `SQLI_SAFE_PATTERNS`, `SQLI_CONCAT_PATTERNS`: SQL Injection 패턴 상수
+  - ⚠️ `scan_injection_enhanced.py`가 직접 import — 독립 실행 불가, 반드시 함께 유지
+
 - `build_target.py` (v1.0): /sec-audit-static 사전 빌드 실행 + 아티팩트 매니페스트 생성
   - 빌드 도구 자동 감지: Maven / Gradle / npm / pip / PHP (no-build)
   - JDK 버전 자동 탐색: `/usr/lib/jvm/java-{v}-*`, SDKMAN, update-alternatives
