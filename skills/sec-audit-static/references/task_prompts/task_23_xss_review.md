@@ -398,11 +398,80 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 > - "현재 렌더링이 안전하므로 양호" 판정은 **오진(FP)** — 절대 금지
 > - OWASP ASVS V5.2.1(입력 검증), V5.3.1(출력 인코딩) 모두 전역 필터 구현 요구
 
-**전역 필터 존재 여부 판정:**
+---
+
+#### 6-A. Lucy XSS Filter — 등록 검증 필수 (선언 ≠ 동작)
+
+> ⚠️ **build.gradle/pom.xml에 의존성이 선언되어 있어도, 실제 Filter Chain에 등록되지 않으면 필터가 동작하지 않는다. 반드시 등록 코드를 코드로 직접 확인할 것.**
+
+**검증 대상 (이 중 하나가 반드시 있어야 실제 동작):**
+
+| 등록 방식 | 확인 코드 패턴 |
+|---|---|
+| Spring Java Config | `FilterRegistrationBean`에 `new XssEscapeServletFilter()` 또는 `new LucyXssServletFilter()` 등록 |
+| web.xml | `<filter-class>` 태그에 `XssEscapeServletFilter` 또는 `LucyXssServletFilter` 등록 |
+| Spring Boot Bean | `@Bean` 메서드가 `FilterRegistrationBean<XssEscapeServletFilter>` 반환 |
+
+**판정:**
 
 | 상태 | 판정 |
 |---|---|
-| Lucy / AntiSamy / ESAPI / Custom XSS Filter 미발견 (`filter_level: none`) | **취약 (High)** — 시스템 수준 XSS 입력 정제 계층 완전 부재 |
+| build.gradle에 `lucy-xss-servlet` 선언 + 등록 코드 없음 | **취약 (High)** — 의존성 선언만으로는 보호 효과 없음 (`filter_level: none`과 동일) |
+| `XssEscapeServletFilter` 등록 코드 확인 | Lucy 정상 등록 → multipart 순서 추가 검증 |
+
+```bash
+# 등록 코드 확인 grep
+grep -r "XssEscapeServletFilter\|LucyXssServletFilter\|FilterRegistrationBean" src/
+grep -r "filter-class" src/main/webapp/WEB-INF/web.xml 2>/dev/null
+```
+
+---
+
+#### 6-B. Jackson XSS Deserializer — 커버리지 맹점 (@RequestParam 미적용)
+
+> ⚠️ **Jackson XSS Deserializer(`XSSStringDeserializer` 등)는 `@RequestBody`(JSON 역직렬화) 경로에만 유효하다. `@RequestParam`, `@ModelAttribute`, `request.getParameter()` 경로는 Jackson을 거치지 않으므로 이 필터의 보호를 받지 못한다.**
+
+**입력 경로별 Jackson Deserializer 적용 여부:**
+
+| 입력 방식 | 처리 경로 | XSS 필터 적용 |
+|---|---|---|
+| `@RequestBody` (JSON) | Jackson ObjectMapper 역직렬화 | ✅ XSSStringDeserializer 적용 |
+| `@RequestParam` (쿼리스트링/form) | Servlet `request.getParameter()` | ❌ 미적용 |
+| `@ModelAttribute` (form 바인딩) | Servlet `request.getParameter()` | ❌ 미적용 |
+| `@PathVariable` | URI 파싱 | ❌ 미적용 |
+
+**판정 기준:**
+
+| 상태 | 판정 |
+|---|---|
+| `XSSStringDeserializer` 전역 등록 + **모든 엔드포인트가 @RequestBody 전용** | **양호** (`filter_level: jackson_requestbody_only`, 서블릿 파라미터 없음) |
+| `XSSStringDeserializer` 전역 등록 + **@RequestParam/ModelAttribute 파라미터 존재** | **취약 (High)** — 해당 파라미터 경로는 필터 미보호 → 별도 Servlet 레벨 필터 필요 |
+| Jackson Deserializer만 있고 Lucy/AntiSamy/ESAPI 없음 + @RequestParam 존재 | **취약 (High)** — 전역 Servlet 필터 완전 부재 |
+
+**확인 방법:**
+```bash
+# Jackson XSS Deserializer 등록 여부
+grep -r "XSSStringDeserializer\|addDeserializer.*Xss\|XssStringDeserializer" src/
+
+# @RequestParam 사용 엔드포인트 수 확인
+grep -r "@RequestParam" src/main/java/ | grep -v "test" | wc -l
+```
+
+**`filter_level: jackson_requestbody_only` 판정 시 LLM 수동 검토 절차:**
+1. `scan_xss.py` 결과에서 `xss_category: 잠재적위협`으로 표시된 `[Jackson 필터 커버리지 맹점]` finding 확인
+2. `@RequestParam` 파라미터가 응답에 반사되거나 DB에 저장되는 엔드포인트 추적
+3. 별도 Servlet 레벨 필터(Lucy, 커스텀 `HttpServletRequestWrapper`) 부재 확인
+4. 취약 finding 등록: `"전역 XSS 필터 — @RequestParam 경로 미보호 (Jackson Deserializer 한계)"`
+
+---
+
+**전역 필터 존재 여부 판정 (종합):**
+
+| 상태 | 판정 |
+|---|---|
+| Lucy/AntiSamy/ESAPI 미발견 + 등록 코드 없음 (`filter_level: none`) | **취약 (High)** — 시스템 수준 XSS 입력 정제 계층 완전 부재 |
+| Lucy 의존성 선언만, `FilterRegistrationBean`/`web.xml` 등록 코드 없음 | **취약 (High)** — 선언 ≠ 동작 (6-A 기준) |
+| `XSSStringDeserializer` 전역 등록 + `@RequestParam` 엔드포인트 존재 | **취약 (High)** — 서블릿 경로 미보호 (6-B 기준) |
 | 전역 필터 존재 + `< > ' "` 4개 필터 누락 | **취약 (High)** |
 | 전역 필터 존재 + `< > ' "` 모두 필터 + `( ) / #` 일부 누락 | **정보** |
 | 8개 문자 모두 필터 + Jackson HTML escape 활성화 | **양호** |
@@ -427,9 +496,10 @@ View에서 스크립트 문자열이 렌더링될 때 실행 가능한 경우.
 
 **검사 대상 필터 라이브러리:**
 - OWASP AntiSamy
-- Lucy XSS Filter / Lucy XSS Servlet Filter (SK Planet 사내 표준)
+- Lucy XSS Filter / Lucy XSS Servlet Filter (SK Planet 사내 표준) — **등록 코드 교차 검증 필수**
 - ESAPI
 - Java Servlet Filter (커스텀)
+- Jackson XSS Deserializer — **@RequestBody 경로만 커버, @RequestParam 별도 검증 필수**
 
 ---
 

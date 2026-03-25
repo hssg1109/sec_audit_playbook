@@ -45,6 +45,8 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
 - `references/task_prompts/task_23_xss_review.md` - XSS 검토 (Persistent/Reflected/Redirect/View)
 - `references/task_prompts/task_24_file_handling.md` - 파일 처리 검토 (Upload/Download/LFI/RFI)
 - `references/task_prompts/task_25_data_protection.md` - 데이터 보호 검토 (CORS/Secrets/Admin/JWT)
+- `references/task_prompts/task_sca.md` - SCA 진단 절차 (의존성 추출 → CVE 조회 → 관련성 검증 → 보고서)
+- `references/task_prompts/task_sca_llm_review.md` - Phase 3-SCA LLM 관련성 검토 (4단계: grep/발생조건/판정/한국어설명)
 
 ### 실행 원칙 (CRITICAL — 반드시 준수)
 

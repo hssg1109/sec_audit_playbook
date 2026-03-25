@@ -65,12 +65,6 @@ Canonical automation scripts (repo `tools/scripts/`):
   - Output: upload_diagnoses / download_diagnoses / rfi_diagnoses / config_findings / summary
   - 수동진단 연동: `needs_review: true` 항목 → `task_prompts/task_24_file_handling.md` 프롬프트 4종
 
-- `scan_injection_patterns.py` (v2.1): Pattern definitions for injection detection
-  - `SQLI_VULNERABLE_PATTERNS`: MyBatis `${}`, JDBC concat, Kotlin template 등
-  - `SQLI_SAFE_PATTERNS`: `#{}`, `:param`, `?` binding 등
-  - `SQLI_CONCAT_PATTERNS`: Kotlin `${expr}`, `$var`, `+ var +`
-  - `CMDI_*`, `SSI_*` patterns
-
 - `build_target.py` (v1.0): /sec-audit-static 사전 빌드 실행 + 아티팩트 매니페스트 생성
   - 빌드 도구 자동 감지: Maven / Gradle / npm / pip / PHP (no-build)
   - JDK 버전 자동 탐색: `/usr/lib/jvm/java-{v}-*`, SDKMAN, update-alternatives
@@ -93,7 +87,18 @@ Canonical automation scripts (repo `tools/scripts/`):
   - Output: `state/joern_sqli_taint.json` (taint flow 목록)
   - joern-parse로 CPG 생성 후 joern CLI로 실행 (`joern-parse <jar> -o cpg.bin`)
 
-- `scan_sca.py` (v2.0): SCA + CVE 관련성 분석 + PoC 생성 + Confluence 게시 (P2-01/P2-02)
+- `scan_sca_gradle_tree.py` (v2.0): SCA — Gradle/npm 네이티브 파싱 + OSV.dev CVE 조회 (P2-01 권장)
+  - Gradle `dependencies` 태스크 결과 파싱: 전이적 의존성(transitive) 포함
+  - package-lock.json(npm) 자동 감지 및 파싱 (동일 커맨드로 자동 전환)
+  - OSV.dev API 배치 조회: groupId:artifactId:version 기준 CVE 매핑
+  - CVSS 점수, 영향 버전 범위, fixed 버전 자동 추출
+  - `scan_sca.py`와 동일한 출력 스키마 (findings[] + grouped[])
+  - 사용법:
+    - (Gradle): `python3 scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json`
+    - (npm): 위와 동일 (package-lock.json 자동 감지)
+  - Output: `state/<prefix>_sca.json`
+
+- `scan_sca.py` (v2.0): SCA + CVE 관련성 분석 + PoC 생성 + Confluence 게시 (P2-01/P2-02, JAR 레거시)
   - **P2-01 (dependency-check 경로)**: dependency-check 실행 → CVE 파싱 → CVSS 기준 필터링
   - **P2-01 (OSV 경로)**: `--dep-tree` 옵션으로 Gradle dep tree → OSV API 배치 조회 (빌드 실패 시 대체)
   - **P2-02**: CISA KEV 조회 → 소스코드 관련성 자동 grep 판정 → PoC 생성
@@ -120,8 +125,10 @@ Canonical automation scripts (repo `tools/scripts/`):
     - `_json_to_xhtml_vuln()`: task_22~25 standard vulnerability findings
     - `_json_to_xhtml_enhanced_injection()`: scan_injection_enhanced.py output format
     - `_json_to_xhtml_final()`: final_report.json
+    - `build_sca_xhtml()` (v2, SCA): scan_sca_gradle_tree.py / scan_sca.py 출력 렌더링 (`_json_to_xhtml_sca_v2` 위임)
+      - findings 목록, CVE 상세, 관련성 판정, LLM 보완 findings (supplemental_sources) 자동 병합
   - Auto-detection: `endpoint_diagnoses` key → enhanced injection, `endpoints` key → api_inventory
-  - `confluence_page_map.json`으로 페이지 구조 관리
+  - `confluence_page_map.json`으로 페이지 구조 관리 (`supplemental_sources` LLM 보완 findings 자동 병합)
 
 
 ## Notes

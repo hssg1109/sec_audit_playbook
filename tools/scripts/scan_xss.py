@@ -2239,6 +2239,34 @@ def check_persistent_xss(endpoint: dict,
             "taint_result": taint_result,
         }
 
+    # jackson_requestbody_only: @RequestParam/@ModelAttribute 파라미터 존재 여부로 분기
+    # @RequestBody 전용 → Jackson 커버 → 양호
+    # @RequestParam 등 서블릿 경로 존재 → Jackson 미커버 → 이하 취약 판정 흐름으로 fall-through
+    if filter_level == "jackson_requestbody_only":
+        has_servlet = _has_servlet_input_params(endpoint)
+        if not has_servlet:
+            return {
+                "risk":   "낮음",
+                "reason": (
+                    "Jackson XSS Deserializer 전역 등록 — 파라미터가 @RequestBody(JSON) 경로만 사용. "
+                    "서블릿 입력(@RequestParam/@ModelAttribute) 없음 → Jackson 필터 커버 범위 내."
+                ),
+                "taint_result": taint_result,
+            }
+        # 서블릿 입력 존재 → Jackson 미커버 → reason에 맹점 컨텍스트 첨가 후 취약 판정 흐름으로 진행
+        _gap_note = (
+            "[Jackson 필터 커버리지 맹점] @RequestParam/@ModelAttribute 파라미터 존재 — "
+            "Jackson XSS Deserializer는 @RequestBody(JSON) 경로만 커버. "
+            "서블릿 레벨(request.getParameter()) 경로는 Jackson을 거치지 않으므로 필터 미적용."
+        )
+        if taint_result is None:
+            taint_result = {"reason": _gap_note}
+        else:
+            taint_result = dict(taint_result,
+                                reason=_gap_note + " | " + taint_result.get("reason", ""))
+        # filter_level을 none으로 간주하여 이하 취약 판정 공통 흐름 실행
+        filter_level = "none"
+
     # Step 3: 커스텀 필터 발견 — P1 결함 탐지 결과에 따라 취약/정보 분기
     if filter_level == "custom_wrapper":
         custom_info = filter_status.get("custom_filter_info") or {}
@@ -2461,7 +2489,7 @@ def _assign_xss_category(result: str, xss_type: str, persistent_risk: str = "") 
             return "잠재적위협"
         return "실제위협"
     if result == "정보":
-        if "Persistent" in xss_type or persistent_risk in ("잠재", "lucy_bypass"):
+        if "Persistent" in xss_type or persistent_risk in ("잠재", "lucy_bypass", "jackson_param_gap"):
             return "잠재적위협"
         return "수동확인필요"
     if result == "양호":
@@ -2630,7 +2658,9 @@ def judge_xss_endpoint(endpoint: dict,
                 else:
                     vuln_desc = "${value} 직접 출력 — HTML escape 미처리"
 
-                # 전역 필터 있어도 View 취약 패턴은 [실제위협]
+                # 전역 서블릿 필터(inbound)만 View 취약 완화 인정
+                # jackson_requestbody_only는 서블릿 경로(@RequestParam/getParameter) 미커버
+                # → HTML_VIEW 컨트롤러의 View 파라미터는 미보호 → 완화 불인정
                 filter_ok = filter_status.get("filter_level") == "inbound"
                 if filter_ok:
                     out["reflected_xss"] = "정보"
@@ -2966,6 +2996,12 @@ def run_xss_diagnosis(source_dir: Path,
     if filter_status.get("filter_level") in ("inbound_multipart_risk",):
         lm = filter_status.get("lucy_multipart") or {}
         print(f"  ⚠️  Lucy Multipart 우회 가능성: {lm.get('detail', '')}")
+    if filter_status.get("filter_level") == "jackson_requestbody_only":
+        print("  ⚠️  Jackson XSS Deserializer — @RequestBody(JSON) 경로만 커버.")
+        print("     @RequestParam/@ModelAttribute 파라미터는 서블릿 레벨 필터 미적용 → 별도 취약 판정.")
+    if filter_status.get("has_lucy") and not filter_status.get("lucy_registered"):
+        print("  ⚠️  Lucy XSS 의존성 선언 발견 — 그러나 FilterRegistrationBean/web.xml 등록 미확인.")
+        print("     선언만으로는 필터 미동작 → filter_level=none 처리.")
     if filter_status["filter_files"]:
         for ff in filter_status["filter_files"][:3]:
             print(f"     {ff}")
