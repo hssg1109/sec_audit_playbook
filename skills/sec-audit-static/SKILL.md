@@ -33,6 +33,8 @@ This skill is **self-contained**: `skills/sec-audit-static/` + `tools/scripts/` 
 - `references/rule_validation.md` for mandatory post-rule validation.
 - `references/tooling.md` for code-browser tooling (rg/ctags).
 - `references/secret_scanning.md` for Gitleaks-based secret detection.
+- `references/large_repo_multi_module.md` for build_target-based split diagnosis (large repos / Fortify multi-target). Apply when endpoints > 1,000 or build_targets ≥ 2.
+- `references/unsupported_lang_targets.md` for repos where auto-scan is not supported (PHP etc.) — skip Phase 2 and record.
 
 ### Step 2: Load task prompts
 Each task has a detailed diagnosis prompt with criteria, search keywords, and output format:

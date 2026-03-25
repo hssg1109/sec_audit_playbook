@@ -104,6 +104,25 @@ Phase 5: SSC 정합성 검증 [정기진단 필수 / 개발검증 선택]
 - `task_prompts/task_24_file_handling.md`
 - `task_prompts/task_25_data_protection.md`
 
+## 대형 Repo / 멀티 build_target 진단 (Multi-Module Strategy)
+
+> **적용 조건**: Fortify build_target ≥ 2 이거나 API inventory endpoints > 1,000인 대형 repo
+>
+> 상세 절차: `references/large_repo_multi_module.md`
+>
+> **핵심 원칙**:
+> - `scan_injection_enhanced.py` / `scan_xss.py` → `--modules <build_target>` 으로 분리 실행
+> - `scan_file_processing.py` / `scan_data_protection.py` / `scan_sca_gradle_tree.py` → 전체 repo 1회 실행
+> - build_target별 독립 prefix: `state/<test_prefix>_<BT>_`
+> - Phase 3 LLM / Phase 4 보고서 / Phase 5 SSC → build_target별 독립 수행
+
+## 미지원 언어 처리
+
+> PHP / Python / Go 등 미지원 언어 repo → 자동 스캔 전량 skip
+> 대상 목록: `references/unsupported_lang_targets.md`
+
+---
+
 ## 진단 범위 제한 (Module-Scoped Audit)
 
 > **적용 조건**: 진단 대상이 repo 전체가 아니라 **특정 서브모듈/패키지 경로**만 해당할 경우
