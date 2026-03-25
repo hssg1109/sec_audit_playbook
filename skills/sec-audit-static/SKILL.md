@@ -33,6 +33,7 @@ This skill is **self-contained**: `skills/sec-audit-static/` + `tools/scripts/` 
 - `references/rule_validation.md` for mandatory post-rule validation.
 - `references/tooling.md` for code-browser tooling (rg/ctags).
 - `references/secret_scanning.md` for Gitleaks-based secret detection.
+- `references/confluence_naming.md` for Confluence page naming convention (`{서비스명}_ai자동진단_보고서`) and service name mapping table for all 1~3월 targets. Parent: OCB 서비스군 pageId=741064663.
 - `references/large_repo_multi_module.md` for build_target-based split diagnosis (large repos / Fortify multi-target). Apply when endpoints > 1,000 or build_targets ≥ 2.
 - `references/unsupported_lang_targets.md` for repos where auto-scan is not supported (PHP etc.) — skip Phase 2 and record.
 

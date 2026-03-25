@@ -104,6 +104,17 @@ Phase 5: SSC 정합성 검증 [정기진단 필수 / 개발검증 선택]
 - `task_prompts/task_24_file_handling.md`
 - `task_prompts/task_25_data_protection.md`
 
+## Confluence 보고서 네이밍 규칙
+
+> 상세: `references/confluence_naming.md`
+>
+> - **컨테이너 페이지**: `{서비스명}_ai자동진단_보고서` (parent: OCB 서비스군, pageId=741064663)
+> - **하위 페이지**: `{서비스명}_ai자동진단_진단결과요약`, `{서비스명}_ai자동진단_인젝션취약점`, `{서비스명}_ai자동진단_XSS취약점`, `{서비스명}_ai자동진단_파일처리`, `{서비스명}_ai자동진단_데이터보호`, `{서비스명}_ai자동진단_SCA`, `{서비스명}_ai자동진단_SSC검증`
+> - **Multi-Module**: `{서비스명({BT})}_ai자동진단_진단결과요약` 형태로 build_target 표기
+> - **서비스명 매핑**: `confluence_naming.md` 서비스명 매핑 테이블 참조
+
+---
+
 ## 대형 Repo / 멀티 build_target 진단 (Multi-Module Strategy)
 
 > **적용 조건**: Fortify build_target ≥ 2 이거나 API inventory endpoints > 1,000인 대형 repo
