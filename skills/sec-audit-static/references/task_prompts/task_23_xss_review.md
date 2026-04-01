@@ -8,6 +8,11 @@
 > ⚠️ **이 JSON은 자동스캔 페이지에 통합 렌더링된다.** 독립 보고서가 아님.
 > `confluence_page_map.json`의 xss finding 항목에 `supplemental_sources` 배열로 추가할 것.
 
+> 📋 **Finding 작성 기준**: `references/finding_writing_guide.md` 필수 준수
+> - `evidence.code_snippet`: 취약 코드 직접 인용 필수 (없으면 finding 미완성)
+> - `description`: 현황 → 보안 위협 → 현재 평가 3단 구어체 서술
+> - `recommendation`: 번호 목록(`1. 2. 3.`) 2개 이상, 구체적 코드 수정 방법 포함
+
 ---
 
 ### 진단 프로세스 (2단계)

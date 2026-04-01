@@ -90,8 +90,143 @@ Phase 3-1 완료 후, 아래 조건 중 하나 이상에 해당하는 항목을 
 - `result: "정보"` 이면서 `needs_review: true`인 항목
 - `result: "취약"` 이면서 `diagnosis_method: "추정"` 또는 `taint_confirmed: null`인 항목
 - `diagnosis_type`이 `[잠재] 취약한 쿼리 구조`인 항목
+- **스캐너 Taint 추적 실패** (`diagnosis_type ∈ {"자동 판정 불가", "DB 접근 미확인", "추적 불가"}`) — 인젝션 전용 절차 아래 참조
 
-### 진행 방법
+---
+
+### Phase 3-2 [인젝션 전용]: 스캐너 추적 실패 API LLM 취약 여부 갱신 절차
+
+> **이 절차는 scan_injection_enhanced.py가 DB 흐름을 따라가지 못한 API들에 대해
+> LLM이 직접 코드를 읽고 취약 여부를 확정하여 task22_llm.json에 반영하는 전체 과정이다.**
+
+#### Step 0: 추적 실패 규모 및 유형 파악
+
+```bash
+python3 -c "
+import json
+from collections import Counter
+d = json.load(open('state/<prefix>_injection.json'))
+eps = d.get('endpoint_diagnoses', [])
+failed = [e for e in eps if e.get('diagnosis_type') in [
+    '자동 판정 불가', 'DB 접근 미확인', '추적 불가'
+] or e.get('access_type') == 'mybatis_dynamic_review']
+cnt = Counter(e.get('diagnosis_type') or e.get('access_type','?') for e in failed)
+print(f'총 추적 실패: {len(failed)}건')
+for k, v in cnt.most_common(): print(f'  {v}건: {k}')
+"
+```
+
+`injection_diagnosis_criteria.md Section 9.1` 유형표를 참조하여 각 유형의 **근본 원인**을 파악한다.
+
+#### Step 1: "DB 로직 없음" 조기 확정 (분리 우선)
+
+추적 실패 API 중 **DB 접근 자체가 없는 것을 먼저 분리**하면 실제 확인 대상이 크게 줄어든다.
+
+```bash
+# 각 Service 클래스 파일에서 DB 키워드 검색
+rg "(Repository|Mapper|JdbcTemplate|SqlSession|createQuery|executeQuery|entityManager)" \
+   <ServiceFile.kt> -c
+# 0건: DB 접근 없음 확정
+
+# FeignClient/RestTemplate 외부 HTTP 클라이언트 사용 여부
+rg "(@FeignClient|restTemplate\.|webClient\.|FeignClient)" <ServiceFile> -l
+# 발견: 외부 API 위임 → DB 없음
+
+# Redis 전용 서비스 여부
+rg "(redisTemplate\.|StringRedisTemplate|@Cacheable|@RedisHash)" <ServiceFile> -l
+```
+
+**확정된 "DB 없음" endpoint** → `group_judgments`에 별도 group 추가:
+```json
+{
+  "group": "DB 접근 없음 (N건)",
+  "root_cause": "FeignClient 외부 API 호출 전용 서비스 / Redis 전용 / 단순 계산 로직",
+  "judgment": "해당없음(DB접근없음)",
+  "llm_resolution_method": "Service 직접 확인: DB 키워드 0건, FeignClient 호출만 존재",
+  "endpoints_reviewed": [...]
+}
+```
+
+#### Step 2: 나머지 추적 실패 API 코드 확인 → 취약 여부 판정
+
+**그룹별 대표 endpoint 샘플링**:
+- 동일 Service/DAO 클래스를 공유하는 endpoint들은 **그룹으로 묶어** 대표 3~5개만 확인
+- 대표 샘플에서 확인된 패턴을 **그룹 전체에 적용**
+
+**코드 확인 순서**:
+
+```
+[1] Controller 파일 탐색
+    rg "매핑경로" testbed/ -l   # Controller 파일 찾기
+
+[2] Service 구현체 탐색 (인터페이스인 경우)
+    rg "implements <ServiceName>" testbed/ -l
+    rg "class <ServiceName>Impl" testbed/ -l
+
+[3] DAO/Repository 구현체 탐색
+    rg "class <DaoName>Impl" testbed/ -l
+    rg "@Mapper" <파일> -l
+
+[4] SQL 패턴 확인
+    # MyBatis XML 전수 ${}  스캔
+    find testbed/ -name "*.xml" | xargs grep -n '\${' 2>/dev/null | grep -v "<!--"
+    # iBatis $param$ 스캔
+    find testbed/ -name "*.xml" | xargs grep -n '\$[a-zA-Z]' 2>/dev/null | grep -v "<!--"
+    # JPA @Query 문자열 결합
+    rg '@Query.*\+' testbed/ -n
+    # JDBC 문자열 결합
+    rg 'execute\(.*\+|query\(.*\+|update\(.*\+' testbed/ -n
+```
+
+**판정 적용**:
+
+| 확인 결과 | judgment | 출력 |
+|---|---|---|
+| DB 없음 확정 | `해당없음(DB접근없음)` | group으로 분리 (Step 1) |
+| `#{}` / `:param` 바인딩만 확인 | `양호` | group_judgments.services_reviewed |
+| `${}` 있으나 외부 입력 미도달 | `정보` | group_judgments + 근거 |
+| `${}` + 외부 String 입력 직삽 | `취약` | findings INJ-00N 등록 |
+| 그룹 내 예외 endpoint | 개별 판정 | endpoint_verdicts 배열 |
+
+#### Step 3: task22_llm.json 최종 갱신
+
+```json
+{
+  "task_id": "2-2",
+  "status": "completed",
+  "sqli_endpoint_review": {
+    "total_info_endpoints": N,
+    "no_db_logic_count": M,           ← DB 없음 확정 건수
+    "no_db_logic_note": "FeignClient N건, Redis M건",
+    "group_judgments": [...],          ← DB없음 group + 패턴별 group
+    "endpoint_verdicts": [...],        ← 그룹 판정과 다른 개별 endpoint
+    "overall_sqli_judgment": "양호|정보|취약"
+  },
+  "findings": [...]                    ← 취약 확정 건만
+}
+```
+
+#### Step 4: 완료 검증
+
+```bash
+# 추적 실패 전체 건수
+python3 -c "
+import json
+d = json.load(open('state/<prefix>_injection.json'))
+failed = [e for e in d.get('endpoint_diagnoses',[]) if e.get('diagnosis_type') in [
+    '자동 판정 불가', 'DB 접근 미확인', '추적 불가'
+] or e.get('access_type')=='mybatis_dynamic_review']
+print(len(failed), '건 추적 실패')
+"
+# → 이 수치 == group_judgments의 모든 endpoints_reviewed 합계이어야 함
+```
+
+---
+
+### Phase 3-2 [일반]: needs_review/잠재취약 항목 수동진단 진행 방법
+
+**대상**: `result: "정보"` + `needs_review: true`, `taint_confirmed: null`, `[잠재] 취약한 쿼리 구조`
+(Taint 추적 실패 API는 위 [인젝션 전용] 절차로 처리)
 
 `references/manual_review_prompt.md`에 정의된 LLM 수동진단 프롬프트를 사용합니다.
 

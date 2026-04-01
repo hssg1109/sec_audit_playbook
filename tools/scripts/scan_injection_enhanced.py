@@ -84,6 +84,39 @@ _JOERN_SCRIPT = Path(__file__).parent / "joern_sqli_taint.sc"
 # MyBatis 안전 바인딩 패턴: Joern sink 탐지 결과에서 false-positive 필터링용
 _MYBATIS_SAFE_BIND_RE = re.compile(r'#\{')
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MyBatis ${}  4단계 판정 매트릭스 (v3.2+)
+# [Step 1] 탐지: has_dollar=True → 잠재적 위협, taint 역추적 시작
+# [Step 2] Source 확인: 외부 HTTP 입력 미도달 → 정보(Info)
+# [Step 3] Context 확인: 방어 로직(Enum/Integer/화이트리스트) 존재 → 양호(FP)
+# [Step 4] 최종 판정: 검증 없이 String 직삽 → 취약(TP)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Step 2/3: ORDER BY / LIMIT 등 기능상 불가피한 동적 바인딩 변수명 집합
+_MYBATIS_DYNAMIC_BINDING_KEYWORDS: set = {
+    "order", "sort", "column", "col", "table", "schema",
+    "tablename", "orderby", "sortcolumn", "sortfield",
+    "direction", "limit", "offset",
+}
+
+# Step 3: 방어 로직 인정 패턴 (Sanitization / Whitelist)
+#  - Enum 캐스팅: SortDirection.ASC, OrderDirection, Enum.valueOf 등
+#  - 숫자형 변환: Integer/Long 파라미터 선언 또는 parseInt/parseLong
+#  - 화이트리스트 if/switch: "ASC"/"DESC" 고정값 분기
+_MYBATIS_DOLLAR_SANITIZE_RE = re.compile(
+    r'(?:'
+    r'[A-Z][A-Za-z0-9_]*(?:Direction|Order|Sort)[A-Za-z0-9_]*'   # SortDirection, OrderType 등 Enum
+    r'|Enum\.valueOf'
+    r'|\.name\s*\(\s*\)'                                           # enum.name() 호출
+    r'|\bInteger(?:\.parseInt)?\b|\bLong(?:\.parseLong)?\b'       # 숫자형 타입/변환
+    r'|(?:int|long)\s+\w*(?:rder|ort|age|imit|ffset|irection)\w*' # int order, long limit 등
+    r'|(?:\"|\')(?:ASC|DESC|asc|desc)(?:\"|\')'                   # 화이트리스트 문자열 리터럴
+    r'|switch\s*\([^)]*(?:order|sort|column|direction)[^)]*\)'    # switch(sortField)
+    r'|if\s*\([^)]*(?:order|sort|column|direction)[^)]*\)\s*\{[^}]*(?:ASC|DESC)' # if→ASC/DESC
+    r')',
+    re.IGNORECASE,
+)
+
 
 def _check_joern_available(joern_home: Optional[Path]) -> Optional[Path]:
     """joern 실행 파일 경로를 반환한다. 없으면 None."""
@@ -893,6 +926,81 @@ def _resolve_sql_text(elem, sql_fragments: dict,
     return "".join(parts)
 
 
+def _classify_dollar_var(var_name: str) -> str:
+    """${}  변수명으로 동적 바인딩 여부 분류.
+
+    동적 바인딩(ORDER BY/LIMIT 등 기능상 불가피): "dynamic"
+    일반 사용자 입력 가능성 있는 변수: "general"
+    """
+    vl = var_name.lower()
+    if vl in _MYBATIS_DYNAMIC_BINDING_KEYWORDS:
+        return "dynamic"
+    for kw in _MYBATIS_DYNAMIC_BINDING_KEYWORDS:
+        if kw in vl:
+            return "dynamic"
+    return "general"
+
+
+def _assess_mybatis_dollar_verdict(
+    dollar_vars: list,
+    caller_content: str,
+    method_name: str,
+) -> tuple:
+    """MyBatis ${}  4단계 판정 매트릭스 적용.
+
+    Step 1 (탐지):  has_dollar=True → 잠재적 위협, taint 역추적 시작
+    Step 2 (Source): 변수가 동적 바인딩 전용(order/sort 등)이고 외부 입력 미도달 → 정보
+    Step 3 (Context): caller 코드에 방어 로직(Enum/Integer/화이트리스트) 확인 → 양호(FP)
+    Step 4 (최종):  검증 없이 일반 변수 SQL 직삽 → 취약(TP)
+
+    Args:
+        dollar_vars:    XML mapper에서 추출한 ${} 변수명 목록
+        caller_content: 해당 mapper를 호출하는 서비스/DAO 파일 전체 소스
+        method_name:    호출 메서드명 (Step 2 시그니처 확인용)
+
+    Returns:
+        (verdict, access_type, detail_note)
+        verdict:     "취약" | "정보" | "양호"
+        access_type: "mybatis_unsafe" | "mybatis_dynamic_review" | "mybatis_dynamic_safe"
+        detail_note: 판정 단계 및 근거 설명
+    """
+    general_vars = [v for v in dollar_vars if _classify_dollar_var(v) == "general"]
+    dynamic_vars = [v for v in dollar_vars if _classify_dollar_var(v) == "dynamic"]
+
+    # Step 3: caller 코드에서 방어 로직(Sanitization/Whitelist) 탐지
+    has_sanitize = bool(_MYBATIS_DOLLAR_SANITIZE_RE.search(caller_content or ""))
+
+    if has_sanitize:
+        # Step 3 → 양호: Enum 캐스팅 / 숫자형 / 화이트리스트 if-switch 확인
+        vars_info = ", ".join(dollar_vars)
+        return (
+            "양호",
+            "mybatis_dynamic_safe",
+            "[Step 3 양호] ${...} 방어 로직(Enum 캐스팅/Integer형/화이트리스트) 확인"
+            f" (변수: {vars_info})",
+        )
+
+    if general_vars:
+        # Step 4 → 취약: 일반 변수가 검증 없이 SQL에 직접 삽입
+        vars_info = ", ".join(general_vars)
+        first_var = general_vars[0]
+        dyn_suffix = f" | 동적 바인딩 변수: {', '.join(dynamic_vars)}" if dynamic_vars else ""
+        return (
+            "취약",
+            "mybatis_unsafe",
+            f"[Step 4 취약] ${{{first_var}}} 검증 없이 SQL 직접 삽입 (변수: {vars_info}){dyn_suffix}",
+        )
+
+    # dynamic_vars만 있고 sanitize 미확인 → Step 2/3 경계: 정보(Review Needed)
+    vars_info = ", ".join(dynamic_vars)
+    return (
+        "정보",
+        "mybatis_dynamic_review",
+        "[Step 2/3 정보] 동적 바인딩 ${...} (ORDER BY/정렬 등 기능상 불가피)."
+        f" Service 계층 화이트리스트·Enum 방어 로직 수동 확인 필요 (변수: {vars_info})",
+    )
+
+
 def build_mybatis_index(source_dir: Path, extra_source_dirs: list = None) -> dict:
     """MyBatis/iBatis XML mapper 파일을 ElementTree 기반으로 파싱하여 SQL ID 인덱스 구축
 
@@ -924,10 +1032,8 @@ def build_mybatis_index(source_dir: Path, extra_source_dirs: list = None) -> dic
     exclude_dirs = {"node_modules", ".idea", "target", "build", ".git", "dist", "test"}
     sql_tags = {"select", "insert", "update", "delete"}
 
-    # 동적 바인딩 예외 변수명 (ORDER BY ${col} 등 기능상 불가피)
-    dynamic_binding_vars = {"order", "sort", "column", "col", "table", "schema",
-                            "tableName", "orderBy", "sortColumn", "sortField",
-                            "direction", "limit", "offset"}
+    # 동적 바인딩 예외 변수명은 모듈 상수 _MYBATIS_DYNAMIC_BINDING_KEYWORDS 사용
+    dynamic_binding_vars = _MYBATIS_DYNAMIC_BINDING_KEYWORDS
 
     all_dirs = [source_dir] + (extra_source_dirs or [])
 
@@ -1010,13 +1116,9 @@ def build_mybatis_index(source_dir: Path, extra_source_dirs: list = None) -> dic
             has_hash = bool(re.search(r'#\{[^}]+\}', sql_text))
             has_ibatis_hash = bool(re.search(r'#\w+#', sql_text))
 
-            # 동적 바인딩 예외 판정: 변수명이 order/sort/table 계열이면 별도 태그
+            # 동적 바인딩 예외 판정: _classify_dollar_var() 기준 (모듈 상수 기반)
             all_dollar_vars = dollar_matches + ibatis_dollar_matches
-            has_dynamic = any(
-                v.lower() in dynamic_binding_vars or
-                any(kw in v.lower() for kw in ("order", "sort", "table", "column", "limit"))
-                for v in all_dollar_vars
-            )
+            has_dynamic = any(_classify_dollar_var(v) == "dynamic" for v in all_dollar_vars)
 
             entry = {
                 "file": rel_path,
@@ -2232,17 +2334,21 @@ def analyze_dao_method(content: str, method_name: str,
 
             if entry:
                 if entry.get("has_dollar") or entry.get("has_ibatis_dollar"):
-                    is_unsafe = "ibatis" in pattern.lower() or entry.get("has_ibatis_dollar")
-                    access_type = "ibatis_unsafe" if is_unsafe and not entry.get("has_dollar") else "mybatis_unsafe"
                     dollar_vars = entry.get("dollar_vars", [])
-                    is_dynamic = entry.get("has_dynamic_binding", False)
-                    var_info = f" (변수: {', '.join(dollar_vars)})" if dollar_vars else ""
-                    dynamic_note = " [동적 바인딩 - Review Needed]" if is_dynamic else ""
+                    # 4단계 판정 매트릭스 적용 (content = 호출 서비스/DAO 코드)
+                    verdict, access_type, detail_note = _assess_mybatis_dollar_verdict(
+                        dollar_vars, content, method_name
+                    )
+                    is_ibatis = "ibatis" in pattern.lower() or (
+                        entry.get("has_ibatis_dollar") and not entry.get("has_dollar")
+                    )
+                    if is_ibatis and access_type == "mybatis_unsafe":
+                        access_type = "ibatis_unsafe"
                     ops.append(DbOperation(
                         method=method_name,
                         access_type=access_type,
-                        detail=f"취약: XML mapper에서 ${{}}/{('$param$' if is_unsafe and not entry.get('has_dollar') else '')} 직접 삽입 ({sql_id} in {entry['file']}){var_info}{dynamic_note}",
-                        is_vulnerable=True,
+                        detail=f"{detail_note} | mapper: {sql_id} in {entry['file']}",
+                        is_vulnerable=(verdict == "취약"),
                     ))
                 else:
                     is_ibatis = entry.get("has_ibatis_hash")
@@ -2362,16 +2468,19 @@ def _lookup_mybatis_xml(content: str, method_name: str,
         return ops
 
     if entry.get("has_dollar") or entry.get("has_ibatis_dollar"):
-        is_ibatis = entry.get("has_ibatis_dollar") and not entry.get("has_dollar")
         dollar_vars = entry.get("dollar_vars", [])
-        is_dynamic = entry.get("has_dynamic_binding", False)
-        var_info = f" (변수: {', '.join(dollar_vars)})" if dollar_vars else ""
-        dynamic_note = " [동적 바인딩 - Review Needed]" if is_dynamic else ""
+        # 4단계 판정 매트릭스 적용 (content = mapper interface / 호출 파일 소스)
+        verdict, access_type, detail_note = _assess_mybatis_dollar_verdict(
+            dollar_vars, content, method_name
+        )
+        is_ibatis = entry.get("has_ibatis_dollar") and not entry.get("has_dollar")
+        if is_ibatis and access_type == "mybatis_unsafe":
+            access_type = "ibatis_unsafe"
         ops.append(DbOperation(
             method=method_name,
-            access_type="ibatis_unsafe" if is_ibatis else "mybatis_unsafe",
-            detail=f"취약: XML mapper에서 ${{}}/{('$param$' if is_ibatis else '')} 직접 삽입 ({entry['file']}){var_info}{dynamic_note}",
-            is_vulnerable=True,
+            access_type=access_type,
+            detail=f"{detail_note} | mapper: {entry['file']}",
+            is_vulnerable=(verdict == "취약"),
         ))
     else:
         is_ibatis = entry.get("has_ibatis_hash") and not entry.get("has_hash")

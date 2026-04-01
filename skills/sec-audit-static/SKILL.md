@@ -1,6 +1,6 @@
 ---
 name: sec-audit-static
-description: Static code security audit playbook (SAST) — SQL Injection, OS Command, XSS, File Handling, Data Protection diagnosis for Spring/Kotlin/Java backends. Runs automated scan scripts then LLM cross-verification. Use when asked to run security audit, SAST scan, or 정적 진단 on a target in testbed/.
+description: Static code security audit playbook (SAST) — SQL Injection, OS Command, XSS, File Handling, Data Protection diagnosis for Spring/Kotlin/Java backends and client-side security (XSS, secrets, PII logging, SCA) for React/Next.js/TypeScript frontends. Runs automated scan scripts then LLM cross-verification. Use when asked to run security audit, SAST scan, or 정적 진단 on a target in testbed/.
 tools: Read, Glob, Grep, Bash, Edit, Write, Agent, WebFetch
 ---
 
@@ -25,6 +25,7 @@ This skill is **self-contained**: `skills/sec-audit-static/` + `tools/scripts/` 
 - `references/global_filters.md` for global filter/interceptor verification.
 - `references/vuln_automation_principles.md` for discovery/analysis split and hypothesis loop.
 - `references/reporting_summary.md` for cross-skill summary index format.
+- `references/finding_writing_guide.md` for **finding content quality standards**: code evidence (code_snippet required), developer-friendly Korean description, numbered recommendation. Load before any LLM finding output.
 - `references/dependency_audit.md` for internal dependency checks when requested.
 - `references/seed_usage.md` for semgrep/joern seed usage rules.
 - `references/poc_policy.md` for best-effort PoC generation rules.
@@ -45,6 +46,7 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
 - `references/task_prompts/task_23_xss_review.md` - XSS 검토 (Persistent/Reflected/Redirect/View)
 - `references/task_prompts/task_24_file_handling.md` - 파일 처리 검토 (Upload/Download/LFI/RFI)
 - `references/task_prompts/task_25_data_protection.md` - 데이터 보호 검토 (CORS/Secrets/Admin/JWT)
+- `references/task_prompts/task_26_frontend_client_side.md` - 프론트엔드 클라이언트 사이드 진단 (React/Next.js/TS — XSS/Secrets/Storage/Log/SCA)
 - `references/task_prompts/task_sca.md` - SCA 진단 절차 (의존성 추출 → CVE 조회 → 관련성 검증 → 보고서)
 - `references/task_prompts/task_sca_llm_review.md` - Phase 3-SCA LLM 관련성 검토 (4단계: grep/발생조건/판정/한국어설명)
 
@@ -63,9 +65,12 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
 **Phase 1**: Asset identification (task 1-1).
 
 **Phase 2**: Static analysis.
-- Task 2-1: API inventory (script-first: `scan_api.py`).
-- Confirm global filters/interceptors per `references/global_filters.md`.
-- Parallel reviews (after 2-1 completion):
+- **⚠️ 프론트엔드 판정 (Phase 1에서 확정)**: `package.json` 존재 + `.java`/`.kt` 0건인 경우 → 프론트엔드 repo
+  - 프론트엔드 repo: Task 2-2/2-3/2-4 skip → **Task 2-6 (프론트엔드 클라이언트 사이드)** + SCA 실행
+  - 백엔드 repo: 기존 Task 2-1 ~ 2-5 + SCA 실행
+- Task 2-1: API inventory (script-first: `scan_api.py`). [백엔드 repo만 해당]
+- Confirm global filters/interceptors per `references/global_filters.md`. [백엔드 repo만 해당]
+- Parallel reviews (after 2-1 completion): [백엔드 repo만 해당]
   - Task 2-2: Injection (script: `scan_injection_enhanced.py` → LLM verification).
     - For Kotlin codebases, run Kotlin SQL Builder 5-method detection. See `references/injection_diagnosis_criteria.md`.
     - Do not use CodeQL. Use Joern for flow-based checks.
@@ -75,6 +80,12 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
     - For `needs_review: true` items, apply 4 LLM prompt templates in `task_prompts/task_24_file_handling.md`
       (IDOR/BOLA, upload bypass, sanitization, LFI/RFI View Resolver).
   - Task 2-5: Data protection review per task prompt.
+- **Task 2-6: 프론트엔드 클라이언트 사이드 진단** [프론트엔드 repo만 해당] — `task_prompts/task_26_frontend_client_side.md` 참조
+  - FE-XSS: dangerouslySetInnerHTML / innerHTML / eval() / document.write() grep
+  - FE-SECRET: .env 파일 커밋 여부, 소스 내 API 키 하드코딩
+  - FE-STORAGE: localStorage/sessionStorage 민감 데이터 저장
+  - FE-LOG: console.log PII 포함 여부
+  - nginx.conf 보안 헤더 누락 확인 (해당 시)
 - **SCA 진단 (항상 필수)**: `scan_sca_gradle_tree.py` (Gradle/npm) 또는 `scan_sca.py` (JAR 기반). `state/<prefix>_sca.json` 출력.
   - Gradle: `python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json`
   - npm: `python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json` (package-lock.json 자동 감지)
@@ -149,6 +160,7 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
 - `references/task_prompts/task_23_xss_review.md`
 - `references/task_prompts/task_24_file_handling.md`
 - `references/task_prompts/task_25_data_protection.md`
+- `references/task_prompts/task_26_frontend_client_side.md` — 프론트엔드 JS/TS/React/Next.js 클라이언트 사이드 진단
 
 #### Scripts & Tooling
 - `references/static_scripts.md` - Available automation scripts

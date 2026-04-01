@@ -23,6 +23,39 @@
 3. 설정 파일(application.yaml, .env 등)에서 외부 연동 서비스를 파악하세요
 4. Excel 파싱 결과와 소스코드 분석 결과를 병합하여 최종 자산 목록을 생성하세요
 
+#### Step 2-A: Git 메타데이터 수집 (필수 — 보고서 서비스 개요용)
+
+testbed 내 소스코드 디렉토리에서 아래 명령을 실행하여 **보고서 서비스 개요 표에 기재할 정보**를 수집한다.
+
+```bash
+# Branch / Commit 정보
+git -C <testbed_path> log -1 --format="%H %an %ae %ad %s" --date=short
+
+# 최근 기여자 목록 (담당자 식별용)
+git -C <testbed_path> log --format="%an %ae" -20 | sort | uniq -c | sort -rn | head -5
+
+# 원격 저장소 URL
+git -C <testbed_path> remote get-url origin
+```
+
+수집 결과를 `metadata` 필드에 기록한다:
+
+```json
+"metadata": {
+  "source_repo_url": "http://code.skplanet.com/projects/PROJ/repos/repo-name",
+  "branch": "master",
+  "commit": "5ca54f5",
+  "commit_full": "5ca54f5d93d19cf2bcf527a20ab9975a42e3979e",
+  "commit_date": "2026-03-18",
+  "commit_message": "TICKET-001 - 최종 커밋 메시지",
+  "responsible_person": "홍길동 (hong@company.com)",
+  "top_contributors": ["홍길동 (5건)", "김철수 (3건)"]
+}
+```
+
+> ⚠️ shallow clone(단일 커밋)인 경우 `top_contributors`는 최종 커밋자 1명만 기록한다.
+> 담당자가 불명확하면 `responsible_person: "미확인 (최종 커밋: <name>)"` 으로 기록한다.
+
 #### Step 3: 결과 검증
 1. 결과를 `task_output_schema.json` 형식에 맞춰 JSON으로 출력하세요
 2. `validate_task_output.py`로 스키마 검증을 수행하세요

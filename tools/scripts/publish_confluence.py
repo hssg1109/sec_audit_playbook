@@ -634,6 +634,46 @@ def _code_macro(code_text: str, lang: str = "text", theme: str = _CODE_THEME) ->
     )
 
 
+def _rich_text(text: str) -> str:
+    """Convert plain text (with numbered lists and newlines) to XHTML paragraphs.
+
+    변환 규칙:
+    - "1. ...\n2. ...\n3. ..." 패턴 → <ol><li>...</li></ol>
+    - "- ...\n- ..." 패턴 (bullet) → <ul><li>...</li></ul>
+    - 나머지 줄 → <p>...</p>
+    - 인접한 같은 리스트 타입은 하나의 <ol>/<ul>로 묶음
+    """
+    import re
+    if not text:
+        return ""
+    lines = text.split("\n")
+    parts: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+        # numbered list: "1. foo" or "1) foo"
+        if re.match(r"^\d+[.)]\s+", line):
+            items: list[str] = []
+            while i < len(lines) and re.match(r"^\d+[.)]\s+", lines[i].strip()):
+                items.append(html_escape(re.sub(r"^\d+[.)]\s+", "", lines[i].strip())))
+                i += 1
+            parts.append("<ol>" + "".join(f"<li>{it}</li>" for it in items) + "</ol>")
+        # bullet list: "- foo" or "* foo"
+        elif re.match(r"^[-*]\s+", line):
+            items = []
+            while i < len(lines) and re.match(r"^[-*]\s+", lines[i].strip()):
+                items.append(html_escape(re.sub(r"^[-*]\s+", "", lines[i].strip())))
+                i += 1
+            parts.append("<ul>" + "".join(f"<li>{it}</li>" for it in items) + "</ul>")
+        else:
+            parts.append(f"<p>{html_escape(line)}</p>")
+            i += 1
+    return "\n".join(parts)
+
+
 def _severity_badge(severity):
     """Return Confluence status macro for severity level.
 
@@ -1251,8 +1291,13 @@ def _json_to_xhtml_vuln(data):
         title = html_escape(str(f.get("title", "")))
         parts.append(f"<h3>{fid} - {title} {_severity_badge(sev)}</h3>")
         parts.append(f"<p><strong>카테고리:</strong> {html_escape(str(f.get('category', '')))}</p>")
-        parts.append(f"<p><strong>설명:</strong> {html_escape(str(f.get('description', '')))}</p>")
-        parts.append(f"<p><strong>영향 범위:</strong> {html_escape(str(f.get('affected_endpoint', '')))}</p>")
+        desc = f.get("description", "")
+        if desc:
+            parts.append(f"<p><strong>설명</strong></p>")
+            parts.append(_rich_text(str(desc)))
+        affected = f.get("affected_endpoint", "") or f.get("affected_endpoints", "")
+        if affected:
+            parts.append(f"<p><strong>영향 범위:</strong> {html_escape(str(affected))}</p>")
 
         evidence = f.get("evidence", {})
         if evidence:
@@ -1289,10 +1334,13 @@ def _json_to_xhtml_vuln(data):
 
         rec = f.get("recommendation", "")
         if rec:
-            parts.append(f'<ac:structured-macro ac:name="info">'
-                         f'<ac:rich-text-body><p><strong>권고사항:</strong> '
-                         f'{html_escape(rec)}</p></ac:rich-text-body>'
-                         f'</ac:structured-macro>')
+            parts.append(
+                '<ac:structured-macro ac:name="info">'
+                '<ac:rich-text-body>'
+                '<p><strong>대응방안</strong></p>'
+                + _rich_text(rec)
+                + '</ac:rich-text-body></ac:structured-macro>'
+            )
 
     # summary section
     summary = data.get("summary", {})
@@ -1519,11 +1567,12 @@ def _json_to_xhtml_supp_findings(data: dict) -> str:
                 parts.append(f"<p><strong>카테고리:</strong> {html_escape(cat)}</p>")
             desc = f.get("description", "")
             if desc:
-                parts.append(f"<p><strong>설명:</strong> {html_escape(desc)}</p>")
+                parts.append(f"<p><strong>설명</strong></p>")
+                parts.append(_rich_text(desc))
 
-            affected = f.get("affected_endpoint", "")
+            affected = f.get("affected_endpoint", "") or f.get("affected_endpoints", "")
             if affected:
-                parts.append(f"<p><strong>영향 범위:</strong> {html_escape(affected)}</p>")
+                parts.append(f"<p><strong>영향 범위:</strong> {html_escape(str(affected))}</p>")
 
             evidence = f.get("evidence", {})
             if evidence:
@@ -1590,8 +1639,10 @@ def _json_to_xhtml_supp_findings(data: dict) -> str:
             if rec:
                 parts.append(
                     '<ac:structured-macro ac:name="info">'
-                    f'<ac:rich-text-body><p><strong>권고사항:</strong> '
-                    f'{html_escape(rec)}</p></ac:rich-text-body></ac:structured-macro>'
+                    '<ac:rich-text-body>'
+                    '<p><strong>대응방안</strong></p>'
+                    + _rich_text(rec)
+                    + '</ac:rich-text-body></ac:structured-macro>'
                 )
 
     # LLM 정보 엔드포인트 검토 결과 섹션
@@ -3524,9 +3575,12 @@ def _build_main_summary_table(injection_data: dict, xss_data: dict,
             f_vuln, f_info = _count_findings(xss_data)
             xss_vuln = max(xss_vuln, f_vuln)
             xss_info = f_info
-        xss_result = "<strong>전체 양호</strong>" \
-            if xss_vuln == 0 and xss_info == 0 \
-            else f"<strong style='color:red'>취약 {xss_vuln}건</strong>"
+        if xss_vuln > 0:
+            xss_result = f"<strong style='color:red'>취약 {xss_vuln}건</strong>"
+        elif xss_info > 0:
+            xss_result = f"정보 {xss_info}건 (수동 검토 완료)"
+        else:
+            xss_result = "<strong>전체 양호</strong>"
         rows.append(["XSS (전체)", xss_result,
                      f"{xss_vuln}건", f"{xss_info}건"])
         if per_type:
@@ -3578,25 +3632,33 @@ def _build_main_summary_table(injection_data: dict, xss_data: dict,
             else f"<strong style='color:red'>취약 {dp_vuln}건</strong>"
         rows.append(["데이터 보호 (전체)", dp_result,
                      f"{dp_vuln}건", f"{dp_info}건"])
-        # 카테고리별 세부 분류
+        # 카테고리별 세부 분류 (대소문자 무관 ENUM 및 한국어 카테고리 모두 지원)
+        def _dp_cat(f, *keywords):
+            cat = f.get("category", "").upper()
+            return any(k.upper() in cat for k in keywords)
+
         cred_vuln = sum(1 for f in dp_findings
-                        if "Hardcoded" in f.get("category", "") and f.get("result") == "취약")
-        log_issues = sum(1 for f in dp_findings if "Logging" in f.get("category", ""))
-        crypto_issues = sum(1 for f in dp_findings if "Crypto" in f.get("category", ""))
-        acl_issues = sum(1 for f in dp_findings if "Access Control" in f.get("category", ""))
+                        if _dp_cat(f, "HARDCODED", "하드코딩") and f.get("result") == "취약")
+        log_findings = [f for f in dp_findings if _dp_cat(f, "LOGGING", "로깅")]
+        crypto_findings = [f for f in dp_findings if _dp_cat(f, "CRYPTO", "암호화", "WEAK_CRYPTO")]
+        acl_issues = sum(1 for f in dp_findings if _dp_cat(f, "ACCESS", "접근"))
         if cred_vuln:
             rows.append([f"&nbsp;&nbsp;— 하드코딩 자격증명",
                          f"<strong style='color:red'>취약 {cred_vuln}건</strong>",
                          f"{cred_vuln}건", "0건"])
-        if log_issues:
-            log_vuln = sum(1 for f in dp_findings
-                           if "Logging" in f.get("category", "") and f.get("result") == "취약")
+        if log_findings:
+            log_vuln = sum(1 for f in log_findings if f.get("result") == "취약")
+            log_info = len(log_findings) - log_vuln
             rows.append([f"&nbsp;&nbsp;— 민감정보 로깅",
-                         f"취약 {log_vuln}건" if log_vuln else f"정보 {log_issues}건",
-                         f"{log_vuln}건", f"{log_issues - log_vuln}건"])
-        if crypto_issues:
-            rows.append([f"&nbsp;&nbsp;— 취약 암호화",
-                         f"정보 {crypto_issues}건", "0건", f"{crypto_issues}건"])
+                         f"취약 {log_vuln}건" if log_vuln else f"정보 {log_info}건",
+                         f"{log_vuln}건", f"{log_info}건"])
+        if crypto_findings:
+            crypto_vuln = sum(1 for f in crypto_findings if f.get("result") == "취약")
+            crypto_info = len(crypto_findings) - crypto_vuln
+            crypto_label = (f"<strong style='color:red'>취약 {crypto_vuln}건</strong>"
+                            if crypto_vuln else f"정보 {crypto_info}건")
+            rows.append([f"&nbsp;&nbsp;— 취약 암호화", crypto_label,
+                         f"{crypto_vuln}건", f"{crypto_info}건"])
         if acl_issues:
             rows.append([f"&nbsp;&nbsp;— 접근제어",
                          f"정보 {acl_issues}건", "0건", f"{acl_issues}건"])
@@ -3710,10 +3772,35 @@ def _json_to_xhtml_main_report(md_content: str, task_sources: dict,
     generate_finding_report.py 로 생성된 Markdown 파일을 그대로 XHTML로 변환한다.
     (--anchor-style md2cf 포맷의 ## summary-table, HTML 인라인 테이블 포함)
 
-    이후 하위 Task 보고서 페이지 링크(children 매크로)를 추가한다.
+    task_sources가 제공된 경우, 각 JSON 파일에서 LLM-확정 수치를 읽어 요약 테이블을
+    동적으로 재생성하고 정적 MD 테이블을 교체한다. 이렇게 하면 LLM 수동 검토 후에도
+    세부 보고서와 요약 보고서의 수치가 항상 일치한다(async 방지).
+
+    이후 하위 Task 보고서 링크(children 매크로)를 추가한다.
     """
     # MD 파일 전체를 XHTML로 변환 (md2cf anchor 스타일 포함)
     xhtml = md_to_xhtml(md_content)
+
+    # task_sources 기반 동적 요약 테이블 생성 및 정적 MD 테이블 교체
+    if task_sources:
+        inj_data = _load_json_safe(task_sources.get("injection", ""), base_dir)
+        xss_data = _load_json_safe(task_sources.get("xss", ""), base_dir)
+        dp_data  = _load_json_safe(task_sources.get("data_protection", ""), base_dir)
+        if inj_data or xss_data or dp_data:
+            dyn_table = _build_main_summary_table(inj_data, xss_data, dp_data)
+            if dyn_table:
+                # summary-table 앵커 이후 첫 번째 <table> 블록을 동적 테이블로 교체
+                anchor_marker = 'ac:name="summary-table"'
+                anchor_pos = xhtml.find(anchor_marker)
+                if anchor_pos >= 0:
+                    first_tbl = xhtml.find("<table>", anchor_pos)
+                    if first_tbl >= 0:
+                        last_tbl = xhtml.find("</table>", first_tbl)
+                        if last_tbl >= 0:
+                            xhtml = (xhtml[:first_tbl]
+                                     + "<p><em>※ 아래 요약 수치는 LLM 수동 검토 확정 결과 기준입니다.</em></p>\n"
+                                     + dyn_table
+                                     + xhtml[last_tbl + len("</table>"):])
 
     # 하위 Task 보고서 링크 안내 추가
     children_macro = (
@@ -3874,7 +3961,9 @@ def _publish_group_parent(cfg, group, full_title, parent_id, base_dir, dry_run):
     """
     source = group.get("source")
     if source:
-        entry_stub = {"source": source, "type": group.get("type", "doc")}
+        # Pass all group metadata (task_sources, supplemental_sources, etc.) to resolve_content
+        entry_stub = {k: v for k, v in group.items() if k not in ("entries", "groups", "title")}
+        entry_stub.setdefault("type", "doc")
         body, err = resolve_content(entry_stub, base_dir)
         if err:
             body = None

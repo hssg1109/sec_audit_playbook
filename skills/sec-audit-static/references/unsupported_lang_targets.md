@@ -1,7 +1,7 @@
 # 미지원 언어 진단 대상 목록
 
-> 현재 sec-audit-static 스캐너는 Java/Kotlin을 기본 지원하며, TypeScript/JavaScript는 부분 지원.
-> 이 파일은 **지원 언어 스캐너가 없어 자동 진단이 불가한 대상**을 기록하고, 향후 스캐너 구현을 위한 요구사항을 명세합니다.
+> sec-audit-static 스캐너는 Java/Kotlin을 완전 지원하며, TypeScript/JavaScript 프론트엔드는 **Task 2-6/3-6 (클라이언트 사이드 진단)**으로 지원.
+> 이 파일은 **PHP 등 지원 언어 스캐너가 없어 자동 진단이 불가한 대상**을 기록하고, 향후 스캐너 구현을 위한 요구사항을 명세합니다.
 
 ---
 
@@ -64,12 +64,16 @@ system("ls " . $_GET['dir']);
 
 ## 지원 언어 현황
 
-| 언어 / 프레임워크 | 지원 수준 | 주요 스캔 항목 |
-|---|---|---|
-| Java (Spring MVC / Spring Boot) | ✅ 완전 지원 | Injection / XSS / File / DataProtection / SCA |
-| Kotlin (Spring Boot) | ✅ 완전 지원 | Injection / XSS / File / DataProtection / SCA |
-| TypeScript (React / Next.js) | 🟡 부분 지원 | XSS(DOM/Reflected) / DataProtection / SCA(npm) |
-| JavaScript (Node.js / React) | 🟡 부분 지원 | XSS / DataProtection / SCA(npm) |
-| PHP | ❌ 미지원 | — |
-| Python | ❌ 미지원 | — |
-| Go | ❌ 미지원 | — |
+| 언어 / 프레임워크 | 지원 수준 | 주요 스캔 항목 | Task |
+|---|---|---|---|
+| Java (Spring MVC / Spring Boot) | ✅ 완전 지원 | Injection / XSS / File / DataProtection / SCA | 2-1~2-5 |
+| Kotlin (Spring Boot) | ✅ 완전 지원 | Injection / XSS / File / DataProtection / SCA | 2-1~2-5 |
+| TypeScript (React / Next.js / Turborepo) | ✅ 지원 | FE-XSS / FE-SECRET / FE-STORAGE / FE-LOG / SCA(npm) | 2-6, 3-6 |
+| JavaScript (Node.js / React) | ✅ 지원 | FE-XSS / FE-SECRET / FE-STORAGE / FE-LOG / SCA(npm) | 2-6, 3-6 |
+| PHP | ❌ 미지원 | — | — |
+| Python | ❌ 미지원 | — | — |
+| Go | ❌ 미지원 | — | — |
+
+> **TypeScript/JavaScript 지원 범위**: LLM grep 기반 수동진단 (자동 스캔 스크립트 없음).
+> 상세 진단 기준: `task_prompts/task_26_frontend_client_side.md`
+> 워크플로 분기: `workflow.md` Phase 1 프론트엔드 판정 → Phase 2-6 실행

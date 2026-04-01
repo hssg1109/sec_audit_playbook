@@ -14,28 +14,68 @@
 ```
 Phase 1: 자산 식별
   └─ Task 1-1: 자산 목록 작성
+       ├─ ⚠️ 프론트엔드 판정 [Phase 1에서 반드시 확정]:
+       │   조건: package.json 존재 AND .java/.kt 파일 0건
+       │   해당 시: task11.json findings[0].repo_type = "frontend" 기록
+       │   → Phase 2에서 Task 2-2/2-3/2-4 skip, Task 2-6 실행
+       └─ nginx-only repo(소스 없음): Phase 2 전량 skip, 보고서에 "해당없음" 기록
 
 Phase 2: 정적 분석 (자동스캔)
-  ├─ Task 2-1: API 인벤토리 추출 (선행)
-  ├─ 병렬 실행 (2-1 완료 후):
-  │  ├─ Task 2-2: 인젝션 자동스캔  → <prefix>_injection.json
-  │  ├─ Task 2-3: XSS 자동스캔     → <prefix>_xss.json
-  │  ├─ Task 2-4: 파일처리 자동스캔 → <prefix>_task24.json
-  │  └─ Task 2-5: 데이터보호 자동스캔 → <prefix>_task25.json
-  └─ ⚠️ SCA 진단 [항상 필수]: scan_sca_gradle_tree.py / scan_sca.py → <prefix>_sca.json
+  ├─ [백엔드 Java/Kotlin repo]
+  │  ├─ Task 2-1: API 인벤토리 추출 (선행)
+  │  ├─ 병렬 실행 (2-1 완료 후):
+  │  │  ├─ Task 2-2: 인젝션 자동스캔  → <prefix>_injection.json
+  │  │  ├─ Task 2-3: XSS 자동스캔     → <prefix>_xss.json
+  │  │  ├─ Task 2-4: 파일처리 자동스캔 → <prefix>_task24.json
+  │  │  └─ Task 2-5: 데이터보호 자동스캔 → <prefix>_task25.json
+  │  └─ ⚠️ SCA 진단 [항상 필수]: scan_sca_gradle_tree.py → <prefix>_sca.json
+  │
+  └─ [프론트엔드 JS/TS repo] — Task 2-1/2-2/2-3/2-4/2-5 skip
+     ├─ Task 2-6: 클라이언트 사이드 진단 (LLM grep 기반) → <prefix>_task26_llm.json
+     │   ├─ FE-XSS: dangerouslySetInnerHTML / innerHTML / eval() / document.write()
+     │   ├─ FE-SECRET: .env 커밋 / 소스 내 API 키 하드코딩
+     │   ├─ FE-STORAGE: localStorage/sessionStorage 민감 데이터
+     │   ├─ FE-LOG: console.log PII 포함
+     │   └─ FE-HEADER: nginx.conf 보안 헤더 누락 (해당 시)
+     └─ ⚠️ SCA 진단 [항상 필수]: scan_sca_gradle_tree.py (package-lock.json 자동 감지) → <prefix>_sca.json
+
+  공통 SCA 실행 방식:
        - Gradle 프로젝트: python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json
        - npm 프로젝트(package-lock.json): python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json
        - JAR 기반(레거시): scan_sca.py --jar <jar>
 
 Phase 3: LLM 수동분석 보완 (자동스캔 결과를 보완·갱신)
-  ├─ Task 3-2: 인젝션 수동분석    → <prefix>_task22_llm.json
-  │   ├─ [필수] 자동스캔 "정보/needs_review" endpoint 전수 판정
-  │   │   ├─ diagnosis_type 그룹별 외부 서비스/DAO 소스 직접 확인
-  │   │   ├─ [필수] "자동 판정 불가" (diagnosis_type="자동 판정 불가") → 양호 자동 처리 금지
-  │   │   │   └─ 반드시 LLM이 해당 서비스/DAO 코드 직접 확인 후 판정 (Kotlin SQL 상수·동적SQL 등)
-  │   │   ├─ MyBatis/iBatis XML 전수 스캔: ${} 위험패턴 여부
-  │   │   └─ 판정 결과 → sqli_endpoint_review 블록 저장
-  │   └─ 전역 패턴(OS Command/GroovyShell 등) 판정
+  ├─ [프론트엔드 repo] Task 3-6: 클라이언트 사이드 심층 검토 → <prefix>_task26_llm.json
+  │   ├─ FE-XSS 후보: 해당 컴포넌트 소스 확인 (sanitize 적용 여부, 입력값 경유 여부)
+  │   ├─ FE-SECRET 후보: 실제 값 vs. 환경변수 참조 확인
+  │   └─ nginx.conf CSP/X-Frame-Options/X-Content-Type-Options 헤더 누락 확인
+  │   ※ 프론트엔드 repo는 Task 3-2/3-3/3-4/3-5 skip
+  │
+  ├─ [백엔드 repo] Task 3-2: 인젝션 수동분석    → <prefix>_task22_llm.json
+  │   ├─ [Step 0] Taint 추적 실패 건수 및 유형 집계
+  │   │   ├─ diagnosis_type ∈ {"자동 판정 불가", "DB 접근 미확인", "추적 불가"} 또는 access_type="mybatis_dynamic_review" 추출
+  │   │   └─ 각 유형별 건수 확인 → injection_diagnosis_criteria.md Section 9.1 유형표로 근본 원인 파악
+  │   │
+  │   ├─ [Step 1-A-2, 필수] "DB 로직 없음" 조기 확정 — 분리 우선
+  │   │   ├─ 각 Service 파일에서 DB 키워드(Repository/Mapper/JdbcTemplate 등) 검색 → 0건이면 확정
+  │   │   ├─ FeignClient/RestTemplate/WebClient 호출 확인 → 외부 API 위임이면 "해당없음(DB접근없음)" 확정
+  │   │   ├─ 확정된 케이스: group_judgments에 별도 "DB 접근 없음 (N건)" 그룹으로 분리 기록
+  │   │   └─ 이 단계로 추적 실패 건수를 대폭 줄인 후 다음 단계 진행
+  │   │
+  │   ├─ [Step 1-A-3, 필수] 실제 DB 접근 있는 추적 실패 endpoint 취약 여부 판정
+  │   │   ├─ 그룹별 대표 endpoint 3~5개: Controller→Service→DAO→SQL 코드 직접 확인
+  │   │   ├─ [필수] "자동 판정 불가" → 양호 자동 처리 절대 금지 (코드 직접 확인 후 판정)
+  │   │   ├─ MyBatis/iBatis XML 전수 스캔: ${} 위험패턴 여부 (`find testbed/ -name "*.xml" | xargs grep -n '\${'`)
+  │   │   ├─ MyBatis ${}  발견 시 injection_diagnosis_criteria.md 4단계 매트릭스 적용
+  │   │   ├─ 그룹 판정과 다른 개별 endpoint → endpoint_verdicts 배열에 별도 기록
+  │   │   └─ 취약 확정 시 findings 배열에 INJ-00N 등록
+  │   │
+  │   ├─ [Step 1-B, 필수] 완료 조건 검증
+  │   │   ├─ Taint 추적 실패 전체 건수 == 모든 group_judgments.endpoints_reviewed 합계
+  │   │   ├─ 각 group에 root_cause + llm_resolution_method 기재 필수
+  │   │   └─ DB 없음 확정 건수 → no_db_logic_count 필드에 기록
+  │   │
+  │   └─ [Step 2] 전역 패턴(OS Command/GroovyShell 등) 판정
   ├─ Task 3-3: XSS 수동분석       → <prefix>_task23_llm.json
   │   ├─ [필수] 자동스캔 "정보" endpoint 전수 판정
   │   │   ├─ 잠재적위협(Persistent): controller_type 확인 → REST_JSON이면 양호, 전역필터 finding 커버 확인
@@ -64,28 +104,50 @@ Phase 3: LLM 수동분석 보완 (자동스캔 결과를 보완·갱신)
       └─ 출력 형식: references/task_prompts/task_sca_llm_review.md 참조
 
 Phase 4: 보고서 생성 + Confluence 게시 [필수]
+  ├─ [필수 Step 4-0] 서비스 개요 표 준비 — generate_finding_report.py 실행 전 반드시 완료
+  │   ├─ 목적: reporting_summary.md 기준의 "## 1. 서비스 개요" 표를 스크립트가 자동 생성하게 하기 위해
+  │   │         <prefix>_task11.json의 metadata 필드가 올바르게 채워져 있어야 함.
+  │   │
+  │   ├─ Step 4-0-1: state/<prefix>_task11.json → metadata 필드 확인
+  │   │   아래 필드가 모두 있는지 점검:
+  │   │     source_repo_url / branch / commit / commit_date / commit_message / responsible_person
+  │   │   누락 시: git -C <testbed_path> log -1 --format="%H %an %ae %ad %s" --date=short 재실행 후 기입
+  │   │   담당자 불명확 시: "미확인 (최종 커밋: {name})" 으로 기재
+  │   │
+  │   ├─ Step 4-0-2: state/<prefix>_task11.json → findings[0] 필드 확인
+  │   │   아래 필드가 있는지 점검 (서비스 개요 표의 언어/프레임워크, 빌드 도구 행에 사용):
+  │   │     framework / tech_stack / build_tool
+  │   │   누락 시: build.gradle 또는 pom.xml 확인 후 findings[0]에 직접 기입
+  │   │
+  │   └─ Step 4-0-3: 결과 확인 기준 (보고서 생성 후 검토)
+  │       생성된 보고서 "## 1. 서비스 개요" 표에서 아래 3개 필수 항목이 모두 채워졌는지 확인:
+  │         ✓ 소스 경로  ✓ Branch / Commit  ✓ 담당자 (최종 커밋)
+  │       하나라도 누락이면 task11.json 수정 후 generate_finding_report.py 재실행
+  │
   ├─ generate_finding_report.py --anchor-style md2cf --page-map tools/confluence_page_map.json
-  │   └─ [권장] --asset-info state/<prefix>_task11.json  ← 서비스 설명 + 자산 구조 표 자동 삽입
+  │   └─ [필수] --asset-info state/<prefix>_task11.json  ← 서비스 개요 표 자동 삽입
   └─ publish_confluence.py (dry-run 확인 후 실행)
-      ├─ main_report: 진단보고서.md (task_sources로 JSON 참조, API 인벤토리 요약 포함)
-      ├─ api_inventory: <prefix>_api_inventory.json  ← API별 실제 입력값(DTO 필드 전개) 상세
-      ├─ finding: <prefix>_injection.json
-      │   └─ supplemental_sources: [<prefix>_task22_llm.json]  ← 한 페이지로 통합
-      ├─ finding: <prefix>_xss.json
-      │   └─ supplemental_sources: [<prefix>_task23_llm.json]  ← 한 페이지로 통합
-      ├─ finding: <prefix>_task24.json
-      │   └─ supplemental_sources: [<prefix>_task24_llm.json]  ← 한 페이지로 통합
-      ├─ finding: <prefix>_task25.json
-      │   └─ supplemental_sources: [<prefix>_task25_llm.json]  ← 한 페이지로 통합
-      └─ ⚠️ sca: <prefix>_sca.json  ← SCA 결과 (항상 포함 필수)
-          └─ [정기진단] supplemental_sources: [<prefix>_sca_llm.json]  ← LLM 관련성 검토 결과 병합
+      ⚠️ page_map은 반드시 groups 구조 사용 — 메인 페이지(요약보고서)가 상위, 나머지가 하위
+      groups:
+        - title: {서비스명}_ai자동진단_보고서   ← 메인 페이지 (요약보고서 내용, parent: 741064663)
+          type: main_report
+          source: <prefix>_report.md
+          task_sources: {api, injection, xss, file_handling, data_protection}
+          entries:                              ← 전부 메인 페이지 하위로 배치
+            ├─ api_inventory: <prefix>_api_inventory.json
+            ├─ finding: <prefix>_injection.json + supplemental_sources: [task22_llm.json]
+            ├─ finding: <prefix>_xss.json + supplemental_sources: [task23_llm.json]
+            ├─ finding: <prefix>_task24.json + supplemental_sources: [task24_llm.json]
+            ├─ finding: <prefix>_task25.json + supplemental_sources: [task25_llm.json]
+            └─ sca: <prefix>_sca.json ([정기진단] supplemental_sources: [sca_llm.json])
 
 Phase 5: SSC 정합성 검증 [정기진단 필수 / 개발검증 선택]
   ├─ ⚠️ 정기진단 시 반드시 실행 (비전금법 연간 점검 등)
   ├─ Step 5-0: 브랜치/커밋 일치 검증
   ├─ Step 5-1: fetch_ssc.py → <prefix>_ssc_findings.json
   ├─ Step 5-2: LLM 소스코드 교차검증 (TP/FP 판정)
-  └─ Step 5-3: <prefix>_ssc_report.md → Confluence 게시 (type: "doc")
+  ├─ Step 5-3: <prefix>_ssc_report.md 작성 후 page_map groups[0].entries에 ssc 항목 추가
+  └─ Step 5-4: publish_confluence.py 재실행 → SSC 페이지 메인 페이지 하위에 게시
 ```
 
 ### 단일 finding 페이지 원칙
@@ -103,14 +165,16 @@ Phase 5: SSC 정합성 검증 [정기진단 필수 / 개발검증 선택]
 - `task_prompts/task_23_xss_review.md`
 - `task_prompts/task_24_file_handling.md`
 - `task_prompts/task_25_data_protection.md`
+- `task_prompts/task_26_frontend_client_side.md` — 프론트엔드 JS/TS/React/Next.js 클라이언트 사이드 진단
 
 ## Confluence 보고서 네이밍 규칙
 
 > 상세: `references/confluence_naming.md`
 >
-> - **컨테이너 페이지**: `{서비스명}_ai자동진단_보고서` (parent: OCB 서비스군, pageId=741064663)
-> - **하위 페이지**: `{서비스명}_ai자동진단_진단결과요약`, `{서비스명}_ai자동진단_인젝션취약점`, `{서비스명}_ai자동진단_XSS취약점`, `{서비스명}_ai자동진단_파일처리`, `{서비스명}_ai자동진단_데이터보호`, `{서비스명}_ai자동진단_SCA`, `{서비스명}_ai자동진단_SSC검증`
-> - **Multi-Module**: `{서비스명({BT})}_ai자동진단_진단결과요약` 형태로 build_target 표기
+> - **메인 페이지**: `{서비스명}_ai자동진단_보고서` (요약보고서 내용, parent: OCB 서비스군 pageId=741064663)
+> - **하위 페이지** (메인 페이지 children): `{서비스명}_ai자동진단_API인벤토리`, `{서비스명}_ai자동진단_인젝션취약점`, `{서비스명}_ai자동진단_XSS취약점`, `{서비스명}_ai자동진단_파일처리`, `{서비스명}_ai자동진단_데이터보호`, `{서비스명}_ai자동진단_SCA`, `{서비스명}_ai자동진단_SSC검증`
+> - **⚠️ `_진단결과요약` 페이지는 사용하지 않음** — `_보고서` 메인 페이지가 요약보고서 역할을 겸함
+> - **Multi-Module**: `{서비스명({BT})}_ai자동진단_보고서` 형태로 build_target 표기
 > - **서비스명 매핑**: `confluence_naming.md` 서비스명 매핑 테이블 참조
 
 ---

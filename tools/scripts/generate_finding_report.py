@@ -2118,57 +2118,16 @@ def generate_instance_appendix(all_findings: dict[str, list[Finding]]) -> str:
 
 
 def _render_asset_info_section(asset_info: dict) -> list[str]:
-    """task_11_result.json 데이터를 서비스 설명 + 자산 구조 Markdown으로 변환."""
+    """task_11_result.json findings에서 자산 구조(환경별) 표만 출력.
+    서비스 개요 기본 정보(진단 대상/소스/브랜치 등)는 generate_report()에서 직접 처리하므로 제외."""
     lines = []
     findings = asset_info.get("findings", [])
-    if not findings:
+    # 환경별 자산 구조 데이터가 있을 때만 표 출력
+    has_env_data = any(f.get("environment") or f.get("domain") for f in findings)
+    if not has_env_data:
         return lines
 
-    first = findings[0]
-
-    # 서비스 설명
-    service_detail = first.get("service_detail") or first.get("asset_name", "")
-    purpose = first.get("purpose", "")
-    framework = first.get("framework", "")
-    tech_stack = first.get("tech_stack", [])
-    build_tool = first.get("build_tool", "")
-    repo_url = first.get("repository_url", "")
-    biz_owner = first.get("biz_owner", "")
-    dev_owner = first.get("dev_owner", "")
-    was_version = first.get("was_version", "")
-    language_version = first.get("language_version", "")
-
-    lines.append("### 1.1 서비스 정보\n")
-    rows = []
-    if service_detail:
-        rows.append(["서비스 설명", service_detail])
-    if purpose:
-        rows.append(["용도", purpose])
-    if framework:
-        rows.append(["프레임워크", framework])
-    if tech_stack:
-        rows.append(["기술 스택", ", ".join(tech_stack)])
-    if build_tool:
-        rows.append(["빌드 도구", build_tool])
-    if language_version:
-        rows.append(["언어 버전", language_version])
-    if was_version:
-        rows.append(["WAS", was_version])
-    if repo_url:
-        rows.append(["소스 레포", repo_url])
-    if biz_owner:
-        rows.append(["기획 담당자", biz_owner])
-    if dev_owner:
-        rows.append(["개발 담당자", dev_owner])
-
-    lines.append("| 항목 | 내용 |")
-    lines.append("|------|------|")
-    for k, v in rows:
-        lines.append(f"| {k} | {v} |")
-    lines.append("")
-
-    # 자산 구조 표 (환경별)
-    lines.append("### 1.2 자산 구조\n")
+    lines.append("### 1.1 자산 구조\n")
     lines.append("| 환경 | 노출 | 도메인 | 포트 | 담당자(개발) |")
     lines.append("|------|------|--------|------|------------|")
     for asset in findings:
@@ -2623,26 +2582,53 @@ def generate_report(
     # 제목
     report_lines.append(f"# [보안진단] {service_name} 보안진단 결과\n")
 
-    # 서비스 개요
+    # 서비스 개요 — reporting_summary.md 기준 테이블 형식
     report_lines.append("## 1. 서비스 개요\n")
-    report_lines.append(f"**진단 대상:** {service_name}\n")
-    report_lines.append(f"**진단 일자:** {today}\n")
-    report_lines.append(f"**소스 경로:** `{source_label or source_dir}`\n")
-    if repo:
-        report_lines.append(f"**레포:** `{repo}`\n")
-    if branch:
-        report_lines.append(f"**브랜치:** `{branch}`\n")
-    if commit:
-        report_lines.append(f"**커밋:** `{commit}`\n")
-    if maintainers:
-        report_lines.append(f"**담당자:** {', '.join(maintainers)}\n")
+
+    # task_11 metadata 우선, 없으면 args 값 사용
+    meta = (asset_info or {}).get("metadata", {})
+    first_finding = ((asset_info or {}).get("findings") or [{}])[0]
+
+    _src = meta.get("source_repo_url") or source_label or str(source_dir)
+    _branch = branch or meta.get("branch", "")
+    _commit = commit or meta.get("commit", "")
+    _commit_date = meta.get("commit_date", "")
+    _commit_msg = meta.get("commit_message", "")
+    _responsible = meta.get("responsible_person") or (", ".join(maintainers) if maintainers else "")
+    _diag_type = "정기진단"
+    _framework = first_finding.get("framework", "")
+    _tech_stack = first_finding.get("tech_stack", [])
+    _lang_fw = " / ".join(filter(None, [", ".join(_tech_stack) if _tech_stack else "", _framework])) if (_tech_stack or _framework) else ""
+    _build_tool = first_finding.get("build_tool", "")
+
+    ov_rows = [("**진단 대상**", f"{service_name}")]
+    ov_rows.append(("**소스 경로**", _src))
+    if _branch or _commit:
+        ov_rows.append(("**Branch / Commit**", f"`{_branch}`" + (f" / `{_commit}`" if _commit else "")))
+    if _commit_date:
+        ov_rows.append(("**최종 커밋 일자**", _commit_date))
+    if _commit_msg:
+        ov_rows.append(("**최종 커밋 메시지**", _commit_msg))
+    if _responsible:
+        ov_rows.append(("**담당자 (최종 커밋)**", _responsible))
+    ov_rows.append(("**진단 일자**", today))
+    ov_rows.append(("**진단 유형**", _diag_type))
+    if _lang_fw:
+        ov_rows.append(("**언어 / 프레임워크**", _lang_fw))
+    if _build_tool:
+        ov_rows.append(("**빌드 도구**", _build_tool))
     if domain:
-        report_lines.append(f"**도메인:** `{domain}`\n")
+        ov_rows.append(("**도메인**", f"`{domain}`"))
     if target_modules:
-        report_lines.append(f"**대상 모듈:** {', '.join(target_modules)}\n")
+        ov_rows.append(("**대상 모듈**", ", ".join(target_modules)))
+
+    report_lines.append("| 항목 | 내용 |")
+    report_lines.append("|---|---|")
+    for k, v in ov_rows:
+        report_lines.append(f"| {k} | {v} |")
     report_lines.append("")
 
-    # 자산 정보 (task_11_result.json 제공 시)
+    # 자산 구조 표 (task_11_result.json 제공 시)
     if asset_info:
         report_lines.extend(_render_asset_info_section(asset_info))
 
@@ -2883,7 +2869,7 @@ def main():
     )
     parser.add_argument(
         "--asset-info",
-        help="자산 식별 결과 JSON 경로 (task_11_result.json). 서비스 설명 및 자산 구조 표를 보고서 상단에 자동 삽입.",
+        help="자산 식별 결과 JSON 경로 (task_11_result.json). 서비스 개요 표(Branch/Commit/담당자 등)와 자산 구조를 자동 삽입.",
         default=None,
     )
     args = parser.parse_args()

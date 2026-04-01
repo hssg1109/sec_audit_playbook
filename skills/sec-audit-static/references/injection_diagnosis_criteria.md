@@ -1,14 +1,36 @@
 # Injection Diagnosis Criteria (Enhanced)
 
-Framework/ORM별 SQL Injection 진단 기준. scan_injection_enhanced.py (v3.1+)에서 자동 적용.
+Framework/ORM별 SQL Injection 진단 기준. scan_injection_enhanced.py (v3.2+)에서 자동 적용.
 
-## 1. MyBatis
+## 1. MyBatis — ${}  4단계 판정 매트릭스 (v3.2+)
 
-| 패턴 | 판정 | 설명 |
-|------|------|------|
-| `#{param}` | 양호 | PreparedStatement 바인딩 |
-| `${param}` | 취약 | 문자열 직접 치환 (SQL Injection) |
-| `${param}` in `ORDER BY` / `LIMIT` | 취약 | 동적 정렬/페이징도 위험 |
+> `${}` 탐지 시 즉시 취약 판정하지 않고, 아래 4단계 Taint Flow 분석을 수행한다.
+
+| 단계 | 상태 | 조건 | 판정 | 스캐너 access_type |
+|------|------|------|------|--------------------|
+| **Step 1** | 탐지 (Base State) | XML 파일 내 `${param}` 존재 | `[잠재적 위협]` — taint 역추적 시작 | — |
+| **Step 2** | Source 확인 | `${}` 변수가 HTTP 파라미터에서 유래하지 않음 (시스템 내부값, 상수, UUID 등) | `정보(Info)` — 외부 조작 불가 | `mybatis_dynamic_review` |
+| **Step 3** | Context 확인 | 외부 입력이 도달하나 **방어 로직** 존재 | `양호(FP)` — SQL Injection 페이로드 삽입 불가 | `mybatis_dynamic_safe` |
+| **Step 4** | 최종 판정 | String 입력이 검증 없이 `${}` 에 직삽 | `취약(TP)` — SQL Injection 확정 | `mybatis_unsafe` |
+
+### Step 3 방어 로직 인정 기준
+
+| 방어 패턴 | 예시 | 판정 |
+|-----------|------|------|
+| Enum 클래스 타입 캐스팅 | `SortDirection.valueOf(param)`, `OrderType.ASC` | 양호 |
+| `Integer` / `Long` 등 숫자형 타입 강제 | `Integer pageSize`, `Long.parseLong(param)` | 양호 |
+| `if-else` / `switch` 화이트리스트 치환 | `if (sort.equals("ASC")) "ASC" else "DESC"` | 양호 |
+
+### 변수명 분류 기준 (스캐너 자동 적용)
+
+| 분류 | 변수명 패턴 | 기본 판정 (방어 없을 때) |
+|------|------------|--------------------------|
+| **동적 바인딩** | `orderBy`, `sortColumn`, `direction`, `tableName`, `limit`, `offset` 등 | Step 2/3 경계 → `정보` (Review Needed) |
+| **일반 입력** | 그 외 (`keyword`, `name`, `status` 등) | Step 4 → `취약` |
+
+> `#{param}` 은 PreparedStatement 바인딩 → 항상 **양호**.
+
+---
 
 ## 2. JPA / Spring Data JPA
 
@@ -114,16 +136,18 @@ fun buildQuery(): String {
 
 ## 7. MyBatis / iBatis (v3.0+)
 
-| 패턴 | 판정 | 설명 |
-|------|------|------|
-| `#{param}` (XML/Annotation) | 양호 | PreparedStatement 바인딩 |
-| `${param}` (XML/Annotation) | 취약 | 문자열 직접 치환 (SQL Injection) |
-| `#param#` (iBATIS 2.0 XML) | 양호 | Legacy PreparedStatement 바인딩 |
-| `$param$` (iBATIS 2.0 XML) | 취약 | Legacy 문자열 직접 치환 |
-| `@Select("... #{param} ...")` | 양호 | Mapper interface 어노테이션 바인딩 |
-| `@Select("... ${param} ...")` | 취약 | Mapper interface 어노테이션 직접 삽입 |
-| `SqlMapClientTemplate` + `#{}` XML | 양호 | DAO → XML 간접 바인딩 |
-| `SqlMapClientTemplate` + `${}` XML | 취약 | DAO → XML 간접 직접 삽입 |
+> **`${}` 판정은 Section 1의 4단계 매트릭스를 따른다.** 아래는 패턴 분류 참조용.
+
+| 패턴 | 초기 분류 | 최종 판정 | 설명 |
+|------|----------|-----------|------|
+| `#{param}` (XML/Annotation) | 양호 | 양호 | PreparedStatement 바인딩 |
+| `${param}` (XML/Annotation) | 잠재적 위협 | Step 1→4 매트릭스 적용 | 문자열 직접 치환 — taint 추적 필수 |
+| `#param#` (iBATIS 2.0 XML) | 양호 | 양호 | Legacy PreparedStatement 바인딩 |
+| `$param$` (iBATIS 2.0 XML) | 잠재적 위협 | Step 1→4 매트릭스 적용 | Legacy 직접 치환 |
+| `@Select("... #{param} ...")` | 양호 | 양호 | Mapper interface 어노테이션 바인딩 |
+| `@Select("... ${param} ...")` | 잠재적 위협 | Step 1→4 매트릭스 적용 | Mapper interface 어노테이션 직접 삽입 |
+| `SqlMapClientTemplate` + `#{}` XML | 양호 | 양호 | DAO → XML 간접 바인딩 |
+| `SqlMapClientTemplate` + `${}` XML | 잠재적 위협 | Step 1→4 매트릭스 적용 | DAO → XML 간접 직접 삽입 |
 
 ### MyBatis XML Mapper 추적 방식
 
@@ -132,19 +156,17 @@ fun buildQuery(): String {
 3. **DAO 역추적**: `sqlMapClientTemplate.queryForObject("namespace.sqlId", param)` 호출에서 SQL ID 추출
 4. **Mapper Interface 매핑**: interface 메서드명 → XML SQL ID 자동 연결
 
-### 자동 판정 기준
+### 자동 판정 기준 (v3.2+)
 
-- `mybatis_safe` / `ibatis_safe` → **양호** (filter_detail: "mybatis #{}")
-- `mybatis_unsafe` / `ibatis_unsafe` → has_search_params 기준 **취약/정보** 분류
-- XML mapper 전체가 `#{}` 만 사용 시 → 해당 namespace의 모든 endpoint **양호**
-
-### 동적 바인딩 예외 처리 (v3.1+)
-
-| `${}` 변수명 | 판정 | 설명 |
+| access_type | 판정 | 스캐너 동작 |
 |---|---|---|
-| `${orderBy}`, `${sort}`, `${column}` 등 | **정보 (Review Needed)** | 기능상 불가피한 동적 바인딩 - 수동 검증 필요 |
-| `${table}`, `${schema}` | **정보 (Review Needed)** | 동적 테이블 참조 - 화이트리스트 검증 확인 필요 |
-| 기타 변수명 (`${name}`, `${keyword}` 등) | **취약** | 사용자 입력이 SQL에 직접 삽입 |
+| `mybatis_safe` / `ibatis_safe` | **양호** | `#{}` 바인딩 확인 |
+| `mybatis_dynamic_safe` | **양호 (FP)** | Step 3: Enum/Integer/화이트리스트 방어 로직 확인 |
+| `mybatis_dynamic_review` | **정보** | Step 2/3: 동적 바인딩 변수 (order/sort 등), 수동 검증 필요 |
+| `mybatis_unsafe` / `ibatis_unsafe` | **취약** | Step 4: 일반 변수 검증 없이 직삽 |
+
+- XML mapper 전체가 `#{}` 만 사용 시 → 해당 namespace의 모든 endpoint **양호**
+- `_assess_mybatis_dollar_verdict()` 함수가 caller(서비스/DAO) 코드에서 방어 패턴을 탐색하여 Step 3 자동 적용
 
 ### XML 파싱 정책 (v3.1+)
 
@@ -205,7 +227,54 @@ Controller → GameHandler → GameGroovyService.cacheAndRun()
 - `GameTargetingScriptEntity.script`는 DB에서 조회 → **Stored RCE** (DB 침해 필요)
 - 판정: **취약 / 잠재적 취약** (Direct RCE 불가, Stored RCE 경로 실재 → Medium)
 
-## 9. 교차 검증 필수 조건
+## 9. 스캐너 추적 실패 유형별 근본 원인 및 LLM 해결 전략
+
+> **이 섹션은 scan_injection_enhanced.py가 endpoint의 DB 접근 흐름을 추적하지 못한 경우의
+> 원인 분석과 LLM 수동 해결 방법을 정의한다.** (`task_22_injection_review.md` 1-A-1과 쌍.）
+
+### 9.1 diagnosis_type별 근본 원인 분류
+
+| diagnosis_type | 스캐너 실패 원인 | 실제 상황 | LLM 해결 전략 |
+|---|---|---|---|
+| `자동 판정 불가` | Kotlin SQL Builder 함수 심볼 추적 한계 / Generic DAO 패턴 / 런타임 위임 | DB 접근이 있으나 스캐너가 코드 구조를 파싱하지 못함 | Kotlin 파일 직접 grep: `buildQuery`, `createQuery`, SQL 리터럴 상수 |
+| `DB 접근 미확인` | Repository 인터페이스만 발견, 구현체 탐색 실패 / iBatis `SqlMapClientTemplate` 미인식 | DB 접근은 있으나 어떤 SQL인지 미확인 | `rg "class.*DaoImpl\|implements.*Repository"` 구현체 탐색 후 mapper.xml 확인 |
+| `추적 불가` | FeignClient/RestTemplate 외부 API 호출 (가장 흔함) / 3홉 이상 위임 체인 / 인터페이스만 존재 | **많은 경우 실제로 DB 접근이 없음** (외부 서비스 위임) | Service 직접 읽기 → FeignClient/HTTP 호출이면 DB 없음 확정 |
+| `mybatis_dynamic_review` | Enum/Integer 방어 로직 자동 확인 실패 / ORDER BY 동적 변수 | `${}` 있으나 방어 여부 미확인 | mapper.xml SQL + Controller 파라미터 타입 동시 확인 |
+
+### 9.2 "DB 로직 없음" 조기 확정 기준
+
+아래 확인을 통해 DB 접근이 **없음이 확정되면** `해당없음(DB접근없음)`으로 즉시 판정하여 후속 분석 범위를 줄인다:
+
+```bash
+# DB 관련 키워드 전무 확인
+rg "(Repository|Mapper|JdbcTemplate|SqlSession|createQuery|executeQuery|entityManager)" \
+   <ServiceFile> -c
+# → 0이면 DB 없음 확정
+
+# 외부 HTTP 클라이언트 사용 확인
+rg "(FeignClient|restTemplate\.|webClient\.|feign\.target\|@FeignClient)" \
+   <ServiceFile>
+# → 있으면 외부 API 위임 → DB 없음
+
+# Redis 전용 확인
+rg "(redisTemplate|StringRedisTemplate|RedisRepository|@Cacheable)" \
+   <ServiceFile>
+# → DB 관련 없고 Redis만 있으면 DB 없음
+```
+
+### 9.3 추적 실패 API 취약 여부 갱신 절차 (LLM Phase 3-2 수행)
+
+1. **1-A-2 DB 로직 없음 분리**: 먼저 `해당없음(DB접근없음)` 케이스를 확정하여 분리
+2. **나머지 그룹별 대표 샘플 코드 확인**: Controller → Service → DAO → SQL (3~5개/그룹)
+3. **그룹 단위 판정 확정**: 대표 샘플이 동일 패턴이면 그룹 전체에 동일 판정 적용
+4. **예외 endpoint 개별 기록**: 그룹 판정과 다른 endpoint는 `endpoint_verdicts`에 별도 기록
+5. **취약 확정 시 finding 등록**: `findings` 배열에 INJ-00N으로 finding 생성
+
+→ 상세 출력 스키마: `task_22_injection_review.md` 출력 형식 참조
+
+---
+
+## 10. 교차 검증 필수 조건
 
 자동 스캐너가 "취약"으로 판정한 경우, 반드시 아래 교차검증을 수행:
 
