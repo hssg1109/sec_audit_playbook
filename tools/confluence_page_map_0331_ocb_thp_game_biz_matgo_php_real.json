@@ -1,0 +1,13 @@
+{
+  "version": "3.0",
+  "groups": [
+    {
+      "title": "OCB게임 맞고운영(ocb_game_biz_matgo_php_real)_ai자동진단_보고서",
+      "type": "main_report",
+      "source": "state/0331_ocb_thp_game_biz_matgo_php_real_task11.json",
+      "parent_page_id": 741064663,
+      "task_sources": {},
+      "entries": []
+    }
+  ]
+}

@@ -300,6 +300,38 @@ for e in taint_failed[:10]:
    - 양호: 6개 모두 필터링
    - 취약: 1개라도 누락
 
+#### 2.3 [필수] global_findings.os_command_injection 항목 LLM 판정 → global_findings_analysis.os_command 기록
+
+`injection.json`의 `global_findings.os_command_injection.findings[]`가 비어 있지 않으면 **각 항목에 대해** 아래 절차로 판정하여 `global_findings_analysis.os_command[]`에 기록한다:
+
+```
+[1] 파일·라인 코드 확인 → 실제 명령 실행 함수(exec/ProcessBuilder 등) 사용 여부
+[2] 파라미터 소스 추적 → 사용자 HTTP 입력인지, 서버 내부값/설정값인지
+[3] 판정:
+    - 사용자 입력 + 미필터링 → "취약" (findings[]에 INJ-00N으로 추가)
+    - 내부값/설정값만 → "정보(잠재적 위험)"
+    - 실제 exec() 미동반 (패턴만 매칭) → "양호(패턴오탐)"
+```
+
+기록 형식:
+```json
+{
+  "global_findings_analysis": {
+    "os_command": [
+      {
+        "pattern_id": "RUNTIME_EXEC",
+        "file": "com/example/Foo.java",
+        "line": 42,
+        "judgment": "정보(잠재적 위험)",
+        "reason": "Runtime.exec() 호출이지만 hardcoded 서버 명령만 실행, 사용자 입력 미도달"
+      }
+    ]
+  }
+}
+```
+
+`os_command_injection.total == 0`이면 빈 배열 `[]` 기재 (생략 금지).
+
 ---
 
 ### 3. SSI 인젝션 진단
@@ -309,6 +341,40 @@ for e in taint_failed[:10]:
 - 템플릿 인젝션: Thymeleaf SSTI, FreeMarker, Velocity, SpEL, EL Injection
 - Node.js 템플릿: EJS, Nunjucks, Handlebars, Pug
 - Python 템플릿: Template(), render_to_string(), Jinja2
+
+#### 3.1 [필수] global_findings.ssi_injection 항목 LLM 판정 → global_findings_analysis.ssi 기록
+
+`injection.json`의 `global_findings.ssi_injection.findings[]`가 비어 있지 않으면 **각 항목에 대해** 아래 절차로 판정하여 `global_findings_analysis.ssi[]`에 기록한다:
+
+```
+[1] 파일·라인 코드 확인 → 실제 템플릿 엔진 평가(SpEL parseExpression 등) 사용 여부
+[2] 파라미터 소스 추적 → 평가되는 표현식이 사용자 입력인지, 내부 상수/설정값인지
+    - SpEL: @Cacheable key 표현식, @Value 등은 내부 설정 → 취약 아님
+    - FreeMarker/Thymeleaf: 사용자 입력 문자열이 template 변수로 직접 전달 → 취약 가능
+[3] 판정:
+    - 사용자 입력 + 비검증 템플릿 평가 → "취약"
+    - 내부 설정값/상수만 → "정보(out-of-scope)"
+    - 검색 결과 상 패턴만 매칭, 실제 평가 미발생 → "양호(패턴오탐)"
+```
+
+기록 형식:
+```json
+{
+  "global_findings_analysis": {
+    "ssi": [
+      {
+        "pattern_id": "SSI_SPEL_EXPRESSION",
+        "file": "com/example/RedisCacheAspect.java",
+        "line": 88,
+        "judgment": "정보(out-of-scope)",
+        "reason": "SpEL parseExpression()은 @Cacheable key 표현식 파싱용 — 사용자 HTTP 입력 미도달, out-of-scope"
+      }
+    ]
+  }
+}
+```
+
+`ssi_injection.total == 0`이면 빈 배열 `[]` 기재 (생략 금지).
 
 ---
 
@@ -364,6 +430,20 @@ for k,v in dtype_cnt.most_common(): print(f'  {v}건: {k}')
   "
   ```
   - 위 수치가 0보다 크고 `group_judgments`에서 누락되면 → **Task 3-2 미완료**
+
+**[global_findings 체크]** `injection.json`의 `global_findings.*.total` 합계를 확인:
+```bash
+python3 -c "
+import json
+d = json.load(open('state/<prefix>_injection.json'))
+gf = d.get('global_findings', {})
+for k, v in gf.items():
+    t = v.get('total', 0) if isinstance(v, dict) else len(v)
+    print(f'{k}: {t}건')
+"
+```
+- OS Command 또는 SSI 항목이 1건 이상이면 → `global_findings_analysis.os_command[]` / `global_findings_analysis.ssi[]` **반드시 기재**
+- 두 배열 모두 기재 없이(`[]` 포함 누락) Task 완료 불가 → **Task 미완료**
 
 ---
 
@@ -468,8 +548,24 @@ for k,v in dtype_cnt.most_common(): print(f'  {v}건: {k}')
     }
   ],
   "global_findings_analysis": {
-    "os_command": [],
-    "ssi": []
+    "os_command": [
+      {
+        "pattern_id": "RUNTIME_EXEC",
+        "file": "com/example/Foo.java",
+        "line": 42,
+        "judgment": "정보(잠재적 위험)|양호(패턴오탐)|취약",
+        "reason": "판정 근거 — 사용자 입력 도달 여부, exec() 실제 호출 여부"
+      }
+    ],
+    "ssi": [
+      {
+        "pattern_id": "SSI_SPEL_EXPRESSION",
+        "file": "com/example/RedisCacheAspect.java",
+        "line": 88,
+        "judgment": "정보(out-of-scope)|양호(패턴오탐)|취약",
+        "reason": "판정 근거 — SpEL 표현식 소스, 사용자 입력 도달 여부"
+      }
+    ]
   },
   "endpoint_summary": {
     "total": 0,

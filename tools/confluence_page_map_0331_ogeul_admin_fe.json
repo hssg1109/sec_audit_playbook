@@ -1,0 +1,33 @@
+{
+  "version": "3.0",
+  "groups": [
+    {
+      "title": "OCB오글오글(ocb-ogeul-admin-frontend)_ai자동진단_보고서",
+      "type": "main_report",
+      "source": "state/0331_ocbwebview_ogeul_admin_fe_api_inventory.json",
+      "parent_page_id": 741064663,
+      "task_sources": {
+        "api": "state/0331_ocbwebview_ogeul_admin_fe_api_inventory.json",
+        "frontend_security": "state/0331_ocbwebview_ogeul_admin_fe_task26_llm.json",
+        "sca": "state/0331_ocbwebview_ogeul_admin_fe_sca.json"
+      },
+      "entries": [
+        {
+          "title": "OCB오글오글(ocb-ogeul-admin-frontend)_ai자동진단_API인벤토리",
+          "type": "api_inventory",
+          "source": "state/0331_ocbwebview_ogeul_admin_fe_api_inventory.json"
+        },
+        {
+          "title": "OCB오글오글(ocb-ogeul-admin-frontend)_ai자동진단_클라이언트보안",
+          "type": "finding",
+          "source": "state/0331_ocbwebview_ogeul_admin_fe_task26_llm.json"
+        },
+        {
+          "title": "OCB오글오글(ocb-ogeul-admin-frontend)_ai자동진단_SCA",
+          "type": "sca",
+          "source": "state/0331_ocbwebview_ogeul_admin_fe_sca.json"
+        }
+      ]
+    }
+  ]
+}

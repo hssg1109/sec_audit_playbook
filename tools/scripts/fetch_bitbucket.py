@@ -166,7 +166,17 @@ def _extract_http_clone_url(repo: dict) -> str:
 
 def _wsl_to_unc(path: Path) -> str:
     """WSL 경로를 Windows UNC 경로로 변환."""
-    return "//wsl.localhost/Ubuntu" + str(path).replace("\\", "/")
+    # WSL 배포판 이름을 동적으로 감지
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-Command",
+             "(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss\\*' | Where-Object { $_.Flags -gt 0 }).DistributionName"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
+        distro = result.stdout.strip().splitlines()[0].strip() if result.stdout.strip() else "Ubuntu"
+    except Exception:
+        distro = "Ubuntu"
+    return f"//wsl.localhost/{distro}" + str(path).replace("\\", "/")
 
 
 def _git_ps(script: str) -> subprocess.CompletedProcess:

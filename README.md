@@ -2,14 +2,248 @@
 
 > AI 에이전트(Claude)를 활용한 소스코드 보안 진단 자동화 프레임워크 — v4.16.0
 
+---
+
+## 신규 서버 설치 가이드
+
+> 이 섹션은 플레이북을 **처음 설치하는 서버**에서 `/sec-audit-static` 을 실행하기 위한 전체 절차를 다룹니다.
+
+### 1단계 — 시스템 요구사항 확인
+
+| 항목 | 최소 | 권장 | 확인 명령 |
+|------|------|------|-----------|
+| **OS** | Ubuntu 20.04 / WSL2 | Ubuntu 22.04 LTS | `lsb_release -a` |
+| **Python** | 3.7+ | 3.9+ | `python3 --version` |
+| **Java (JDK)** | 11+ | 17+ | `java -version` |
+| **Git** | 2.x | 최신 | `git --version` |
+| **npm** | 6+ | 최신 | `npm --version` *(Node.js 프로젝트 스캔 시 필요)* |
+| **디스크** | 10 GB+ | 30 GB+ | `df -h` |
+| **메모리** | 4 GB+ | 8 GB+ | `free -h` |
+
+```bash
+# Java가 없으면 자동 설치 스크립트 사용
+bash tools/scripts/setup_linux_jdk.sh
+```
+
+---
+
+### 2단계 — 저장소 클론
+
+```bash
+git clone <PLAYBOOK_REPO_URL> playbook
+cd playbook
+
+# 런타임 디렉터리 생성 (gitignored — 레포에 없으므로 직접 생성)
+mkdir -p testbed state
+```
+
+> **레포 구조 참고**
+> - `skills/`, `tools/`, `CLAUDE.md` 등 **진단 도구 일체**가 레포에 포함됩니다 (수 MB 수준)
+> - `testbed/` (진단 대상 소스코드), `state/` (결과물)는 **gitignore** 처리 — 레포에 없으며 위에서 직접 생성합니다
+> - 진단 대상 소스코드는 별도로 `testbed/<project-name>/` 에 배치합니다 (7단계 참조)
+
+---
+
+### 3단계 — 환경 변수 설정 (`.env`)
+
+```bash
+cp .env.example .env
+```
+
+`.env` 파일을 열어 아래 항목을 채웁니다.
+
+#### 3-1. Confluence (보고서 게시 — **필수**)
+
+```bash
+# Confluence 서버 주소 (Server/Data Center)
+CONFLUENCE_BASE_URL=https://wiki.example.com
+
+# 보고서를 게시할 Confluence 스페이스 키
+CONFLUENCE_SPACE_KEY=SECDIG
+
+# 보고서 최상위 부모 페이지 ID (Confluence URL의 pageId= 값)
+CONFLUENCE_PARENT_ID=741064663
+
+# PAT 인증 (권장): CONFLUENCE_USER 비워두기 + TOKEN만 설정
+CONFLUENCE_USER=
+CONFLUENCE_TOKEN=<Personal Access Token>
+
+# Basic 인증을 쓸 경우: CONFLUENCE_USER에 계정명 입력
+# CONFLUENCE_USER=your_id
+# CONFLUENCE_TOKEN=<your_password_or_token>
+```
+
+**Confluence PAT 발급 방법**
+1. Confluence → 프로필 아이콘 → `Settings` → `Personal Access Tokens`
+2. `Create token` → 이름 입력 → `Create`
+3. 발급된 토큰을 `CONFLUENCE_TOKEN`에 입력
+
+---
+
+#### 3-2. Bitbucket (결과 팀 공유 — 선택)
+
+```bash
+# Bitbucket HTTP Access Token (audit_result 레포 push 권한 필요)
+BITBUCKET_TOKEN=<HTTP Access Token>
+
+# 진단 대상 소스 레포 읽기용 토큰 (fetch_bitbucket.py 사용 시)
+CUSTOMER_BB_TOKEN=<Customer Repo Token>
+
+# 대상 Bitbucket 서버 주소 (기본값: http://code.skplanet.com)
+# CUSTOMER_BB_BASE=http://code.example.com
+```
+
+**Bitbucket HTTP Access Token 발급 방법**
+1. Bitbucket → 프로필 아이콘 → `Manage account` → `HTTP access tokens`
+2. `Create token` → Permissions: `Project read` + `Repository write` → `Create`
+
+---
+
+#### 3-3. Fortify SSC (위험도 교차검증 — 선택, Phase 5)
+
+```bash
+# SSC 서버 주소
+SSC_BASE_URL=https://ssc.example.com/ssc
+
+# CIToken 방식 (권장)
+SSC_TOKEN=<CIToken>
+
+# 또는 계정/비밀번호 방식 (fallback)
+# SSC_USERNAME=your_id
+# SSC_PASSWORD=your_password
+```
+
+---
+
+#### 3-4. NVD API Key (SCA 성능 향상 — 선택)
+
+```bash
+# 없으면 공개 API 폴백 (속도 제한 있음)
+NVD_API_KEY=<NIST NVD API Key>
+```
+
+**NVD API Key 발급**: https://nvd.nist.gov/developers/request-an-api-key
+
+---
+
+### 4단계 — Claude Code CLI 설치 및 AI 연결
+
+`/sec-audit-static` 스킬은 **Claude Code CLI** 환경에서 실행됩니다.
+
+```bash
+# Claude Code CLI 설치
+npm install -g @anthropic-ai/claude-code
+
+# 또는 공식 설치 스크립트 사용
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+```bash
+# Anthropic API 인증 (최초 1회)
+claude login
+# 브라우저가 열리면 Anthropic 계정으로 로그인 후 승인
+```
+
+```bash
+# 플레이북 디렉터리에서 Claude Code 실행
+cd /path/to/playbook
+claude
+```
+
+> **기업 환경 주의**: 방화벽으로 `api.anthropic.com` 접근이 막혀 있으면 프록시 설정이 필요합니다.
+> ```bash
+> export HTTPS_PROXY=http://proxy.example.com:8080
+> ```
+
+---
+
+### 5단계 — Python 패키지 설치
+
+대부분의 스크립트는 Python 표준 라이브러리만 사용합니다. 선택적 패키지:
+
+```bash
+# Excel 파일 파싱 (자산 식별 시 필요)
+pip3 install openpyxl
+
+# JSON 스키마 검증
+pip3 install jsonschema
+```
+
+---
+
+### 6단계 — 동작 확인 (Smoke Test)
+
+```bash
+# Confluence 연결 확인 (실제 게시 없이 드라이런)
+python3 tools/scripts/publish_confluence.py --dry-run
+
+# Python 버전 확인
+python3 -c "import sys; print('Python', sys.version)"
+
+# Java 확인
+java -version
+```
+
+---
+
+### 7단계 — 첫 진단 실행
+
+```bash
+# 1. 진단 대상 소스코드를 testbed에 배치
+cp -r /path/to/target-project testbed/<project-name>/
+
+# 2. Claude Code를 플레이북 디렉터리에서 실행
+cd /path/to/playbook
+claude
+
+# 3. 슬래시 명령으로 전체 워크플로 실행
+/sec-audit-static
+```
+
+Phase 1(자산 식별) → Phase 2(자동 스캔) → Phase 3(LLM 심층 진단) → Phase 4(Confluence 게시) 순으로 **무중단 자동 완주**합니다.
+
+---
+
+### 환경 변수 전체 요약
+
+| 변수명 | 필수 | 용도 |
+|--------|------|------|
+| `CONFLUENCE_BASE_URL` | **필수** | Confluence 서버 주소 |
+| `CONFLUENCE_SPACE_KEY` | **필수** | 보고서 게시 스페이스 |
+| `CONFLUENCE_PARENT_ID` | **필수** | 보고서 부모 페이지 ID |
+| `CONFLUENCE_TOKEN` | **필수** | Confluence PAT 또는 비밀번호 |
+| `CONFLUENCE_USER` | 선택 | Basic 인증 시 계정명 (PAT 사용 시 빈값) |
+| `BITBUCKET_TOKEN` | 선택 | audit_result 레포 push 토큰 |
+| `CUSTOMER_BB_TOKEN` | 선택 | 진단 대상 소스 fetch 토큰 |
+| `CUSTOMER_BB_BASE` | 선택 | 대상 Bitbucket URL (기본: skplanet) |
+| `SSC_BASE_URL` | 선택 | Fortify SSC 서버 (Phase 5) |
+| `SSC_TOKEN` | 선택 | SSC CIToken |
+| `SSC_USERNAME` / `SSC_PASSWORD` | 선택 | SSC 계정 인증 (fallback) |
+| `NVD_API_KEY` | 선택 | NIST NVD API Key (SCA 가속) |
+
+---
+
+### 설치 체크리스트
+
+- [ ] Python 3.9+ 설치 완료
+- [ ] Java 17+ 설치 완료 (`java -version`)
+- [ ] Git 설치 완료
+- [ ] Claude Code CLI 설치 완료 (`claude --version`)
+- [ ] `.env` 파일 생성 및 `CONFLUENCE_*` 항목 입력
+- [ ] `claude login` 인증 완료
+- [ ] `testbed/`, `state/` 디렉터리 생성
+- [ ] `publish_confluence.py --dry-run` 통과
+- [ ] 진단 대상 소스코드를 `testbed/<project-name>/` 에 배치
+- [ ] `/sec-audit-static` 첫 실행 성공
+
+---
+
 ## 개요
 
 웹 애플리케이션 소스 코드를 대상으로 **Controller → Service → Repository 호출 그래프 추적** 기반의 정적 보안 분석을 수행합니다.
 SQL Injection을 비롯한 주요 취약점을 자동 탐지하고, Confluence 보고서 게시까지 일관된 파이프라인을 제공합니다.
 
 > **현재 집중 영역: `skills/sec-audit-static` (SAST)**
-> DAST(`sec-audit-dast`) 및 외부 소프트웨어 분석(`external-software-analysis`) 스킬은 정의 완료 상태이며,
-> 현재는 정적 분석 스킬을 중점적으로 운영·고도화하고 있습니다.
 
 ### 핵심 원칙
 
@@ -58,8 +292,6 @@ python tools/scripts/push_bitbucket.py
 | 슬래시 명령 | 스킬 | 상태 |
 |------------|------|------|
 | `/sec-audit-static` | 정적 코드 분석 (SAST) | **운영 중** |
-| `/sec-audit-dast` | 동적 애플리케이션 테스트 (DAST) | 정의 완료 |
-| `/external-software-analysis` | 외부 패키지·소프트웨어 분석 | 정의 완료 |
 
 ---
 
@@ -154,8 +386,6 @@ skills/sec-audit-static/
 playbook/
 ├── skills/                          # Self-Contained 스킬 정의
 │   ├── sec-audit-static/            #   ★ 정적 분석 (SAST) — 현재 운영 중
-│   ├── sec-audit-dast/              #   동적 분석 (DAST) — 정의 완료
-│   ├── external-software-analysis/  #   외부 소프트웨어 분석 — 정의 완료
 │   ├── SEVERITY_CRITERIA_DETAIL.md  #   심각도 판정 기준 (공통)
 │   └── USAGE_EXAMPLES.md            #   사용 예시
 │
@@ -180,8 +410,6 @@ playbook/
 │       ├── parse_asset_excel.py     #   자산 Excel → JSON 변환
 │       ├── validate_task_output.py  #   스키마 유효성 검증
 │       ├── redact.py                #   민감정보 마스킹
-│       ├── asm_findings_to_csv.py   #   ASM 취약점 CSV 변환 (sec-audit-dast 연동)
-│       ├── sarif_from_csv.py        #   SARIF 포맷 변환 (sec-audit-dast 연동)
 │       └── run_gitleaks.sh          #   시크릿 스캔 (Gitleaks)
 │
 ├── docs/

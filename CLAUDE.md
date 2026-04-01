@@ -21,8 +21,6 @@ This is a security audit automation framework for static/dynamic code analysis.
 The following skills are available for security audits:
 
 - `/sec-audit-static` - Static code security analysis (SAST)
-- `/sec-audit-dast` - Dynamic application security testing (DAST)
-- `/external-software-analysis` - External software/package analysis
 
 ## Project Structure
 

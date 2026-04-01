@@ -116,6 +116,7 @@
 | ✅ | `publish_confluence.py` SCA v2 렌더러 신규 (`_json_to_xhtml_sca_v2`) + v1/v2 포맷 자동 감지 라우팅 | 2026-03-24 | v4.16.0 | scan_sca_gradle_tree.py(v2) 출력 결과가 Confluence에 빈 페이지로 게시되던 버그 수정 (KeyError silent failure) |
 | ✅ | SCA supplemental_sources + LLM 관련성 뱃지 렌더링 (`entry_type=="sca"` 블록 추가) | 2026-03-24 | v4.16.0 | `_sca_llm.json` 자동 감지 후 소스관련성/판단근거 컬럼 + 한국어 CVE 설명 Confluence 렌더링 |
 | ✅ | Phase 3-SCA 절차 명문화 (`task_sca_llm_review.md` 신규 + `workflow.md`/`SKILL.md` 갱신) | 2026-03-24 | v4.16.0 | SCA CVE LLM 수동검토 4단계(소스grep/발생조건/관련성판정/한국어설명) 전체 절차 문서화 |
+| ✅ | 레포지토리 파일 정리 — 미사용·중복·레거시 파일 삭제 (TIER 1 전체 + TIER 2 일부) | 2026-04-01 | v4.17.0 | `prompts/static/`·`old진단가이드문서/`·`보고서예시/`·`docs/task-*.md` 중복 삭제, `skills/sec-audit-dast/`·`skills/external-software-analysis/` 폴더 삭제, 미참조 스크립트 5종 삭제, 신규 서버 설치 가이드 README 추가 |
 
 ---
 

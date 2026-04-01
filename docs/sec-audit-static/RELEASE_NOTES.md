@@ -10,6 +10,53 @@
 
 ---
 
+## [v4.17.0] - 2026-04-01
+
+### Changed — 레포지토리 파일 정리 (미사용·중복·레거시 제거)
+
+사용 현황 감사(audit) 결과를 기반으로 미사용·중복·레거시 파일을 정리했습니다.
+
+#### 삭제 — TIER 1 (사용 근거 없음, 완전 중복 또는 레거시)
+
+- `prompts/static/` 폴더 전체 (6개) — `skills/sec-audit-static/references/task_prompts/`의 완전 복제본
+- `docs/sec-audit-static/task-*.md` 6개 — 동일 내용이 skill references에 존재
+- `old진단가이드문서/` 폴더 전체 (7개) — 2024년 인수인계 문서, 진단 기준 전체 이관 완료
+- `보고서예시/` 폴더 전체 (2개) — 과거 보고서 예시 (미참조)
+- `save_storage_state.py` — Playwright 세션 저장 스크립트 (이 프로젝트와 무관)
+- `tools/scripts/setup_confluence_campaign.py` — `publish_confluence.py` REST API 방식으로 대체됨
+- `260306_msgsugar_new 진단 결과 종합 리포트.md` — 루트에 잘못 위치한 과거 진단 결과
+- `AI_보안진단_플레이북_가이드.docx` — README.md + CLAUDE.md로 대체됨
+
+#### 삭제 — TIER 2 (sec-audit-static 미참조, 또는 결정 기준 충족)
+
+- `skills/sec-audit-dast/` 폴더 전체 — 미운영 스킬 정리
+- `skills/external-software-analysis/` 폴더 전체 — 미운영 스킬 정리
+- `workflows/audit_workflow.yaml` — Markdown Phase 구조 전환 이전 레거시 YAML
+- `Playbook 기반 진단 고도화 및 Kotlin 취약점 식별 사례.docx` — 미참조 레거시 문서
+- `schemas/reporting_summary_schema.json` — `.gitignore` 외 참조 없음
+- `tools/scripts/asm_findings_to_csv.py` — sec-audit-dast 전용, `/sec-audit-static` 미참조
+- `tools/scripts/sarif_from_csv.py` — sec-audit-dast 전용, `/sec-audit-static` 미참조
+
+#### 유지 확인 (재검증)
+
+- `schemas/finding_schema.json`, `schemas/task_output_schema.json` — `validate_task_output.py`가 playbook root 기준 `schemas/` 경로 하드코딩 → 유지
+- `tools/scripts/apply_audit.py` — `manual_review_prompt.md` 다중 참조 → 유지
+- `tools/scripts/trace_kafka_flow.py` — `task_23_xss_review.md` 및 `generate_finding_report.py` 참조 → 유지
+- `tools/scripts/generate_reporting_summary.py` — `references/reporting_summary.md` 참조 → 유지
+
+#### Added — 신규 서버 설치 가이드
+
+- `README.md` 최상단에 7단계 설치 튜토리얼 추가
+  - 시스템 요구사항, 저장소 클론, `.env` 설정 (Confluence/Bitbucket/SSC/NVD), Claude Code CLI 설치·인증, Python 패키지, Smoke Test, 첫 실행 절차
+  - 환경 변수 전체 요약 테이블 + 설치 체크리스트
+
+#### Changed — 문서 정합성 업데이트
+
+- `CLAUDE.md`: `skills` 섹션에서 미운영 스킬 2종 제거
+- `README.md`: 스킬 구성 표·디렉터리 구조·개요 문구에서 sec-audit-dast/external-software-analysis 참조 제거, 삭제된 스크립트 제거
+
+---
+
 ## [v4.16.0] - 2026-03-24
 
 ### Added — SCA v2 Gradle/npm 렌더러 + Phase 3-SCA LLM 관련성 검토 절차

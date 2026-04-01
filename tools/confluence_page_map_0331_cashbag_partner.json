@@ -1,0 +1,67 @@
+{
+  "version": "3.0",
+  "groups": [
+    {
+      "title": "캐시백몰 파트너(cla-madame-point-partner)_ai자동진단_보고서",
+      "type": "main_report",
+      "source": "state/0331_ocb_backend_cashbag_partner_진단보고서.md",
+      "parent_page_id": 741064663,
+      "task_sources": {
+        "api": "state/0331_ocb_backend_cashbag_partner_api_inventory.json",
+        "injection": "state/0331_ocb_backend_cashbag_partner_injection.json",
+        "xss": "state/0331_ocb_backend_cashbag_partner_xss.json",
+        "file_handling": "state/0331_ocb_backend_cashbag_partner_task24.json",
+        "data_protection": "state/0331_ocb_backend_cashbag_partner_task25.json"
+      },
+      "entries": [
+        {
+          "title": "캐시백몰 파트너(cla-madame-point-partner)_ai자동진단_API인벤토리",
+          "type": "api_inventory",
+          "source": "state/0331_ocb_backend_cashbag_partner_api_inventory.json"
+        },
+        {
+          "title": "캐시백몰 파트너(cla-madame-point-partner)_ai자동진단_인젝션취약점",
+          "type": "finding",
+          "source": "state/0331_ocb_backend_cashbag_partner_injection.json",
+          "supplemental_sources": [
+            "state/0331_ocb_backend_cashbag_partner_task22_llm.json"
+          ]
+        },
+        {
+          "title": "캐시백몰 파트너(cla-madame-point-partner)_ai자동진단_XSS취약점",
+          "type": "finding",
+          "source": "state/0331_ocb_backend_cashbag_partner_xss.json",
+          "supplemental_sources": [
+            "state/0331_ocb_backend_cashbag_partner_task23_llm.json"
+          ]
+        },
+        {
+          "title": "캐시백몰 파트너(cla-madame-point-partner)_ai자동진단_파일처리",
+          "type": "finding",
+          "source": "state/0331_ocb_backend_cashbag_partner_task24.json",
+          "supplemental_sources": [
+            "state/0331_ocb_backend_cashbag_partner_task24_llm.json"
+          ]
+        },
+        {
+          "title": "캐시백몰 파트너(cla-madame-point-partner)_ai자동진단_데이터보호",
+          "type": "finding",
+          "source": "state/0331_ocb_backend_cashbag_partner_task25.json",
+          "supplemental_sources": [
+            "state/0331_ocb_backend_cashbag_partner_task25_llm.json"
+          ]
+        },
+        {
+          "title": "캐시백몰 파트너(cla-madame-point-partner)_ai자동진단_SCA",
+          "type": "sca",
+          "source": "state/0331_ocb_backend_cashbag_partner_sca.json"
+        },
+        {
+          "title": "캐시백몰 파트너(cla-madame-point-partner)_ai자동진단_SSC검증",
+          "type": "ssc",
+          "source": "state/0331_ocb_backend_cashbag_partner_ssc_report.md"
+        }
+      ]
+    }
+  ]
+}

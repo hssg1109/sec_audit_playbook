@@ -751,6 +751,59 @@ def load_findings(filepath: Path, source_dir: Path,
             log_instances=f.get("log_instances", []),  # SENSITIVE_LOGGING 파일별 노출 민감정보 목록
         ))
 
+    # global_findings 로드 — injection 카테고리 전용 (OS Command, SSI 항목)
+    # publish_confluence.py는 global_findings를 직접 렌더링하지만
+    # generate_finding_report.py(Markdown)는 load_findings() 경로를 통해서만 Finding 객체에 접근하므로
+    # 여기서 global_findings.*.findings[] 항목을 Finding으로 변환하여 포함시킨다.
+    if category == "injection" and not is_supplemental:
+        _gf_raw = data.get("global_findings", {})
+        if isinstance(_gf_raw, dict):
+            _gf_subcategory_map = {
+                "os_command_injection": "OS Command 인젝션",
+                "ssi_injection":        "SSI/SSTI 인젝션",
+            }
+            _gf_offset = len(findings)
+            for _cat_key, _cat_data in _gf_raw.items():
+                if isinstance(_cat_data, dict):
+                    _gf_list = _cat_data.get("findings", [])
+                elif isinstance(_cat_data, list):
+                    _gf_list = _cat_data
+                else:
+                    continue
+                if not _gf_list:
+                    continue
+                _subcategory_gf = _gf_subcategory_map.get(_cat_key, _cat_key.replace("_", " ").title())
+                for _gf in _gf_list:
+                    _gf_offset += 1
+                    _gf_file    = _gf.get("file", "")
+                    _gf_line    = _gf.get("line", 0)
+                    _gf_snippet = _gf.get("code_snippet", "")
+                    _gf_desc    = _gf.get("description", _gf.get("pattern_name", ""))
+                    _ctx_b      = _gf.get("context_before", [])
+                    _ctx_a      = _gf.get("context_after", [])
+                    if not _gf_snippet:
+                        _gf_snippet, _ctx_b, _ctx_a = extract_code_evidence(
+                            source_dir, _gf_file, _gf_line
+                        )
+                    findings.append(Finding(
+                        id=f"{cat_info['number']}-G{_gf_offset}",
+                        title=f"{_subcategory_gf} — {_gf.get('pattern_name', _gf.get('pattern_id', ''))}",
+                        severity="info",
+                        category=cat_info["name"],
+                        subcategory=_subcategory_gf,
+                        description=_gf_desc,
+                        file=_gf_file,
+                        line=_gf_line,
+                        endpoint="",
+                        code_snippet=_gf_snippet,
+                        context_before=_ctx_b if isinstance(_ctx_b, list) else [],
+                        context_after=_ctx_a if isinstance(_ctx_a, list) else [],
+                        recommendation="exec() 동반 여부 및 사용자 입력 소스를 수동으로 확인하세요.",
+                        evidence_type="code" if _gf_snippet else "description",
+                        flow=[],
+                        instances=[{"file": _gf_file, "line": _gf_line, "endpoint": ""}] if _gf_file else [],
+                    ))
+
     return category, findings
 
 
