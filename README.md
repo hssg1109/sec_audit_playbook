@@ -29,8 +29,16 @@ bash tools/scripts/setup_linux_jdk.sh
 
 ### 2단계 — 저장소 클론
 
+> **설치는 반드시 GitHub에서 클론합니다.**
+> Bitbucket(`VULCHK/audit_result`)은 팀 공유용 미러로, `.claude/commands/`·`CLAUDE.md`·`schemas/` 등이 빠져 있어 `/sec-audit-static` 실행 불가합니다.
+
 ```bash
-git clone <PLAYBOOK_REPO_URL> playbook
+# HTTPS 방식
+git clone https://github.com/hssg1109/sec_audit_playbook.git playbook
+
+# SSH 방식 (SSH 키 등록 완료 시)
+git clone git@github.com:hssg1109/sec_audit_playbook.git playbook
+
 cd playbook
 
 # 런타임 디렉터리 생성 (gitignored — 레포에 없으므로 직접 생성)
@@ -41,6 +49,13 @@ mkdir -p testbed state
 > - `skills/`, `tools/`, `CLAUDE.md` 등 **진단 도구 일체**가 레포에 포함됩니다 (수 MB 수준)
 > - `testbed/` (진단 대상 소스코드), `state/` (결과물)는 **gitignore** 처리 — 레포에 없으며 위에서 직접 생성합니다
 > - 진단 대상 소스코드는 별도로 `testbed/<project-name>/` 에 배치합니다 (7단계 참조)
+>
+> **GitHub 접근이 막힌 기업 환경의 경우**
+> ```bash
+> # 프록시 설정 후 클론
+> git config --global http.proxy http://proxy.example.com:8080
+> git clone https://github.com/hssg1109/sec_audit_playbook.git playbook
+> ```
 
 ---
 
