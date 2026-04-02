@@ -10,27 +10,29 @@
 
 ### 1단계 — 시스템 요구사항 확인
 
-| 항목 | 최소 | 권장 | 확인 명령 |
-|------|------|------|-----------|
-| **OS** | Ubuntu 20.04 / WSL2 | Ubuntu 22.04 LTS | `lsb_release -a` |
-| **Python** | 3.7+ | 3.9+ | `python3 --version` |
-| **Java (JDK)** | 11+ | 17+ | `java -version` |
-| **Git** | 2.x | 최신 | `git --version` |
-| **npm** | 6+ | 최신 | `npm --version` *(Node.js 프로젝트 스캔 시 필요)* |
-| **디스크** | 10 GB+ | 30 GB+ | `df -h` |
-| **메모리** | 4 GB+ | 8 GB+ | `free -h` |
+| 항목 | 필수 여부 | 최소 | 권장 | 확인 명령 |
+|------|-----------|------|------|-----------|
+| **OS** | 필수 | Ubuntu 20.04 / WSL2 | Ubuntu 22.04 LTS | `lsb_release -a` |
+| **Python** | 필수 | 3.7+ | 3.9+ | `python3 --version` |
+| **Claude Code CLI** | 필수 | 최신 | 최신 | `claude --version` |
+| **Git** | 필수 | 2.x | 최신 | `git --version` |
+| **Java (JDK)** | **SCA 진단 시만** | 11+ | 17+ | `java -version` |
+| **디스크** | 필수 | 10 GB+ | 30 GB+ | `df -h` |
+| **메모리** | 필수 | 4 GB+ | 8 GB+ | `free -h` |
 
-```bash
-# Java가 없으면 자동 설치 스크립트 사용
-bash tools/scripts/setup_linux_jdk.sh
-```
+> **Java에 대해**
+> - Task 2-2~2-5 (SQL Injection / XSS / 파일처리 / 데이터보호) 스캔은 순수 Python — Java 불필요
+> - Java가 필요한 경우는 SCA(`scan_sca_gradle_tree.py`)가 `./gradlew dependencies`를 실행할 때뿐
+> - `scan_sca_gradle_tree.py`는 Java 미설치 시 apt 또는 OpenJDK tarball 자동 설치를 시도함 (수동 설치 불필요)
+>
+> ```bash
+> # 수동으로 설치하려면
+> bash tools/scripts/setup_linux_jdk.sh
+> ```
 
 ---
 
 ### 2단계 — 저장소 클론
-
-> **설치는 반드시 GitHub에서 클론합니다.**
-> Bitbucket(`VULCHK/audit_result`)은 팀 공유용 미러로, `.claude/commands/`·`CLAUDE.md`·`schemas/` 등이 빠져 있어 `/sec-audit-static` 실행 불가합니다.
 
 ```bash
 # HTTPS 방식
@@ -146,11 +148,11 @@ NVD_API_KEY=<NIST NVD API Key>
 `/sec-audit-static` 스킬은 **Claude Code CLI** 환경에서 실행됩니다.
 
 ```bash
-# Claude Code CLI 설치
-npm install -g @anthropic-ai/claude-code
-
-# 또는 공식 설치 스크립트 사용
+# Claude Code CLI 설치 (curl 방식 — 권장)
 curl -fsSL https://claude.ai/install.sh | bash
+
+# 또는 npm 방식 (Node.js 설치 시)
+npm install -g @anthropic-ai/claude-code
 ```
 
 ```bash
@@ -195,7 +197,7 @@ python3 tools/scripts/publish_confluence.py --dry-run
 # Python 버전 확인
 python3 -c "import sys; print('Python', sys.version)"
 
-# Java 확인
+# Java 확인 (SCA 진단 예정 시)
 java -version
 ```
 
@@ -241,9 +243,9 @@ Phase 1(자산 식별) → Phase 2(자동 스캔) → Phase 3(LLM 심층 진단)
 ### 설치 체크리스트
 
 - [ ] Python 3.9+ 설치 완료
-- [ ] Java 17+ 설치 완료 (`java -version`)
 - [ ] Git 설치 완료
 - [ ] Claude Code CLI 설치 완료 (`claude --version`)
+- [ ] Java 17+ 설치 완료 (`java -version`) — SCA 진단 시만 필요, 미설치 시 스크립트 자동 설치 시도
 - [ ] `.env` 파일 생성 및 `CONFLUENCE_*` 항목 입력
 - [ ] `claude login` 인증 완료
 - [ ] `testbed/`, `state/` 디렉터리 생성
