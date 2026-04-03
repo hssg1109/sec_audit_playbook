@@ -1,8 +1,8 @@
 ## Task: 2-2 인젝션 취약점 검토 (LLM 수동분석 보완)
 
 **역할**: 당신은 보안 진단 전문가입니다.
-**입력 파일**: `state/<prefix>_injection.json` (scan_injection_enhanced.py 자동스캔 결과)
-**출력 파일**: `state/<prefix>_task22_llm.json` (LLM 수동분석 보완 — supplemental)
+**입력 파일**: `state/<prefix>/injection.json` (scan_injection_enhanced.py 자동스캔 결과)
+**출력 파일**: `state/<prefix>/task22_llm.json` (LLM 수동분석 보완 — supplemental)
 **게시 방식**: 별도 Confluence 페이지 X → `<prefix>_injection.json` finding 페이지의 `supplemental_sources`로 통합
 
 > ⚠️ **이 JSON은 자동스캔 페이지에 통합 렌더링된다.** 독립 보고서가 아님.
@@ -129,7 +129,7 @@ rg "(redisTemplate|StringRedisTemplate|RedisRepository)" <ServiceFile> -c
 python3 -c "
 import json
 from collections import defaultdict
-d = json.load(open('state/<prefix>_injection.json'))
+d = json.load(open('state/<prefix>/injection.json'))
 eps = d.get('endpoint_diagnoses', [])
 groups = defaultdict(list)
 for e in eps:
@@ -172,7 +172,7 @@ find testbed/ -name "*.xml" | xargs grep -n '\$[a-zA-Z]' 2>/dev/null | grep -v "
 # 완료 조건 검증: 전수 확인 완료 여부
 python3 -c "
 import json
-d = json.load(open('state/<prefix>_injection.json'))
+d = json.load(open('state/<prefix>/injection.json'))
 eps = d.get('endpoint_diagnoses', [])
 taint_failed = [e for e in eps if e.get('diagnosis_type') in [
     '자동 판정 불가', 'DB 접근 미확인', '추적 불가'
@@ -398,7 +398,7 @@ for e in taint_failed[:10]:
 # 1. injection.json의 실제 정보 endpoint 수 확인
 python3 -c "
 import json
-d = json.load(open('state/<prefix>_injection.json'))
+d = json.load(open('state/<prefix>/injection.json'))
 eps = d.get('endpoint_diagnoses', [])
 info = [e for e in eps if e.get('overall_result')=='정보' or e.get('needs_review')]
 from collections import Counter
@@ -421,7 +421,7 @@ for k,v in dtype_cnt.most_common(): print(f'  {v}건: {k}')
   ```bash
   python3 -c "
   import json
-  d = json.load(open('state/<prefix>_injection.json'))
+  d = json.load(open('state/<prefix>/injection.json'))
   eps = d.get('endpoint_diagnoses', [])
   taint_failed = [e for e in eps if e.get('diagnosis_type') in [
       '자동 판정 불가', 'DB 접근 미확인', '추적 불가'
@@ -435,7 +435,7 @@ for k,v in dtype_cnt.most_common(): print(f'  {v}건: {k}')
 ```bash
 python3 -c "
 import json
-d = json.load(open('state/<prefix>_injection.json'))
+d = json.load(open('state/<prefix>/injection.json'))
 gf = d.get('global_findings', {})
 for k, v in gf.items():
     t = v.get('total', 0) if isinstance(v, dict) else len(v)

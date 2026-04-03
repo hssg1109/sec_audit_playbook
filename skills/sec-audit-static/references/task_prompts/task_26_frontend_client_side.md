@@ -166,7 +166,7 @@ find <src> -name "nginx.conf" -o -name "*.conf" | xargs rg "Content-Security-Pol
 `scan_sca_gradle_tree.py`는 `package-lock.json`을 자동 감지하여 npm 의존성 CVE 조회를 수행한다.
 
 ```bash
-python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json
+python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>/sca.json
 ```
 
 - Phase 4 SCA 페이지에 통합 게시 (Java/Kotlin repo와 동일 절차)

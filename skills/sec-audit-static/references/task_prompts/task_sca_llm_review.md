@@ -14,7 +14,7 @@
 
 ```bash
 # 스캔 결과 로드
-cat state/<prefix>_sca.json | python3 -c "
+cat state/<prefix>/sca.json | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 meta = d.get('metadata', {})
@@ -104,7 +104,7 @@ rg -l "@PreAuthorize\|@Secured\|@EnableMethodSecurity\|hasRole\|hasAuthority" <s
 {
   "task_id": "P3-SCA",
   "source_tool": "SCA-LLM-Review",
-  "source_sca_file": "state/<prefix>_sca.json",
+  "source_sca_file": "state/<prefix>/sca.json",
   "reviewed_at": "2026-03-24",
   "reviewer": "LLM",
   "reviews": [
@@ -179,10 +179,10 @@ LLM 검토 결과를 SCA 페이지에 병합 게시:
 ```json
 // confluence_page_map.json 항목 예시
 {
-  "source": "state/<prefix>_sca.json",
+  "source": "state/<prefix>/sca.json",
   "title": "테스트NN - SCA (오픈소스 취약점) 진단 결과",
   "type": "sca",
-  "supplemental_sources": ["state/<prefix>_sca_llm.json"]
+  "supplemental_sources": ["state/<prefix>/sca_llm.json"]
 }
 ```
 

@@ -13,15 +13,15 @@
 
 ```bash
 # Gradle dep tree (빌드 성공 시)
-./gradlew dependencies --configuration runtimeClasspath > state/<prefix>_dep_tree.log
+./gradlew dependencies --configuration runtimeClasspath > state/<prefix>/dep_tree.log
 
 # JAR 존재 시
-python3 tools/scripts/scan_sca.py <src> --jar state/<prefix>_build_manifest_primary.jar \
-    --project <name> --poc -o state/<prefix>_sca.json
+python3 tools/scripts/scan_sca.py <src> --jar state/<prefix>/build_manifest_primary.jar \
+    --project <name> --poc -o state/<prefix>/sca.json
 
 # Gradle dep tree 기반 (빌드 실패 시 대체)
-python3 tools/scripts/scan_sca.py <src> --dep-tree state/<prefix>_dep_tree.log \
-    --project <name> --poc --publish -o state/<prefix>_sca.json
+python3 tools/scripts/scan_sca.py <src> --dep-tree state/<prefix>/dep_tree.log \
+    --project <name> --poc --publish -o state/<prefix>/sca.json
 ```
 
 ### Step 2. CVE 조회 및 필터링

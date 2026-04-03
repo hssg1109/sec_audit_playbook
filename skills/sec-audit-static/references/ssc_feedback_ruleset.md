@@ -43,7 +43,7 @@ SSC Phase 5 TP 확인
 
 ## [5-4-1] SAST 대조 및 미탐 분류
 
-1. **TP 목록 불러오기**: `state/<prefix>_ssc_findings.json`의 `result == "취약"` 건
+1. **TP 목록 불러오기**: `state/<prefix>/ssc_findings.json`의 `result == "취약"` 건
 2. **SAST 결과와 대조**: Phase 2~3 산출물(`*_injection.json`, `*_xss.json` 등)에서 동일 파일+라인 탐지 여부 확인
 3. **분류 판정**:
    - 탐지됨 → "커버됨" 기록 후 [5-4-5] 바로 이동

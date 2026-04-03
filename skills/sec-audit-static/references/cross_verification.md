@@ -105,7 +105,7 @@ Phase 3-1 완료 후, 아래 조건 중 하나 이상에 해당하는 항목을 
 python3 -c "
 import json
 from collections import Counter
-d = json.load(open('state/<prefix>_injection.json'))
+d = json.load(open('state/<prefix>/injection.json'))
 eps = d.get('endpoint_diagnoses', [])
 failed = [e for e in eps if e.get('diagnosis_type') in [
     '자동 판정 불가', 'DB 접근 미확인', '추적 불가'
@@ -212,7 +212,7 @@ rg "(redisTemplate\.|StringRedisTemplate|@Cacheable|@RedisHash)" <ServiceFile> -
 # 추적 실패 전체 건수
 python3 -c "
 import json
-d = json.load(open('state/<prefix>_injection.json'))
+d = json.load(open('state/<prefix>/injection.json'))
 failed = [e for e in d.get('endpoint_diagnoses',[]) if e.get('diagnosis_type') in [
     '자동 판정 불가', 'DB 접근 미확인', '추적 불가'
 ] or e.get('access_type')=='mybatis_dynamic_review']

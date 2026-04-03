@@ -1,8 +1,8 @@
 ## Task: 2-4 파일 처리 검토 (LLM 수동분석 보완)
 
 **역할**: 당신은 보안 진단 전문가입니다.
-**입력 파일**: `state/<prefix>_task24.json` (scan_file_processing.py 자동스캔 결과)
-**출력 파일**: `state/<prefix>_task24_llm.json` (LLM 수동분석 보완 — supplemental)
+**입력 파일**: `state/<prefix>/task24.json` (scan_file_processing.py 자동스캔 결과)
+**출력 파일**: `state/<prefix>/task24_llm.json` (LLM 수동분석 보완 — supplemental)
 **게시 방식**: 별도 Confluence 페이지 X → `<prefix>_task24.json` finding 페이지의 `supplemental_sources`로 통합
 
 > ⚠️ **이 JSON은 자동스캔 페이지에 통합 렌더링된다.** 독립 보고서가 아님.
@@ -24,7 +24,7 @@
 
 `DIAGNOSIS_SCOPE` (예: `wv/pointcon`, `wv/shoppingtab`)가 정의된 경우:
 
-1. `state/<prefix>_task24.json`의 모든 findings를 **파일 경로 기준**으로 분류
+1. `state/<prefix>/task24.json`의 모든 findings를 **파일 경로 기준**으로 분류
    - **in-scope**: `file` 경로에 `DIAGNOSIS_SCOPE` 모듈명 포함 → 이후 단계에서 분석
    - **out-of-scope**: 해당 없음 → `out_of_scope_findings` 섹션에 요약만 기록, 분석 생략
 

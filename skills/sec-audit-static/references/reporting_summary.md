@@ -24,7 +24,7 @@ Optional wiki fields (analysis entry):
 ### 1. 서비스 개요 표 — 스크립트 자동 생성 (권장)
 
 `generate_finding_report.py`는 `--asset-info`로 task_11 JSON을 전달하면 **서비스 개요 표를 자동 생성**한다.
-데이터 소스: `state/<prefix>_task11.json`의 `metadata` 필드 + `findings[0]` (framework, tech_stack, build_tool).
+데이터 소스: `state/<prefix>/task11.json`의 `metadata` 필드 + `findings[0]` (framework, tech_stack, build_tool).
 
 #### Phase 4 스크립트 호출 형식 (서비스 개요 자동화 필수 인자)
 
@@ -33,10 +33,10 @@ python3 tools/scripts/generate_finding_report.py <source_dir> \
     <finding_jsons...> \
     --service "<서비스명>" \
     --source-label "<레포URL>" \
-    --asset-info state/<prefix>_task11.json \   # ← 서비스 개요 표 자동 삽입 (필수)
+    --asset-info state/<prefix>/task11.json \   # ← 서비스 개요 표 자동 삽입 (필수)
     --anchor-style md2cf \
-    --page-map state/confluence_page_map_<prefix>.json \
-    --output state/<prefix>_진단보고서.md
+    --page-map state/<prefix>/confluence_page_map.json \
+    --output state/<prefix>/진단보고서.md
 ```
 
 **`--asset-info` 없이 실행하면** Branch/Commit/담당자/커밋 일자가 빠진 불완전한 표가 생성된다. 반드시 task_11 JSON을 전달하라.
@@ -65,7 +65,7 @@ python3 tools/scripts/generate_finding_report.py <source_dir> \
 
 스크립트를 거치지 않고 LLM이 Phase 4 보고서를 직접 작성할 때는 아래 순서로 서비스 개요 표를 채워야 한다:
 
-1. `state/<prefix>_task11.json` → `metadata` 필드에서 source_repo_url / branch / commit / commit_date / commit_message / responsible_person 읽기
+1. `state/<prefix>/task11.json` → `metadata` 필드에서 source_repo_url / branch / commit / commit_date / commit_message / responsible_person 읽기
 2. `task11.json` → `findings[0]`에서 framework / tech_stack / build_tool 읽기
 3. 필수 3항목(소스 경로, Branch/Commit, 담당자) 중 하나라도 누락이면 task_11 재수집 또는 git log 직접 확인 후 채울 것
 

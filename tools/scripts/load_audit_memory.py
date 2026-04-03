@@ -1,44 +1,42 @@
 """
 load_audit_memory.py — 프로젝트별 오탐(FP) 영속 메모리 로더
 
-testbed/<project>/.audit-memory.json 의 fp_rules를 읽어
+state/<prefix>/.audit-memory.json 의 fp_rules를 읽어
 Phase 3 LLM 분석 컨텍스트로 주입할 마크다운 파일을 생성한다.
+
+파일 위치: state/<prefix>/.audit-memory.json  (gitignored, 프로젝트 전용 디렉터리)
+템플릿:    tools/audit_memory_template.json
 
 Usage:
     python3 tools/scripts/load_audit_memory.py \
-        --source-dir testbed/<project>/ \
-        --output state/<prefix>_audit_memory.md
+        --state-dir state/<prefix>/ \
+        --output state/<prefix>/audit_memory.md
 
     python3 tools/scripts/load_audit_memory.py \
-        --source-dir testbed/ocbwebview/ocb-community-api@master@5ca54f5/ \
-        --output state/0331_ocbwebview_comm_api_audit_memory.md
+        --state-dir state/0331_ocbwebview_comm_api/ \
+        --output state/0331_ocbwebview_comm_api/audit_memory.md
 """
 
 import argparse
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 
 _MEMORY_FILENAME = ".audit-memory.json"
 
 
-def _load_fp_rules(source_dir: Path) -> dict | None:
-    """source_dir 또는 상위 1단계에서 .audit-memory.json 탐색 후 파싱."""
-    candidates = [
-        source_dir / _MEMORY_FILENAME,
-        source_dir.parent / _MEMORY_FILENAME,
-    ]
-    for path in candidates:
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                print(f"[audit-memory] 로드: {path}", file=sys.stderr)
-                return data
-            except json.JSONDecodeError as e:
-                print(f"[audit-memory] JSON 파싱 오류 ({path}): {e}", file=sys.stderr)
-                return None
-    return None
+def _load_fp_rules(state_dir: Path) -> dict | None:
+    """state/<prefix>/.audit-memory.json 탐색 후 파싱."""
+    path = state_dir / _MEMORY_FILENAME
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        print(f"[audit-memory] 로드: {path}", file=sys.stderr)
+        return data
+    except json.JSONDecodeError as e:
+        print(f"[audit-memory] JSON 파싱 오류 ({path}): {e}", file=sys.stderr)
+        return None
 
 
 def _format_vuln_type(vtype: str) -> str:
@@ -59,10 +57,10 @@ def _format_vuln_type(vtype: str) -> str:
 
 
 def _render_markdown(data: dict) -> str:
-    project   = data.get("project", "unknown")
-    version   = data.get("version", "1.0")
-    updated   = data.get("updated_at", "")
-    fp_rules  = data.get("fp_rules", [])
+    project  = data.get("project", "unknown")
+    version  = data.get("version", "1.0")
+    updated  = data.get("updated_at", "")
+    fp_rules = data.get("fp_rules", [])
 
     lines = [
         "# [Project Specific Context & Exceptions]",
@@ -76,10 +74,7 @@ def _render_markdown(data: dict) -> str:
     ]
 
     if not fp_rules:
-        lines += [
-            "*(등록된 FP 예외 규칙 없음)*",
-            "",
-        ]
+        lines += ["*(등록된 FP 예외 규칙 없음)*", ""]
         return "\n".join(lines)
 
     lines += [
@@ -90,12 +85,12 @@ def _render_markdown(data: dict) -> str:
     ]
 
     for i, rule in enumerate(fp_rules, 1):
-        rid      = rule.get("id", f"FP-{i:03d}")
-        target   = rule.get("target_class_or_path", "").replace("|", "\\|")
-        vtype    = _format_vuln_type(rule.get("vulnerability_type", ""))
-        reason   = rule.get("reason", "").replace("|", "\\|")
-        by       = rule.get("confirmed_by", "")
-        date     = rule.get("confirmed_date", "")
+        rid    = rule.get("id", f"FP-{i:03d}")
+        target = rule.get("target_class_or_path", "").replace("|", "\\|")
+        vtype  = _format_vuln_type(rule.get("vulnerability_type", ""))
+        reason = rule.get("reason", "").replace("|", "\\|")
+        by     = rule.get("confirmed_by", "")
+        date   = rule.get("confirmed_date", "")
         lines.append(f"| {rid} | `{target}` | {vtype} | {reason} | {by} | {date} |")
 
     lines += [
@@ -117,37 +112,33 @@ def _render_markdown(data: dict) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="프로젝트 .audit-memory.json → Phase 3 LLM 컨텍스트 마크다운 생성"
+        description="state/<prefix>/.audit-memory.json → Phase 3 LLM 컨텍스트 마크다운 생성"
     )
     parser.add_argument(
-        "--source-dir", required=True, type=Path,
-        help="진단 대상 소스코드 루트 (testbed/<project>/)"
+        "--state-dir", required=True, type=Path,
+        help="프로젝트 상태 디렉터리 (state/<prefix>/)"
     )
     parser.add_argument(
         "--output", "-o", type=Path, default=None,
-        help="출력 파일 경로 (기본: stdout)"
+        help="출력 파일 경로 (기본: stdout). 미지정 시 state-dir/audit_memory.md 자동 설정."
     )
     args = parser.parse_args()
 
-    data = _load_fp_rules(args.source_dir)
+    state_dir = args.state_dir
+    output    = args.output or (state_dir / "audit_memory.md")
+
+    data = _load_fp_rules(state_dir)
 
     if data is None:
-        print(
-            f"[audit-memory] .audit-memory.json 없음 — 컨텍스트 주입 건너뜀",
-            file=sys.stderr,
-        )
-        if args.output:
-            args.output.write_text("", encoding="utf-8")
+        print("[audit-memory] .audit-memory.json 없음 — 컨텍스트 주입 건너뜀", file=sys.stderr)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("", encoding="utf-8")
         sys.exit(0)
 
     md = _render_markdown(data)
-
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(md, encoding="utf-8")
-        print(f"[audit-memory] 컨텍스트 저장: {args.output}", file=sys.stderr)
-    else:
-        print(md)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(md, encoding="utf-8")
+    print(f"[audit-memory] 컨텍스트 저장: {output}", file=sys.stderr)
 
 
 if __name__ == "__main__":

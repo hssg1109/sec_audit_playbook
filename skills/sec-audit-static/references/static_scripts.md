@@ -5,10 +5,11 @@ Canonical automation scripts (repo `tools/scripts/`):
 ## Core Scripts
 
 - `load_audit_memory.py`: 프로젝트별 FP 예외 메모리 로드 — Phase 3 시작 전 필수 실행
-  - `testbed/<project>/.audit-memory.json` 탐색 → `fp_rules` 파싱
-  - 출력: `state/<prefix>_audit_memory.md` ([Project Specific Context & Exceptions] 형식)
+  - `state/<prefix>/.audit-memory.json` 탐색 → `fp_rules` 파싱
+  - 출력: `state/<prefix>/audit_memory.md` ([Project Specific Context & Exceptions] 형식)
   - 파일 없으면 빈 파일 생성 후 종료 (Phase 3 정상 진행)
   - 템플릿: `tools/audit_memory_template.json`
+  - 사용법: `python3 tools/scripts/load_audit_memory.py --state-dir state/<prefix>/`
 - `parse_asset_excel.py`: asset Excel -> JSON
 - `merge_results.py`: merge task results -> `final_report.json`
 - `redact.py`: redact sensitive data in reports
@@ -83,11 +84,11 @@ Canonical automation scripts (repo `tools/scripts/`):
   - 빌드 실패 시 소스 분석 fallback 자동 처리 (종료 코드 0 유지)
   - Joern 분석 대상 primary_jar 자동 선택 (WAR 우선 → 가장 큰 JAR)
   - SCA용 dependency tree 생성 (`--dep-report` 플래그)
-  - Output: `state/<prefix>_build_manifest.json`
+  - Output: `state/<prefix>/build_manifest.json`
     - `primary_jar`: Joern 분석 대상 경로 → `scan_injection_enhanced.py --jar`에 전달
     - `artifacts`: 전체 빌드 아티팩트 목록 + 크기
     - `fallback_source_only`: true이면 Joern 생략, source-only 분석
-  - 사용법: `python3 build_target.py --source-dir <dir> --build-cmd "<cmd>" --jdk 17 -o state/<prefix>_build_manifest.json`
+  - 사용법: `python3 build_target.py --source-dir <dir> --build-cmd "<cmd>" --jdk 17 -o state/<prefix>/build_manifest.json`
   - **`--resolve-deps`**: 빌드 실패 시 `com.skp.*` 누락 패키지 자동 감지 → Bitbucket에서 클론 → `settings.gradle`에 `includeBuild()` 주입 후 재빌드 (Method B: Composite Build). 재빌드 후 `settings.gradle` 원상복원. `CUSTOMER_BB_TOKEN` (.env) 필요.
     - `_INTERNAL_PKG_REPO_MAP`: 10개 prefix → Bitbucket project/repo 매핑 내장 (com.skp.ocb.webview, com.skp.oz 등)
     - 매니페스트에 `composite_build` 섹션 추가 (attempted, success, cloned_repos, skipped_pkgs)
@@ -106,9 +107,9 @@ Canonical automation scripts (repo `tools/scripts/`):
   - CVSS 점수, 영향 버전 범위, fixed 버전 자동 추출
   - `scan_sca.py`와 동일한 출력 스키마 (findings[] + grouped[])
   - 사용법:
-    - (Gradle): `python3 scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json`
+    - (Gradle): `python3 scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>/sca.json`
     - (npm): 위와 동일 (package-lock.json 자동 감지)
-  - Output: `state/<prefix>_sca.json`
+  - Output: `state/<prefix>/sca.json`
 
 - `scan_sca.py` (v2.0): SCA + CVE 관련성 분석 + PoC 생성 + Confluence 게시 (P2-01/P2-02, JAR 레거시)
   - **P2-01 (dependency-check 경로)**: dependency-check 실행 → CVE 파싱 → CVSS 기준 필터링
@@ -120,11 +121,11 @@ Canonical automation scripts (repo `tools/scripts/`):
   - 소스코드 자동 관련성 판정 (`_auto_relevance`): WebFlux/RouterFunction/SocketAppender/MultipartFile 등 grep 기반
   - `--publish`: Confluence SCA 페이지 자동 생성/업데이트 (`.env` 자동 로드)
   - `--page-id`: 기존 페이지 업데이트, `--page-title`: 커스텀 제목
-  - Output: `state/<prefix>_sca.json` — findings[] + grouped[] 포함
+  - Output: `state/<prefix>/sca.json` — findings[] + grouped[] 포함
   - 사용법:
-    - (fat JAR): `python3 scan_sca.py <src> --jar <jar> --poc --publish -o state/<prefix>_sca.json`
-    - (Gradle dep tree): `python3 scan_sca.py <src> --dep-tree state/<prefix>_dep_tree.log --poc --publish -o state/<prefix>_sca.json`
-    - (기존 dc 리포트): `python3 scan_sca.py <src> --dc-report <dc.json> --poc --publish -o state/<prefix>_sca.json`
+    - (fat JAR): `python3 scan_sca.py <src> --jar <jar> --poc --publish -o state/<prefix>/sca.json`
+    - (Gradle dep tree): `python3 scan_sca.py <src> --dep-tree state/<prefix>/dep_tree.log --poc --publish -o state/<prefix>/sca.json`
+    - (기존 dc 리포트): `python3 scan_sca.py <src> --dc-report <dc.json> --poc --publish -o state/<prefix>/sca.json`
 
 ## Publishing Scripts
 

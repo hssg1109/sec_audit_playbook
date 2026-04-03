@@ -1,8 +1,8 @@
 ## Task: 2-3 XSS 취약점 검토 (LLM 수동분석 보완)
 
 **역할**: 당신은 보안 진단 전문가입니다.
-**입력 파일**: `state/<prefix>_xss.json` (scan_xss.py 자동스캔 결과)
-**출력 파일**: `state/<prefix>_task23_llm.json` (LLM 수동분석 보완 — supplemental)
+**입력 파일**: `state/<prefix>/xss.json` (scan_xss.py 자동스캔 결과)
+**출력 파일**: `state/<prefix>/task23_llm.json` (LLM 수동분석 보완 — supplemental)
 **게시 방식**: 별도 Confluence 페이지 X → `<prefix>_xss.json` finding 페이지의 `supplemental_sources`로 통합
 
 > ⚠️ **이 JSON은 자동스캔 페이지에 통합 렌더링된다.** 독립 보고서가 아님.
@@ -87,7 +87,7 @@ find src/main/webapp -name "*.jsp" ! -path "*/WEB-INF/*"
 
 > **전체 소스코드를 탐색하지 마세요.** 아래 순서로 필요한 파일만 추적합니다.
 
-1. `state/<prefix>_xss.json`에서 auto-scan 결과 로드
+1. `state/<prefix>/xss.json`에서 auto-scan 결과 로드
 2. 각 API의 **Controller 파일**을 확인 → `@Controller` vs `@RestController` 어노테이션 판별
 3. Controller에서 View로 데이터를 전달하는 패턴 확인 (`model.addAttribute()` 등)
 4. **View 파일** 추적: JSP, Thymeleaf, Pug, React/Vue/Angular 컴포넌트
@@ -543,7 +543,7 @@ grep -r "@RequestParam" src/main/java/ | grep -v "test" | wc -l
   - findings 배열에 전역 필터 평가 항목 필수
 
 □ xss_endpoint_review.total_info_endpoints == xss.json의 실제 정보 endpoint 수
-  확인: python3 -c "import json; d=json.load(open('state/<prefix>_xss.json'));
+  확인: python3 -c "import json; d=json.load(open('state/<prefix>/xss.json'));
     print(d.get('summary',{}))"
 ```
 

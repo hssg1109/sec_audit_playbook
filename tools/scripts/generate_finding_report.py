@@ -1436,7 +1436,8 @@ def _collect_supplemental_paths(finding_files: list[Path],
     except Exception:
         return {}
 
-    base_dir = page_map_path.parent.parent  # state/ 또는 tools/ → playbook root
+    # page_map 위치(state/<prefix>/ 또는 tools/)와 무관하게 playbook root 기준으로 경로 해석
+    base_dir = Path(__file__).resolve().parent.parent.parent  # scripts/ → tools/ → playbook root
 
     # 모든 entries를 평탄화
     def _iter_entries(node):

@@ -86,9 +86,9 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
   - FE-STORAGE: localStorage/sessionStorage 민감 데이터 저장
   - FE-LOG: console.log PII 포함 여부
   - nginx.conf 보안 헤더 누락 확인 (해당 시)
-- **SCA 진단 (항상 필수)**: `scan_sca_gradle_tree.py` (Gradle/npm) 또는 `scan_sca.py` (JAR 기반). `state/<prefix>_sca.json` 출력.
-  - Gradle: `python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json`
-  - npm: `python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>_sca.json` (package-lock.json 자동 감지)
+- **SCA 진단 (항상 필수)**: `scan_sca_gradle_tree.py` (Gradle/npm) 또는 `scan_sca.py` (JAR 기반). `state/<prefix>/sca.json` 출력.
+  - Gradle: `python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>/sca.json`
+  - npm: `python3 tools/scripts/scan_sca_gradle_tree.py <src> --project <name> -o state/<prefix>/sca.json` (package-lock.json 자동 감지)
 - Secret detection: Gitleaks-first (scan_data_protection.py 연계).
 - For confirmed findings, create/update Semgrep/Joern rules (unless waived).
 
@@ -104,26 +104,26 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
 - **Phase 3-SCA** (SCA 관련성 검토) [정기진단 필수]: LLM이 각 CVE finding을 소스코드와 교차검증.
   - 절차: `references/task_prompts/task_sca_llm_review.md` 참조.
   - 각 라이브러리별: (1) 소스코드 실사용 grep (2) 발생 조건 코드 확인 (3) 관련성 판정 (4) 한국어 CVE 설명 작성.
-  - 출력: `state/<prefix>_sca_llm.json` → Phase 4에서 SCA 페이지에 supplemental_sources로 병합.
+  - 출력: `state/<prefix>/sca_llm.json` → Phase 4에서 SCA 페이지에 supplemental_sources로 병합.
 
 **Phase 4**: Reporting + Confluence 게시 (필수).
 - Merge: `tools/scripts/merge_results.py`
 - Redact: `tools/scripts/redact.py`
 - Validate: `tools/scripts/validate_task_output.py` against `references/output_schemas.md`
-- Report: `tools/scripts/generate_finding_report.py --source-label <label> --anchor-style md2cf --page-map state/confluence_page_map_<prefix>.json`
+- Report: `tools/scripts/generate_finding_report.py --source-label <label> --anchor-style md2cf --page-map state/<prefix>/confluence_page_map.json`
   - `--anchor-style md2cf` 는 항상 필수 (Confluence 앵커/HTML 테이블 포맷)
   - `--page-map` 지정 시 supplemental_sources LLM 보완 findings 자동 병합
-- Publish: `tools/scripts/publish_confluence.py --map state/confluence_page_map_<prefix>.json` (필수 — dry-run 확인 후 실행)
-  - `state/confluence_page_map_<prefix>.json`에 해당 진단 항목이 등록되어 있어야 함
+- Publish: `tools/scripts/publish_confluence.py --map state/<prefix>/confluence_page_map.json` (필수 — dry-run 확인 후 실행)
+  - `state/<prefix>/confluence_page_map.json`에 해당 진단 항목이 등록되어 있어야 함
   - 템플릿: `tools/confluence_page_map.json` 참조
   - `workflow.md` Phase 4 참조: main_report / api_inventory / finding / supplemental 구조
 
 **Phase 5** ⚠️ **정기진단 시 필수 (건너뛰지 말 것)**, 개발검증 시 선택: SSC 정합성 검증 — Fortify SSC High/Critical findings를 소스코드와 교차검증 후 별도 보고서 생성.
 - `references/ssc_verification.md` 전체 절차 참조.
 - Step 5-0: **브랜치/커밋 일치 검증** (필수) — `--testbed` 옵션으로 SSC 스캔 버전 vs testbed 소스 일치 확인
-- Step 5-1: `tools/scripts/fetch_ssc.py --project <name> --testbed <path> -o state/<prefix>_ssc_findings.json`
+- Step 5-1: `tools/scripts/fetch_ssc.py --project <name> --testbed <path> -o state/<prefix>/ssc_findings.json`
 - Step 5-2: LLM이 각 finding의 소스코드 위치를 직접 확인 → TP/FP/검토필요 판정
-- Step 5-3: 검증 결과 → `state/<prefix>_ssc_report.md` 생성
+- Step 5-3: 검증 결과 → `state/<prefix>/ssc_report.md` 생성
 - Step 5-4: SSC TP → SAST 피드백 환류 — 미탐 원인 분석 + Semgrep 룰 / task prompt 개선 적용 (`references/ssc_feedback_ruleset.md`)
 - 기존 Phase 1~4와 독립 실행 가능 (testbed 소스코드만 있으면 됨)
 

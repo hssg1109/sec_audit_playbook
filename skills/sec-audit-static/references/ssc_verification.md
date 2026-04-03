@@ -48,7 +48,7 @@ python3 tools/scripts/fetch_ssc.py \
     --project "<SSC 프로젝트명>" \
     --version "<버전명>" \
     --testbed testbed/<project>/<repo>@<branch>@<commit> \
-    -o state/<prefix>_ssc_findings.json
+    -o state/<prefix>/ssc_findings.json
 ```
 
 **출력 예시**:
@@ -112,14 +112,14 @@ python3 tools/scripts/fetch_ssc.py \
     --project "<SSC 프로젝트명>" \
     --version "<버전명>" \
     --testbed testbed/<project>/<repo>@<branch>@<commit> \
-    -o state/<prefix>_ssc_findings.json
+    -o state/<prefix>/ssc_findings.json
 
 # 버전 ID 직접 지정
 python3 tools/scripts/fetch_ssc.py --list-projects
 python3 tools/scripts/fetch_ssc.py \
     --version-id 12345 \
     --testbed testbed/<project>/<repo>@<branch>@<commit> \
-    -o state/<prefix>_ssc_findings.json
+    -o state/<prefix>/ssc_findings.json
 ```
 
 **수집 기준**:
@@ -127,7 +127,7 @@ python3 tools/scripts/fetch_ssc.py \
 - `suppressed: false` (억제된 건 제외)
 - `hidden: false` 포함 여부는 SSC 설정에 따름
 
-**출력**: `state/<prefix>_ssc_findings.json`
+**출력**: `state/<prefix>/ssc_findings.json`
 ```json
 {
   "metadata": {
@@ -181,7 +181,7 @@ python3 tools/scripts/fetch_ssc.py \
 import json
 from collections import defaultdict
 
-with open("state/<prefix>_ssc_findings.json") as f:
+with open("state/<prefix>/ssc_findings.json") as f:
     ssc = json.load(f)
 
 groups = defaultdict(list)
@@ -335,7 +335,7 @@ for rep in reps:
 ```python
 import json
 
-with open("state/<prefix>_ssc_findings.json") as f:
+with open("state/<prefix>/ssc_findings.json") as f:
     ssc = json.load(f)
 
 # 그룹별 검증 완료된 findings로 교체
@@ -362,7 +362,7 @@ ssc["verification_summary"] = {
     }
 }
 
-with open("state/<prefix>_ssc_findings.json", "w") as f:
+with open("state/<prefix>/ssc_findings.json", "w") as f:
     json.dump(ssc, f, ensure_ascii=False, indent=2)
 print(f"저장 완료. 검증 결과: {verified_counts}")
 ```
@@ -371,19 +371,19 @@ print(f"저장 완료. 검증 결과: {verified_counts}")
 
 ## Step 5-3: 정합성 보고서 생성
 
-검증 완료된 `state/<prefix>_ssc_findings.json`으로 Markdown 보고서를 생성한다.
+검증 완료된 `state/<prefix>/ssc_findings.json`으로 Markdown 보고서를 생성한다.
 
 ```bash
 python3 tools/scripts/generate_ssc_report.py \
-    state/<prefix>_ssc_findings.json \
-    -o state/<prefix>_ssc_report.md
+    state/<prefix>/ssc_findings.json \
+    -o state/<prefix>/ssc_report.md
 ```
 
 > `generate_ssc_report.py`는 아직 구현 예정. 임시로 아래 LLM 인라인 생성 사용.
 
 ### LLM 인라인 보고서 생성 (generate_ssc_report.py 대체)
 
-아래 구조로 `state/<prefix>_ssc_report.md`를 직접 생성한다.
+아래 구조로 `state/<prefix>/ssc_report.md`를 직접 생성한다.
 
 #### 심각도 색상 규칙 (표준)
 
@@ -542,7 +542,7 @@ python3 tools/scripts/generate_ssc_report.py \
 ### 실행 절차
 
 ```
-1. TP 목록 확인: state/<prefix>_ssc_findings.json 의 result=="취약" 건
+1. TP 목록 확인: state/<prefix>/ssc_findings.json 의 result=="취약" 건
 2. SAST 결과 대조: Phase 2~3 산출물에서 동일 파일/라인 탐지 여부 확인
 3. 분류:
    - Type A (탐지 가능 → 미탐): 스크립트 패턴 / LLM 체크리스트 보완
@@ -573,11 +573,11 @@ python3 tools/scripts/generate_ssc_report.py \
 ## Phase 5 완료 조건
 
 ```
-□ state/<prefix>_ssc_findings.json의 모든 finding에 verification.result 채워짐
+□ state/<prefix>/ssc_findings.json의 모든 finding에 verification.result 채워짐
 □ 취약 건: code_evidence 및 recommendation 필수
 □ FP 건: judgment에 FP 근거 명시
 □ 검토필요 건: LLM 추가분석 수행 → 전건 TP 또는 FP로 해소
-□ 보고서 생성: state/<prefix>_ssc_report.md (아래 섹션 전체 포함)
+□ 보고서 생성: state/<prefix>/ssc_report.md (아래 섹션 전체 포함)
    □ 섹션1: 요약 + 그룹별 검증 결과 표 (실제 그룹 수)
    □ 섹션2: 취약 확인 건 목록 표 — Critical → High 순 정렬, 동일 유형+파일 병합 (1건=1행)
    □ 섹션2 하위: 취약점 유형별 상세 — 각 항목에 <details><summary>관련 파일 목록</summary>표</details> expand 블록 포함

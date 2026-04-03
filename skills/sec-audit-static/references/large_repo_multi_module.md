@@ -49,11 +49,11 @@
 cat testbed/<repo>/settings.gradle | grep include
 
 # API inventory 실행 후 module 필드 확인
-python3 tools/scripts/scan_api.py testbed/<repo> -o state/<prefix>_api_inventory.json
+python3 tools/scripts/scan_api.py testbed/<repo> -o state/<prefix>/api_inventory.json
 python3 -c "
 import json
 from collections import Counter
-d = json.load(open('state/<prefix>_api_inventory.json'))
+d = json.load(open('state/<prefix>/api_inventory.json'))
 mods = Counter(ep.get('module','') for ep in d.get('endpoints',[]))
 print('총 endpoints:', sum(mods.values()))
 for k,v in mods.most_common():
@@ -76,7 +76,7 @@ PREFIX_REPO="state/<test_prefix>_<repo>"   # 예: state/t41_ob_backend
 
 # 파일 처리 (전체 repo)
 python3 tools/scripts/scan_file_processing.py testbed/<repo> \
-    -a state/<prefix>_api_inventory.json \
+    -a state/<prefix>/api_inventory.json \
     -o ${PREFIX_REPO}_task24.json
 
 # 데이터 보호 (전체 repo)

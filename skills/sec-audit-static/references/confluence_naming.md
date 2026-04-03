@@ -115,7 +115,7 @@ OCB 서비스군
 
 ## confluence_page_map 템플릿
 
-> **파일 위치**: `state/confluence_page_map_<prefix>.json` (gitignored — 진단 회차별 산출물)
+> **파일 위치**: `state/<prefix>/confluence_page_map.json` (gitignored — 진단 회차별 산출물)
 > `tools/confluence_page_map.json`은 git 추적용 기본 템플릿만 유지하며, 실제 실행 시에는 반드시 `state/`에 생성하여 `--map` / `--page-map` 옵션으로 지정할 것.
 
 ### 단일 모듈 repo
@@ -129,52 +129,52 @@ OCB 서비스군
       "type": "container"
     },
     {
-      "source": "state/<prefix>_report.md",
+      "source": "state/<prefix>/report.md",
       "title": "{서비스명}_ai자동진단_진단결과요약",
       "type": "main_report",
       "task_sources": {
-        "api":             "state/<prefix>_api_inventory.json",
-        "injection":       "state/<prefix>_injection.json",
-        "xss":             "state/<prefix>_xss.json",
-        "file_handling":   "state/<prefix>_task24_llm.json",
-        "data_protection": "state/<prefix>_task25_llm.json"
+        "api":             "state/<prefix>/api_inventory.json",
+        "injection":       "state/<prefix>/injection.json",
+        "xss":             "state/<prefix>/xss.json",
+        "file_handling":   "state/<prefix>/task24_llm.json",
+        "data_protection": "state/<prefix>/task25_llm.json"
       }
     },
     {
-      "source": "state/<prefix>_api_inventory.json",
+      "source": "state/<prefix>/api_inventory.json",
       "title": "{서비스명}_ai자동진단_API인벤토리",
       "type": "api_inventory"
     },
     {
-      "source": "state/<prefix>_injection.json",
-      "supplemental_sources": ["state/<prefix>_task22_llm.json"],
+      "source": "state/<prefix>/injection.json",
+      "supplemental_sources": ["state/<prefix>/task22_llm.json"],
       "title": "{서비스명}_ai자동진단_인젝션취약점",
       "type": "finding"
     },
     {
-      "source": "state/<prefix>_xss.json",
-      "supplemental_sources": ["state/<prefix>_task23_llm.json"],
+      "source": "state/<prefix>/xss.json",
+      "supplemental_sources": ["state/<prefix>/task23_llm.json"],
       "title": "{서비스명}_ai자동진단_XSS취약점",
       "type": "finding"
     },
     {
-      "source": "state/<prefix>_task24_llm.json",
+      "source": "state/<prefix>/task24_llm.json",
       "title": "{서비스명}_ai자동진단_파일처리",
       "type": "finding"
     },
     {
-      "source": "state/<prefix>_task25_llm.json",
+      "source": "state/<prefix>/task25_llm.json",
       "title": "{서비스명}_ai자동진단_데이터보호",
       "type": "finding"
     },
     {
-      "source": "state/<prefix>_sca.json",
-      "supplemental_sources": ["state/<prefix>_sca_llm.json"],
+      "source": "state/<prefix>/sca.json",
+      "supplemental_sources": ["state/<prefix>/sca_llm.json"],
       "title": "{서비스명}_ai자동진단_SCA",
       "type": "sca"
     },
     {
-      "source": "state/<prefix>_ssc_report.md",
+      "source": "state/<prefix>/ssc_report.md",
       "title": "{서비스명}_ai자동진단_SSC검증",
       "type": "ssc"
     }
@@ -193,49 +193,49 @@ OCB 서비스군
       "type": "container"
     },
     {
-      "source": "state/<prefix>_<BT>_report.md",
+      "source": "state/<prefix>/<BT>_report.md",
       "title": "{서비스명({BT})}_ai자동진단_진단결과요약",
       "type": "main_report",
       "task_sources": {
-        "api":             "state/<prefix>_<BT>_api_inventory_inscope.json",
-        "injection":       "state/<prefix>_<BT>_injection_inscope.json",
-        "xss":             "state/<prefix>_<BT>_xss_inscope.json",
-        "file_handling":   "state/<prefix>_<BT>_task24_inscope.json",
-        "data_protection": "state/<prefix>_<BT>_task25_inscope.json"
+        "api":             "state/<prefix>/<BT>_api_inventory_inscope.json",
+        "injection":       "state/<prefix>/<BT>_injection_inscope.json",
+        "xss":             "state/<prefix>/<BT>_xss_inscope.json",
+        "file_handling":   "state/<prefix>/<BT>_task24_inscope.json",
+        "data_protection": "state/<prefix>/<BT>_task25_inscope.json"
       }
     },
     {
-      "source": "state/<prefix>_<BT>_injection_inscope.json",
-      "supplemental_sources": ["state/<prefix>_<BT>_task22_llm.json"],
+      "source": "state/<prefix>/<BT>_injection_inscope.json",
+      "supplemental_sources": ["state/<prefix>/<BT>_task22_llm.json"],
       "title": "{서비스명({BT})}_ai자동진단_인젝션취약점",
       "type": "finding"
     },
     {
-      "source": "state/<prefix>_<BT>_xss_inscope.json",
-      "supplemental_sources": ["state/<prefix>_<BT>_task23_llm.json"],
+      "source": "state/<prefix>/<BT>_xss_inscope.json",
+      "supplemental_sources": ["state/<prefix>/<BT>_task23_llm.json"],
       "title": "{서비스명({BT})}_ai자동진단_XSS취약점",
       "type": "finding"
     },
     {
-      "source": "state/<prefix>_<BT>_task24_inscope.json",
-      "supplemental_sources": ["state/<prefix>_<BT>_task24_llm.json"],
+      "source": "state/<prefix>/<BT>_task24_inscope.json",
+      "supplemental_sources": ["state/<prefix>/<BT>_task24_llm.json"],
       "title": "{서비스명({BT})}_ai자동진단_파일처리",
       "type": "finding"
     },
     {
-      "source": "state/<prefix>_<BT>_task25_inscope.json",
-      "supplemental_sources": ["state/<prefix>_<BT>_task25_llm.json"],
+      "source": "state/<prefix>/<BT>_task25_inscope.json",
+      "supplemental_sources": ["state/<prefix>/<BT>_task25_llm.json"],
       "title": "{서비스명({BT})}_ai자동진단_데이터보호",
       "type": "finding"
     },
     {
-      "source": "state/<prefix>_repo_sca.json",
-      "supplemental_sources": ["state/<prefix>_repo_sca_llm.json"],
+      "source": "state/<prefix>/repo_sca.json",
+      "supplemental_sources": ["state/<prefix>/repo_sca_llm.json"],
       "title": "{서비스명(repo)}_ai자동진단_SCA",
       "type": "sca"
     },
     {
-      "source": "state/<prefix>_<BT>_ssc_report.md",
+      "source": "state/<prefix>/<BT>_ssc_report.md",
       "title": "{서비스명(repo)}_ai자동진단_SSC검증_{BT}",
       "type": "ssc"
     }
