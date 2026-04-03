@@ -45,6 +45,13 @@ Phase 2: 정적 분석 (자동스캔)
        - JAR 기반(레거시): scan_sca.py --jar <jar>
 
 Phase 3: LLM 수동분석 보완 (자동스캔 결과를 보완·갱신)
+  ├─ [Phase 3 시작 전 필수] FP 예외 메모리 로드
+  │   python3 tools/scripts/load_audit_memory.py \
+  │       --source-dir testbed/<project>/ \
+  │       --output state/<prefix>_audit_memory.md
+  │   → 파일이 비어있지 않으면 [Project Specific Context & Exceptions] 적용 (manual_review_prompt.md 참조)
+  │   → 파일이 비어있으면 등록된 FP 규칙 없음 — 그대로 진행
+  │
   ├─ [프론트엔드 repo] Task 3-6: 클라이언트 사이드 심층 검토 → <prefix>_task26_llm.json
   │   ├─ FE-XSS 후보: 해당 컴포넌트 소스 확인 (sanitize 적용 여부, 입력값 경유 여부)
   │   ├─ FE-SECRET 후보: 실제 값 vs. 환경변수 참조 확인

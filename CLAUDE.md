@@ -55,3 +55,4 @@ The following skills are available for security audits:
 | `merge_results.py` | 다중 태스크 결과 집계 | Phase 4 |
 | `validate_task_output.py` | 스키마 유효성 검증 | Phase 4 |
 | `redact.py` | 민감정보 마스킹 | Phase 4 |
+| `load_audit_memory.py` | 프로젝트별 FP 예외 메모리 로드 → Phase 3 컨텍스트 주입 | Phase 3 시작 전 |

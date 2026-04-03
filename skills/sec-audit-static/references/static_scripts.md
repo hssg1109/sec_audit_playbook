@@ -4,6 +4,11 @@ Canonical automation scripts (repo `tools/scripts/`):
 
 ## Core Scripts
 
+- `load_audit_memory.py`: 프로젝트별 FP 예외 메모리 로드 — Phase 3 시작 전 필수 실행
+  - `testbed/<project>/.audit-memory.json` 탐색 → `fp_rules` 파싱
+  - 출력: `state/<prefix>_audit_memory.md` ([Project Specific Context & Exceptions] 형식)
+  - 파일 없으면 빈 파일 생성 후 종료 (Phase 3 정상 진행)
+  - 템플릿: `tools/audit_memory_template.json`
 - `parse_asset_excel.py`: asset Excel -> JSON
 - `merge_results.py`: merge task results -> `final_report.json`
 - `redact.py`: redact sensitive data in reports

@@ -1,0 +1,37 @@
+{
+  "project": "<서비스명 또는 repo명>",
+  "version": "1.0",
+  "updated_at": "2026-04-03",
+  "description": "보안 담당자가 코드 검토를 통해 확정한 프로젝트별 오탐(FP) 예외 규칙 목록. testbed/<project>/.audit-memory.json 으로 배치.",
+  "fp_rules": [
+    {
+      "id": "FP-001",
+      "target_class_or_path": "src/main/java/com/example/util/SafeQueryBuilder.java",
+      "vulnerability_type": "SQL_INJECTION",
+      "reason": "내부 _validateInput() 화이트리스트 검증이 모든 경로에서 선행 적용됨. 코드 리뷰 2026-04-01 완료.",
+      "confirmed_by": "보안담당자명",
+      "confirmed_date": "2026-04-01"
+    },
+    {
+      "id": "FP-002",
+      "target_class_or_path": "src/main/java/com/example/config/CorsConfig.java",
+      "vulnerability_type": "CORS",
+      "reason": "allowedOrigins가 내부 인프라 도메인(*.internal.company.com)으로만 제한됨. 퍼블릭 와일드카드 아님.",
+      "confirmed_by": "보안담당자명",
+      "confirmed_date": "2026-04-01"
+    },
+    {
+      "id": "FP-003",
+      "target_class_or_path": "src/main/resources/application-local.yml",
+      "vulnerability_type": "HARDCODED_SECRET",
+      "reason": "local 프로파일 전용 개발 더미 키. 운영 환경에서는 Vault/환경변수로 주입됨.",
+      "confirmed_by": "보안담당자명",
+      "confirmed_date": "2026-04-01"
+    }
+  ],
+  "_vulnerability_type_values": [
+    "SQL_INJECTION", "OS_COMMAND_INJECTION", "XSS", "SSRF",
+    "PATH_TRAVERSAL", "OPEN_REDIRECT", "SENSITIVE_LOGGING",
+    "HARDCODED_SECRET", "WEAK_CRYPTO", "CORS", "SCA"
+  ]
+}
