@@ -785,10 +785,15 @@ def load_findings(filepath: Path, source_dir: Path,
                         _gf_snippet, _ctx_b, _ctx_a = extract_code_evidence(
                             source_dir, _gf_file, _gf_line
                         )
+                    # severity: 스캐너 result 기반 결정 (취약→high, else→info)
+                    # LLM global_findings_analysis 판정(out-of-scope/양호)은
+                    # 이후 _apply_gfa_overrides()에서 → "low"(양호)로 갱신됨
+                    _gf_result = _gf.get("result", "정보")
+                    _gf_severity = "high" if _gf_result == "취약" else "info"
                     findings.append(Finding(
                         id=f"{cat_info['number']}-G{_gf_offset}",
                         title=f"{_subcategory_gf} — {_gf.get('pattern_name', _gf.get('pattern_id', ''))}",
-                        severity="info",
+                        severity=_gf_severity,
                         category=cat_info["name"],
                         subcategory=_subcategory_gf,
                         description=_gf_desc,
@@ -1236,6 +1241,10 @@ def load_endpoint_group_findings(filepath: Path,
                 subcategory = "Reflected XSS"
                 llm_note = _xss_llm_note("수동확인필요")
                 gj = xss_group_map.get("수동확인필요", {})
+                # suppress_ep_group: supplemental finding이 이 엔드포인트들을 직접 커버하는 경우
+                # EP 그룹 자동생성을 건너뛰고 supplemental finding에 위임한다 (중복 방지)
+                if gj.get("suppress_ep_group", False):
+                    continue
                 llm_j = gj.get("judgment", "")
                 _rat = gj.get("rationale", "")
                 _eps_rev = gj.get("endpoints_reviewed", []) + gj.get("controllers_reviewed", [])
@@ -1427,7 +1436,7 @@ def _collect_supplemental_paths(finding_files: list[Path],
     except Exception:
         return {}
 
-    base_dir = page_map_path.parent.parent  # tools/ → playbook root
+    base_dir = page_map_path.parent.parent  # state/ 또는 tools/ → playbook root
 
     # 모든 entries를 평탄화
     def _iter_entries(node):
@@ -1573,7 +1582,19 @@ def generate_stats_matrix(all_findings: dict[str, list[Finding]],
             # 스캔 실행 확인(cat_summary 존재) 후에도 0/0/0이면 양호(safe=1) 표시
             # 스캔이 진행됐고 해당 항목에 아무 발견이 없음 → 양호로 기록
             if cat_summary and counts[item_name] == {"vuln": 0, "info": 0, "safe": 0}:
-                counts[item_name]["safe"] = 1
+                # XSS 필터 결함: global_xss_filter.filter_level 기반 자동 보정
+                # supplemental finding이 없어 {0,0,0}인 경우에도 실제 필터 상태를 반영
+                if cat_id == "xss" and item_name == "XSS 필터 결함":
+                    _gxf = cat_summary.get("_scan_metadata", {}).get("global_xss_filter", {})
+                    _fl = _gxf.get("filter_level", "")
+                    if _fl == "none":
+                        counts[item_name] = {"vuln": 1, "info": 0, "safe": 0}
+                    elif _fl in ("insufficient", "partial"):
+                        counts[item_name] = {"vuln": 0, "info": 1, "safe": 0}
+                    else:
+                        counts[item_name]["safe"] = 1
+                else:
+                    counts[item_name]["safe"] = 1
 
         first_row = True
         for item_name, c in counts.items():
@@ -1786,6 +1807,58 @@ def generate_summary_table(all_findings: dict[str, list[Finding]],
     return "\n".join(lines)
 
 
+def _apply_gfa_overrides(all_findings: dict, supp_map: dict) -> None:
+    """global_findings_analysis LLM 판정 → injection global Finding severity 갱신.
+
+    task22_llm.json의 global_findings_analysis.os_command / .ssi 배열에서
+    judgment가 out-of-scope / 양호 / 패턴오탐인 항목을 찾아
+    대응하는 global Finding(id에 '-G'가 포함된 injection finding)의 severity를
+    "low"(양호)로 낮추고 recommendation에 판정 근거를 기록한다.
+
+    이후 report 렌더링 시 해당 finding은 요약 테이블에서 제외되고
+    generate_category_detail()의 '양호 확인 항목 코드 증적' 섹션에만 표시된다.
+    """
+    _SAFE_KEYWORDS = ("out-of-scope", "양호", "패턴오탐")
+    _GFA_SUBCATEGORY_MAP = {
+        "os_command": "OS Command 인젝션",
+        "ssi":        "SSI/SSTI 인젝션",
+    }
+    inj_findings = all_findings.get("injection", [])
+    inj_cat_num  = CATEGORY_INFO["injection"]["number"]
+
+    for _supp_paths in supp_map.values():
+        for sp in _supp_paths:
+            try:
+                sp_data = json.loads(sp.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            gfa = sp_data.get("global_findings_analysis", {})
+            if not isinstance(gfa, dict):
+                continue
+            for gfa_key, gfa_entries in gfa.items():
+                if not isinstance(gfa_entries, list) or not gfa_entries:
+                    continue
+                subcategory_name = _GFA_SUBCATEGORY_MAP.get(gfa_key, "")
+                for entry in gfa_entries:
+                    judgment = str(entry.get("judgment", ""))
+                    if not any(kw in judgment.lower() for kw in _SAFE_KEYWORDS):
+                        continue
+                    # 대응 global Finding 탐색 (subcategory 기반 — '-G' id 포함)
+                    # pattern_id는 Finding title에 미포함될 수 있으므로 subcategory로만 매칭
+                    for f in inj_findings:
+                        if not f.id.startswith(f"{inj_cat_num}-G"):
+                            continue
+                        if subcategory_name and f.subcategory != subcategory_name:
+                            continue
+                        f.severity = "low"
+                        reason = entry.get("reason", "")
+                        f.recommendation = (
+                            f"[LLM 확인 완료 — {judgment}] {reason}"
+                            if reason else f"[LLM 확인 완료 — {judgment}]"
+                        )
+                        break
+
+
 def generate_category_detail(category_id: str, findings: list[Finding],
                              source_dir: Path) -> str:
     """카테고리별 상세 보고서 생성.
@@ -1802,7 +1875,14 @@ def generate_category_detail(category_id: str, findings: list[Finding],
         if RISK_MAP.get(f.severity, ("정보", 4))[0] != "양호"
         and not (f.from_ep_group and f.ep_expansion)
     ]
-    if not reportable:
+    # 양호 확인 항목: 요약 제외, 코드 증적만 표시 (LLM out-of-scope 확정 등)
+    safe_with_evidence = [
+        f for f in findings
+        if RISK_MAP.get(f.severity, ("정보", 4))[0] == "양호"
+        and f.code_snippet
+        and not (f.from_ep_group and f.ep_expansion)
+    ]
+    if not reportable and not safe_with_evidence:
         return ""   # 카테고리 전체가 양호면 섹션 자체 생략
 
     lines = []
@@ -2128,6 +2208,33 @@ def generate_category_detail(category_id: str, findings: list[Finding],
             lines.append("**요약으로 돌아가기:** [진단 결과 요약](#summary-table)\n")
         lines.append("")
 
+    # ── 양호 확인 항목 코드 증적 (요약 제외, 증적 보존) ─────────────────────────
+    if safe_with_evidence:
+        lines.append("\n---\n")
+        lines.append("#### ✅ 양호 확인 항목 코드 증적\n")
+        lines.append("> 아래 항목은 LLM 수동진단에서 **양호(안전 확정)** 판정된 항목입니다.")
+        lines.append("> 요약 보고서에는 포함되지 않으며, 진단 근거 보존 목적으로만 기록합니다.\n")
+        for f in safe_with_evidence:
+            lines.append(f"**{f.subcategory} — {f.title}**")
+            if f.file:
+                _loc = f"{f.file}:{f.line}" if f.line else f.file
+                lines.append(f"파일: `{_loc}`\n")
+            if f.recommendation:
+                lines.append(f"> {f.recommendation}\n")
+            _lang = "kotlin" if (f.file or "").endswith(".kt") else "java"
+            _code_parts = []
+            if f.context_before:
+                _code_parts.extend(str(ln) for ln in f.context_before[-3:])
+            if f.code_snippet:
+                _code_parts.append(f"{f.code_snippet}  // ◀ 확인 지점")
+            if f.context_after:
+                _code_parts.extend(str(ln) for ln in f.context_after[:3])
+            if _code_parts:
+                lines.append(f"```{_lang}")
+                lines.append("\n".join(_code_parts))
+                lines.append("```\n")
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -2366,6 +2473,10 @@ def generate_report(
                     f"  {sp.name}: {len(s_findings)}건 ({s_category}) ★보완"
                     f" [override={overridden}, append={appended}{_replace_info}]"
                 )
+
+    # global_findings_analysis LLM 판정 → global Finding severity 갱신
+    # (out-of-scope/양호/패턴오탐 → severity="low", 양호 증적 섹션 대상이 됨)
+    _apply_gfa_overrides(all_findings, supp_map)
 
     # endpoint_diagnoses 기반 그룹 Finding 병합 (정보 엔드포인트 → 보고서 항목화)
     ep_group_files = [fp for fp in finding_files

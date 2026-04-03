@@ -113,7 +113,10 @@ OCB 서비스군
 
 ---
 
-## confluence_page_map.json 템플릿
+## confluence_page_map 템플릿
+
+> **파일 위치**: `state/confluence_page_map_<prefix>.json` (gitignored — 진단 회차별 산출물)
+> `tools/confluence_page_map.json`은 git 추적용 기본 템플릿만 유지하며, 실제 실행 시에는 반드시 `state/`에 생성하여 `--map` / `--page-map` 옵션으로 지정할 것.
 
 ### 단일 모듈 repo
 

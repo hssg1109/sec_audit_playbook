@@ -101,7 +101,7 @@ python3 tools/scripts/generate_finding_report.py <source_dir> \
     --source-label "<레포URL 또는 경로>" \
     --asset-info state/<prefix>_task11.json \   # ← 서비스 설명 + 자산 구조 자동 삽입
     --anchor-style md2cf \
-    --page-map tools/confluence_page_map.json \
+    --page-map state/confluence_page_map_<prefix>.json \
     --output state/<prefix>_진단보고서.md
 ```
 

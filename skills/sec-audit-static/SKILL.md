@@ -110,11 +110,12 @@ Each task has a detailed diagnosis prompt with criteria, search keywords, and ou
 - Merge: `tools/scripts/merge_results.py`
 - Redact: `tools/scripts/redact.py`
 - Validate: `tools/scripts/validate_task_output.py` against `references/output_schemas.md`
-- Report: `tools/scripts/generate_finding_report.py --source-label <label> --anchor-style md2cf --page-map tools/confluence_page_map.json`
+- Report: `tools/scripts/generate_finding_report.py --source-label <label> --anchor-style md2cf --page-map state/confluence_page_map_<prefix>.json`
   - `--anchor-style md2cf` 는 항상 필수 (Confluence 앵커/HTML 테이블 포맷)
   - `--page-map` 지정 시 supplemental_sources LLM 보완 findings 자동 병합
-- Publish: `tools/scripts/publish_confluence.py` (필수 — dry-run 확인 후 실행)
-  - `confluence_page_map.json`에 해당 진단 항목이 등록되어 있어야 함
+- Publish: `tools/scripts/publish_confluence.py --map state/confluence_page_map_<prefix>.json` (필수 — dry-run 확인 후 실행)
+  - `state/confluence_page_map_<prefix>.json`에 해당 진단 항목이 등록되어 있어야 함
+  - 템플릿: `tools/confluence_page_map.json` 참조
   - `workflow.md` Phase 4 참조: main_report / api_inventory / finding / supplemental 구조
 
 **Phase 5** ⚠️ **정기진단 시 필수 (건너뛰지 말 것)**, 개발검증 시 선택: SSC 정합성 검증 — Fortify SSC High/Critical findings를 소스코드와 교차검증 후 별도 보고서 생성.
