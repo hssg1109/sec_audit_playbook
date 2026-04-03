@@ -56,3 +56,4 @@ The following skills are available for security audits:
 | `validate_task_output.py` | 스키마 유효성 검증 | Phase 4 |
 | `redact.py` | 민감정보 마스킹 | Phase 4 |
 | `load_audit_memory.py` | 프로젝트별 FP 예외 메모리 로드 → Phase 3 컨텍스트 주입 | Phase 3 시작 전 |
+| `phase3_coordinator.py` | Phase 3 LLM 병렬 워커 — Rate Limit 방어 + 비용 추적 + 세이프가드 + 에코 모드 | Phase 3 |

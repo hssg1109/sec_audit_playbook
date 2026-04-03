@@ -127,6 +127,19 @@ Canonical automation scripts (repo `tools/scripts/`):
     - (Gradle dep tree): `python3 scan_sca.py <src> --dep-tree state/<prefix>/dep_tree.log --poc --publish -o state/<prefix>/sca.json`
     - (기존 dc 리포트): `python3 scan_sca.py <src> --dc-report <dc.json> --poc --publish -o state/<prefix>/sca.json`
 
+## Phase 3 Orchestration
+
+- `phase3_coordinator.py` (v1.0): Phase 3 LLM 병렬 워커 코디네이터 (비용 추적 + 세이프가드 + 에코 모드)
+  - `ThreadPoolExecutor` + `as_completed` 병렬 실행: 최대 N개 워커 동시 실행 (기본 3)
+  - **Rate Limit 방어**: `retry_with_backoff` 데코레이터 — 429/rate_limit 감지 시 지수 백오프(2s→32s) + 0.5~1.5s 지터, 최대 5회. 그 외 오류 즉시 Fail-fast.
+  - **토큰 수집**: 각 워커의 `input_tokens`, `output_tokens`, `cache_read_input_tokens`를 `UsageMetrics` 데이터클래스로 추적. 모델별 단가표(Sonnet/Opus/Haiku) 내장.
+  - **세이프가드**: `SessionSafeguard` — `hourly_rate = 누적비용 / 경과시간` 계산. `hourly_rate × 5hr > 세션예산` 또는 `주간 누적 + 예상 > 주간한도` 시 대기 중 워커 즉시 취소.
+  - **에코 모드**: `hourly_rate > 세션예산 × 0.8 / 5hr` 이면 자동 활성화. 컨텍스트 압축 임계값 80,000 → 40,000 토큰으로 축소.
+  - **효율성 리포트**: `state/<prefix>/usage_summary.json` — 총 토큰/캐시 적중률/태스크별 비용/hourly_rate/에코 모드 발동 여부.
+  - `state/weekly_usage.json` 누적 갱신 (세션 간 주간 예산 관리).
+  - 사용법: `python3 tools/scripts/phase3_coordinator.py --prefix <prefix> --source-dir <src> --tasks injection xss file_handling data_protection sca --session-budget 10.0 --weekly-budget 50.0`
+  - 필수 환경변수: `ANTHROPIC_API_KEY` (`.env` 자동 로드)
+
 ## Publishing Scripts
 
 - `publish_confluence.py` (v2.0): Confluence Server/DC auto-publishing
